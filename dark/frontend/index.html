@@ -19,53 +19,25 @@
         </div>
       </div>
 
-      <!-- STEP 1: Enter Organisation Email -->
-      <form id="email-step-form" onsubmit="handleSendEmailCode(event)">
+      <form id="email-step-form" onsubmit="handlePasswordLogin(event)">
+        <div class="form-group" id="login-name-group" style="display:none;">
+          <label>Name</label>
+          <input type="text" class="form-input" id="login-name" placeholder="Your name" autocomplete="name">
+        </div>
         <div class="form-group">
           <label>Organisation Email</label>
           <input type="email" class="form-input" id="login-email" placeholder="name@zippzo.com" required autocomplete="username">
         </div>
-        <div id="email-status-msg" style="display:none; margin-bottom:10px; font-size:12px; font-weight:600;"></div>
-        <button type="submit" id="btn-send-code" class="btn-sm btn-sm-primary" style="width:100%; padding:9px; font-size:12px;">
-          Send Verification Code
-        </button>
-      </form>
-
-      <!-- STEP 2: Enter Verification Code (Passwordless) -->
-      <form id="code-step-form" onsubmit="handleVerifyEmailCode(event)" style="display:none; margin-top:8px;">
         <div class="form-group">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <label style="margin:0;">Verification Code</label>
-            <a href="javascript:void(0)" onclick="resetLoginToEmail()" style="font-size:11px; color:var(--color-steel-blue); text-decoration:underline;">Change Email</a>
-          </div>
-          <input type="text" class="form-input" id="login-code" placeholder="6-digit code" required maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" style="letter-spacing:4px; font-size:16px; font-weight:700; text-align:center;">
+          <label>Password</label>
+          <input type="password" class="form-input" id="login-password" placeholder="At least 8 characters" required minlength="8" autocomplete="current-password">
         </div>
-        <div id="code-status-msg" style="display:none; margin-bottom:10px; font-size:12px; font-weight:600;"></div>
-        <button type="submit" id="btn-verify-code" class="btn-sm btn-sm-primary" style="width:100%; padding:9px; font-size:12px;">
-          Verify & Sign In
+        <div id="email-status-msg" style="display:none; margin-bottom:10px; font-size:12px; font-weight:600;"></div>
+        <button type="submit" id="btn-auth-submit" class="btn-sm btn-sm-primary" style="width:100%; padding:9px; font-size:12px;">
+          Sign In
         </button>
-        <div style="display:flex; justify-content:space-between; margin-top:8px;">
-          <button type="button" class="btn-sm" onclick="handleSendEmailCode(null, true)" style="font-size:11px; padding:4px 8px;">Resend Code</button>
-          <button type="button" class="btn-sm" onclick="enterDemoMode()" style="font-size:11px; padding:4px 8px;">Offline Mode</button>
-        </div>
+        <button type="button" class="btn-sm" id="register-toggle" onclick="toggleRegistration()" style="width:100%; margin-top:8px; font-size:11px; padding:5px;">Need an account? Register</button>
       </form>
-
-      <div style="margin-top:14px; padding:10px; background:rgba(40,90,115,0.06); border-radius:3px; border:1px solid var(--border-grid); font-size:11px; color:var(--text-secondary);">
-        <div style="font-weight:600; margin-bottom:6px; color:var(--color-espresso);">Quick Sign In (Employee Directory):</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-          <button type="button" class="btn-quick-login" onclick="quickFillLogin('arjun.receiver@zippzo.com')">Arjun (Inbound)</button>
-          <button type="button" class="btn-quick-login" onclick="quickFillLogin('rahul.picker@zippzo.com')">Rahul (Picking)</button>
-          <button type="button" class="btn-quick-login" onclick="quickFillLogin('priya.qc@zippzo.com')">Priya (QC)</button>
-          <button type="button" class="btn-quick-login" onclick="quickFillLogin('kiran.packer@zippzo.com')">Kiran (Packing)</button>
-          <button type="button" class="btn-quick-login" onclick="quickFillLogin('suresh.rider@zippzo.com')">Suresh (Dispatch)</button>
-          <button type="button" class="btn-quick-login" onclick="quickFillLogin('admin@zippzo.com')">Admin (Lead)</button>
-        </div>
-        <div style="margin-top:8px; text-align:center;">
-          <button type="button" class="btn-sm" onclick="enterDemoMode()" style="width:100%; font-size:11px; padding:5px;">
-            Offline Demo Mode
-          </button>
-        </div>
-      </div>
     </div>
   </div>
 

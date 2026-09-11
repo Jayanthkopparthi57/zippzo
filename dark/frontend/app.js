@@ -292,29 +292,30 @@ function showDashboard() {
   if (mainWrapper) mainWrapper.style.display = 'flex';
 }
 
-let pendingAuthRequestId = null;
-let pendingAuthEmail = null;
+let registrationMode = false;
 
-function resetLoginToEmail() {
-  const emailStep = document.getElementById('email-step-form');
-  const codeStep = document.getElementById('code-step-form');
-  const emailMsg = document.getElementById('email-status-msg');
-  const codeMsg = document.getElementById('code-status-msg');
-  if (emailStep) emailStep.style.display = 'block';
-  if (codeStep) codeStep.style.display = 'none';
-  if (emailMsg) emailMsg.style.display = 'none';
-  if (codeMsg) codeMsg.style.display = 'none';
-  const codeInput = document.getElementById('login-code');
-  if (codeInput) codeInput.value = '';
+function toggleRegistration() {
+  registrationMode = !registrationMode;
+  const nameGroup = document.getElementById('login-name-group');
+  const password = document.getElementById('login-password');
+  const submit = document.getElementById('btn-auth-submit');
+  const toggle = document.getElementById('register-toggle');
+  if (nameGroup) nameGroup.style.display = registrationMode ? 'block' : 'none';
+  if (password) password.autocomplete = registrationMode ? 'new-password' : 'current-password';
+  if (submit) submit.innerText = registrationMode ? 'Register' : 'Sign In';
+  if (toggle) toggle.innerText = registrationMode ? 'Already have an account? Sign in' : 'Need an account? Register';
 }
 
-async function handleSendEmailCode(e, isResend = false) {
+async function handlePasswordLogin(e) {
   if (e) e.preventDefault();
   const emailInput = document.getElementById('login-email');
+  const passwordInput = document.getElementById('login-password');
+  const nameInput = document.getElementById('login-name');
   const emailMsg = document.getElementById('email-status-msg');
-  const codeMsg = document.getElementById('code-status-msg');
-  const btnSend = document.getElementById('btn-send-code');
+  const btnSend = document.getElementById('btn-auth-submit');
   const email = (emailInput ? emailInput.value : '').trim().toLowerCase();
+  const password = passwordInput ? passwordInput.value : '';
+  const name = nameInput ? nameInput.value.trim() : '';
 
   if (!email || !email.includes('@')) {
     if (emailMsg) {
@@ -325,35 +326,30 @@ async function handleSendEmailCode(e, isResend = false) {
     return;
   }
 
-  pendingAuthEmail = email;
+  if (password.length < 8) {
+    if (emailMsg) {
+      emailMsg.style.display = 'block';
+      emailMsg.style.color = 'var(--color-rust-red)';
+      emailMsg.innerText = 'Password must be at least 8 characters.';
+    }
+    return;
+  }
+
   if (btnSend) {
     btnSend.disabled = true;
-    btnSend.innerText = 'Sending Code...';
+    btnSend.innerText = registrationMode ? 'Registering...' : 'Signing In...';
   }
 
   try {
-    const res = await api.sendCode(email);
-    pendingAuthRequestId = res.request_id;
-    
-    // Switch to step 2
-    const emailStep = document.getElementById('email-step-form');
-    const codeStep = document.getElementById('code-step-form');
-    if (emailStep) emailStep.style.display = 'none';
-    if (codeStep) codeStep.style.display = 'block';
-
-    const codeInput = document.getElementById('login-code');
-    if (res.code_hint && codeInput) {
-      codeInput.value = res.code_hint;
-    }
-
-    if (codeMsg) {
-      codeMsg.style.display = 'block';
-      codeMsg.style.color = 'var(--color-steel-blue)';
-      codeMsg.innerText = 'Verification code sent to ' + email + (res.code_hint ? ' (Code: ' + res.code_hint + ')' : '');
-    }
-
-    showToast('Verification code sent to ' + email);
-    if (codeInput) codeInput.focus();
+    const res = registrationMode
+      ? await api.register({ email, password, name })
+      : await api.login(email, password);
+    appMode = 'live';
+    hideAuthScreens();
+    showDashboard();
+    updateUserDisplay();
+    initApp();
+    showToast('Welcome ' + (res.user?.name || email) + '!');
   } catch (err) {
     if (emailMsg) {
       emailMsg.style.display = 'block';
@@ -364,64 +360,14 @@ async function handleSendEmailCode(e, isResend = false) {
   } finally {
     if (btnSend) {
       btnSend.disabled = false;
-      btnSend.innerText = 'Send Verification Code';
+      btnSend.innerText = registrationMode ? 'Register' : 'Sign In';
     }
   }
-}
-
-async function handleVerifyEmailCode(e) {
-  if (e) e.preventDefault();
-  const codeInput = document.getElementById('login-code');
-  const codeMsg = document.getElementById('code-status-msg');
-  const btnVerify = document.getElementById('btn-verify-code');
-  const code = (codeInput ? codeInput.value : '').trim();
-
-  if (!code || code.length !== 6) {
-    if (codeMsg) {
-      codeMsg.style.display = 'block';
-      codeMsg.style.color = 'var(--color-rust-red)';
-      codeMsg.innerText = 'Please enter the 6-digit verification code.';
-    }
-    return;
-  }
-
-  if (btnVerify) {
-    btnVerify.disabled = true;
-    btnVerify.innerText = 'Verifying Code...';
-  }
-
-  try {
-    const res = await api.verifyCode(pendingAuthEmail, code, pendingAuthRequestId);
-    appMode = 'live';
-    hideAuthScreens();
-    showDashboard();
-    updateUserDisplay();
-    initApp();
-    showToast('Welcome ' + (res.user?.first_name || res.user?.username || pendingAuthEmail) + '! Operations terminal authorized.');
-  } catch (err) {
-    if (codeMsg) {
-      codeMsg.style.display = 'block';
-      codeMsg.style.color = 'var(--color-rust-red)';
-      codeMsg.innerText = err.message || 'Invalid or expired verification code.';
-    }
-    showToast('Verification failed: ' + err.message);
-  } finally {
-    if (btnVerify) {
-      btnVerify.disabled = false;
-      btnVerify.innerText = 'Verify & Sign In';
-    }
-  }
-}
-
-function quickFillLogin(email) {
-  const emailEl = document.getElementById('login-email');
-  if (emailEl) emailEl.value = email;
-  handleSendEmailCode();
 }
 
 // Backward compatibility alias
 function handleLogin(e) {
-  handleSendEmailCode(e);
+  handlePasswordLogin(e);
 }
 
 

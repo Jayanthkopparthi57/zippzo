@@ -1049,6 +1049,13 @@ html, body {
   font-size: 18px;
 }
 
+.login-logo-image {
+  width: 78px;
+  height: 58px;
+  object-fit: contain;
+  object-position: center;
+}
+
 .login-logo-brand {
   font-family: var(--font-display);
   font-weight: 700;

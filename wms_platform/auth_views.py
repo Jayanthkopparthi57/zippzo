@@ -1,138 +1,60 @@
-import logging
-
-from django.conf import settings
-from django.core.mail import send_mail
+from django.contrib.auth import authenticate, get_user_model
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .auth_models import AuthOtp, AuthSession
+from .auth_models import AuthSession
 
-logger = logging.getLogger(__name__)
+def create_session_for_user(user):
+    session = AuthSession.create_for_email(user.email)
+    session.user_name = user.get_full_name() or user.email.split('@')[0]
+    session.user_role = 'ADMIN' if user.is_staff else 'SUPERVISOR'
+    session.save(update_fields=['user_name', 'user_role'])
+    return session
 
 
-class SendOtpView(APIView):
-    """Send a 6-digit OTP to the given email address."""
+class RegisterView(APIView):
+    """Create an email/password account and return an authenticated session."""
 
     def post(self, request):
         email = (request.data.get('email') or '').strip().lower()
+        password = request.data.get('password') or ''
+        name = (request.data.get('name') or '').strip()
+
         if not email or '@' not in email:
-            return Response(
-                {'error': 'A valid email address is required.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': 'A valid email address is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(password) < 8:
+            return Response({'error': 'Password must be at least 8 characters.'}, status=status.HTTP_400_BAD_REQUEST)
+        User = get_user_model()
+        if User.objects.filter(username=email).exists():
+            return Response({'error': 'An account with this email already exists.'}, status=status.HTTP_409_CONFLICT)
 
-        otp = AuthOtp.create_for_email(email)
-
-        subject = f'Zippzo WMS - Login Code: {otp.code}'
-        body = (
-            f'Your Zippzo WMS login verification code is:\n\n'
-            f'    {otp.code}\n\n'
-            f'This code expires in 15 minutes.\n\n'
-            f'— Zippzo Operations'
-        )
-
-        email_delivered = False
-        try:
-            send_mail(
-                subject=subject,
-                message=body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[email],
-                fail_silently=False,
-            )
-            email_delivered = True
-        except Exception as exc:
-            logger.exception('Failed to send OTP email to %s', email)
-            print(f"\n{'='*50}")
-            print(f"  ZIPPZO WMS LOGIN CODE (email delivery failed)")
-            print(f"  Email: {email}")
-            print(f"  Code:  {otp.code}")
-            print(f"  Error: {exc}")
-            print(f"{'='*50}\n")
-
-            if not settings.DEBUG:
-                return Response(
-                    {
-                        'error': (
-                            'Could not send verification email. '
-                            'Check SMTP settings or try again shortly.'
-                        ),
-                    },
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-
-        if email_delivered:
-            message = f'Verification code sent to {email}. Check your inbox (and spam).'
-        else:
-            message = (
-                f'Email delivery failed (check Gmail app password in .env). '
-                f'OTP printed in Django server terminal for {email}.'
-            )
-
+        user = User.objects.create_user(username=email, email=email, password=password)
+        user.first_name = name
+        user.save(update_fields=['first_name'])
+        session = create_session_for_user(user)
         return Response({
             'success': True,
-            'message': message,
-            'email': email,
-            'email_delivered': email_delivered,
-        })
+            'token': session.token,
+            'user': {'email': user.email, 'name': session.user_name, 'role': session.user_role},
+        }, status=status.HTTP_201_CREATED)
 
 
-class VerifyOtpView(APIView):
-    """Verify a 6-digit OTP and return a session token."""
+class LoginView(APIView):
+    """Authenticate an account with email and password."""
 
     def post(self, request):
         email = (request.data.get('email') or '').strip().lower()
-        code = (request.data.get('code') or '').strip()
+        password = request.data.get('password') or ''
+        user = authenticate(request, username=email, password=password)
+        if not user:
+            return Response({'error': 'Invalid email or password.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        if not email or not code:
-            return Response(
-                {'error': 'Email and verification code are required.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Find the most recent unused OTP for this email
-        otp = AuthOtp.objects.filter(
-            email=email,
-            is_used=False,
-        ).order_by('-created_at').first()
-
-        if not otp:
-            return Response(
-                {'error': 'No active verification code found. Please request a new one.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        if otp.is_expired:
-            otp.is_used = True
-            otp.save(update_fields=['is_used'])
-            return Response(
-                {'error': 'Verification code has expired. Please request a new one.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        if otp.code != code:
-            return Response(
-                {'error': 'Invalid verification code. Please check and try again.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Mark OTP as used
-        otp.is_used = True
-        otp.save(update_fields=['is_used'])
-
-        # Create session
-        session = AuthSession.create_for_email(email)
-
+        session = create_session_for_user(user)
         return Response({
             'success': True,
-            'message': f'Login verified. Welcome!',
             'token': session.token,
-            'user': {
-                'email': session.email,
-                'name': session.user_name,
-                'role': session.user_role,
-            }
+            'user': {'email': user.email, 'name': session.user_name, 'role': session.user_role},
         })
 
 

@@ -15,6 +15,7 @@ const TokenManager = {
   },
 
   save(data) {
+    if (data.token) localStorage.setItem('zippzo_access_token', data.token);
     if (data.access) localStorage.setItem('zippzo_access_token', data.access);
     if (data.refresh) localStorage.setItem('zippzo_refresh_token', data.refresh);
     if (data.user) localStorage.setItem('zippzo_user', JSON.stringify(data.user));
@@ -45,7 +46,7 @@ async function apiRequest(endpoint, options = {}) {
 
   const token = TokenManager.getAccess();
   if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+    headers['Authorization'] = `Token ${token}`;
   }
 
   const config = {
@@ -170,7 +171,7 @@ const api = {
 
   // ── Auth-specific shortcuts ─────────────────────────────────────────
   login: async (username, password) => {
-    const data = await apiRequest('/auth/login/', {
+    const data = await apiRequest('/platform/auth/login/', {
       method: 'POST',
       body: { username, password }
     });
@@ -178,26 +179,8 @@ const api = {
     return data;
   },
 
-  sendCode: async (email) => {
-    return apiRequest('/auth/send-code/', {
-      method: 'POST',
-      body: { email }
-    });
-  },
-
-  verifyCode: async (email, code, requestId) => {
-    const data = await apiRequest('/auth/verify-code/', {
-      method: 'POST',
-      body: { email, code, request_id: requestId }
-    });
-    if (data.tokens) {
-      TokenManager.save(data.tokens);
-    }
-    return data;
-  },
-
   register: (userData) => {
-    return apiRequest('/auth/register/', {
+    return apiRequest('/platform/auth/register/', {
       method: 'POST',
       body: userData
     });
@@ -211,36 +194,6 @@ const api = {
     return api.get('/auth/me/');
   },
 
-  // ── Employee OTP & Admin Approval Workflow ─────────────────────────
-  employeeLoginRequest: (username, password) => {
-    return apiRequest('/auth/employee-login-request/', {
-      method: 'POST',
-      body: { username, password }
-    });
-  },
-
-  verifyOtp: async (requestId, otpCode) => {
-    const data = await apiRequest('/auth/employee-verify-otp/', {
-      method: 'POST',
-      body: { request_id: requestId, otp_code: otpCode }
-    });
-    if (data.tokens) TokenManager.save(data.tokens);
-    return data;
-  },
-
-  checkLoginApprovalStatus: async (requestId) => {
-    const data = await apiRequest(`/auth/login-approval-status/${requestId}/`, {
-      method: 'GET'
-    });
-    if (data.status === 'approved' && data.tokens) {
-      TokenManager.save(data.tokens);
-    }
-    return data;
-  },
-
-  getPendingLogins: () => api.get('/auth/admin/pending-logins/'),
-  approveEmployeeLogin: (requestId) => api.post(`/auth/admin/logins/${requestId}/approve/`),
-  rejectEmployeeLogin: (requestId) => api.post(`/auth/admin/logins/${requestId}/reject/`),
   getPendingUsers: () => api.get('/auth/admin/pending-users/'),
   approveUser: (userId, data) => api.patch(`/auth/admin/users/${userId}/approve/`, data),
   rejectUser: (userId, reason) => api.patch(`/auth/admin/users/${userId}/reject/`, { notes: reason }),

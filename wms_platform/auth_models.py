@@ -1,37 +1,5 @@
 import uuid
 from django.db import models
-from django.utils import timezone
-from datetime import timedelta
-
-
-class AuthOtp(models.Model):
-    """One-time password for email-based login verification."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    email = models.EmailField()
-    code = models.CharField(max_length=6)
-    created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
-    is_used = models.BooleanField(default=False)
-
-    class Meta:
-        db_table = 'auth_otp'
-        ordering = ['-created_at']
-
-    def __str__(self):
-        return f"OTP for {self.email} ({'used' if self.is_used else 'active'})"
-
-    @property
-    def is_expired(self):
-        return timezone.now() > self.expires_at
-
-    @classmethod
-    def create_for_email(cls, email):
-        """Create a new OTP, expiring old ones for the same email."""
-        import random
-        cls.objects.filter(email=email, is_used=False).update(is_used=True)
-        code = f"{random.randint(100000, 999999)}"
-        expires_at = timezone.now() + timedelta(minutes=15)
-        return cls.objects.create(email=email, code=code, expires_at=expires_at)
 
 
 class AuthSession(models.Model):
