@@ -1,0 +1,8 @@
+.env
+*.pyc
+__pycache__/
+*.db-journal
+*.db
+celerybeat-schedule*
+.venv/
+venv/

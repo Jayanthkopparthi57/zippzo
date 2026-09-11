@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zippzo WMS — Warehouse Operations Console</title>
+  <meta name="description" content="Industrial Warehouse Management System covering inbound receiving, putaway, wave batches, picking, sorting, shipping, and fleet transport." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <div class="logo-badge">Z</div>
+        <div class="logo-text">
+          <span class="logo-brand">ZIPPZO</span>
+          <span class="logo-sub">WMS CORE v2.4</span>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Command Center</div>
+      <a class="nav-item active" data-view="dashboard" href="#dashboard">
+        <span class="nav-icon">📊</span>
+        <span>Dashboard</span>
+      </a>
+
+      <div class="nav-section-label">Operations</div>
+      <a class="nav-item" data-view="inbound" href="#inbound">
+        <span class="nav-icon">📥</span>
+        <span>Inbound</span>
+        <span class="nav-count">6</span>
+      </a>
+      <a class="nav-item" data-view="inventory" href="#inventory">
+        <span class="nav-icon">🏪</span>
+        <span>Inventory</span>
+        <span class="nav-count">4</span>
+      </a>
+      <a class="nav-item" data-view="outbound" href="#outbound">
+        <span class="nav-icon">🚀</span>
+        <span>Outbound</span>
+        <span class="nav-count">12</span>
+      </a>
+      <a class="nav-item" data-view="transport" href="#transport">
+        <span class="nav-icon">🚛</span>
+        <span>Transport</span>
+        <span class="nav-count">3</span>
+      </a>
+      <a class="nav-item" data-view="crossdock" href="#crossdock">
+        <span class="nav-icon">🔄</span>
+        <span>Cross Dock</span>
+        <span class="nav-count">2</span>
+      </a>
+
+      <div class="nav-section-label">Configuration & System</div>
+      <a class="nav-item" data-view="master" href="#master">
+        <span class="nav-icon">🗂️</span>
+        <span>Master Data</span>
+        <span class="nav-count">10</span>
+      </a>
+      <a class="nav-item" data-view="platform" href="#platform">
+        <span class="nav-icon">👥</span>
+        <span>Platform</span>
+        <span class="nav-count">2</span>
+      </a>
+      <a class="nav-item" data-view="optional" href="#optional">
+        <span class="nav-icon">⚙️</span>
+        <span>Optional</span>
+        <span class="nav-count">3</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a class="sidebar-link" href="/api/docs/" target="_blank">📋 OpenAPI Docs</a>
+      <a class="sidebar-link" href="/admin/" target="_blank">🔧 Django Admin</a>
+      <a class="sidebar-link" href="javascript:void(0)" id="sidebarApiDiag">⚡ API Health Check</a>
+    </div>
+  </aside>
+
+  <!-- Main Content Layout -->
+  <div class="main-layout">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="menu-toggle" id="menuToggle" title="Toggle Navigation">☰</button>
+        <div class="breadcrumb-wrap">
+          <span class="breadcrumb-prefix">Module /</span>
+          <div id="breadcrumb" class="breadcrumb">Dashboard</div>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <!-- Live API Diagnostics Button -->
+        <button class="btn-topbar btn-api-diag" id="openApiDiagBtn" title="Check all 42 backend APIs at once">
+          <span>⚡</span>
+          <span>API Suite (42/42)</span>
+        </button>
+
+        <!-- Warehouse Site Selector -->
+        <select class="site-select" id="siteSelect" title="Active Warehouse Site">
+          <option value="HYD080M" selected>HYD080M (Main Hub)</option>
+          <option value="HYD078S">HYD078S (Spoke)</option>
+          <option value="CHN-DRY-MH2">CHN-DRY-MH2</option>
+          <option value="HYD-SS-MH3-K">HYD-SS-MH3-K</option>
+        </select>
+
+        <!-- Quick Filter / Global Search -->
+        <div class="search-box">
+          <input type="text" placeholder="Filter view... [/]" id="globalSearch" />
+          <span class="search-icon">🔍</span>
+        </div>
+
+        <!-- Tactile Theme Toggle -->
+        <button class="btn-topbar" id="themeToggleBtn" title="Switch Theme (Tactile Ink / Warm Parchment)">
+          <span id="themeToggleIcon">☼</span>
+          <span id="themeToggleLabel">Parchment</span>
+        </button>
+
+        <div class="btn-topbar" style="cursor:default; pointer-events:none">
+          <span class="status-dot-pulse"></span>
+          <span>LIVE</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main View Container -->
+    <main class="view-container" id="viewContainer">
+      <!-- Dynamically rendered by JS router -->
+    </main>
+  </div>
+
+  <!-- Standard Details Modal -->
+  <div class="modal-overlay" id="modalOverlay" style="display:none">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h3 class="modal-title" id="modalTitle">Details</h3>
+        <button class="modal-close" id="modalClose">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <!-- API Health & Diagnostics Modal -->
+  <div class="modal-overlay" id="apiDiagOverlay" style="display:none">
+    <div class="modal modal-large" id="apiDiagModal">
+      <div class="modal-header">
+        <h3 class="modal-title">
+          <span>⚡</span>
+          <span>System API Diagnostics — 42/42 Endpoints Matrix</span>
+        </h3>
+        <button class="modal-close" id="apiDiagClose">✕</button>
+      </div>
+      <div class="modal-body" id="apiDiagBody">
+        <!-- Populated dynamically by components.js -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Application Scripts -->
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/components.js"></script>
+  <script src="/static/js/views/dashboard.js"></script>
+  <script src="/static/js/views/inbound.js"></script>
+  <script src="/static/js/views/inventory.js"></script>
+  <script src="/static/js/views/outbound.js"></script>
+  <script src="/static/js/views/transport.js"></script>
+  <script src="/static/js/views/crossdock.js"></script>
+  <script src="/static/js/views/master.js"></script>
+  <script src="/static/js/views/platform.js"></script>
+  <script src="/static/js/views/optional.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

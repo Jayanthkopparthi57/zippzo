@@ -1,0 +1,18 @@
+{
+  "name": "zippzo-wms",
+  "version": "1.0.0",
+  "description": "Zippzo Warehouse Management System",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "node server/index.js",
+    "seed": "node server/seed.js",
+    "test": "node test_apis.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "morgan": "^1.10.0",
+    "uuid": "^9.0.0"
+  }
+}
