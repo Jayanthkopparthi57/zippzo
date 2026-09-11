@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { API_BASE } from '../../api/client';
 import { Mail, ArrowRight, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 
 export default function LoginView() {
@@ -21,7 +22,7 @@ export default function LoginView() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/platform/auth/send-code/', {
+      const res = await fetch(`${API_BASE}/platform/auth/send-code/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim().toLowerCase() }),
@@ -50,7 +51,7 @@ export default function LoginView() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/platform/auth/verify-code/', {
+      const res = await fetch(`${API_BASE}/platform/auth/verify-code/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim().toLowerCase(), code: otpCode.trim() }),

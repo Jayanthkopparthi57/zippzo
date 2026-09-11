@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { API_BASE } from '../api/client';
 
 const AuthContext = createContext(null);
 
@@ -34,7 +35,7 @@ export function AuthProvider({ children }) {
     // Fire-and-forget logout call
     const savedToken = localStorage.getItem('zippzo_auth_token');
     if (savedToken) {
-      fetch('/api/platform/auth/logout/', {
+      fetch(`${API_BASE}/platform/auth/logout/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
