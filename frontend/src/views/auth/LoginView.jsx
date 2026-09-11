@@ -52,7 +52,7 @@ export default function LoginView() {
       <div className="login-card">
         {/* Logo */}
         <div className="login-logo">
-          <img className="login-logo-image" src="/zippzo-logo.png" alt="Zippzo" />
+          <img className="login-logo-image" src="/favicon.svg" alt="Zippzo" />
           <div>
             <div className="login-logo-brand">ZIPPZO</div>
             <div className="login-logo-sub">WMS CORE V2.4</div>

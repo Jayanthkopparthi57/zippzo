@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: zippzo-1
+    runtime: python
+    buildCommand: pip install -r requirements.txt && python manage.py migrate && python manage.py seed_data
+    startCommand: gunicorn zippzo_wms.wsgi:application --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/inbound/asns/
