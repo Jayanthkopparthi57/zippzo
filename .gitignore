@@ -3,6 +3,7 @@
 __pycache__/
 *.db-journal
 *.db
+*.sqlite3
 celerybeat-schedule*
 .venv/
 venv/
