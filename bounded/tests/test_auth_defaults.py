@@ -69,7 +69,10 @@ def _iter_api_endpoints(prefix='', resolver=None, acc=None):
 
 
 # The only paths an anonymous client is allowed to reach.
-PUBLIC_PREFIXES = ('api/iam/auth/login',)
+# `api/health/` is Render's liveness probe: it has no token, which is exactly
+# why it is a plain Django view rather than a DRF one. It reports 503 rather
+# than 200 inside this DB-free test, so it must be skipped like login.
+PUBLIC_PREFIXES = ('api/iam/auth/login', 'api/health/')
 
 
 class AnonymousAccessIsDeniedTests(SimpleTestCase):
