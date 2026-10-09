@@ -1,0 +1,479 @@
+from django.db import transaction
+from django.utils import timezone
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .handoff import HandoffError, complete_pod, rider_pickup
+from django.db.models import Q
+
+from .models import (RiderProfile, RiderShift, DeliveryTask, RoutePlan,
+                     RouteStop)
+from .serializers import (RiderProfileSerializer, RiderShiftSerializer,
+                          DeliveryTaskSerializer, RoutePlanSerializer,
+                          RouteStopSerializer)
+
+# DeliveryTask fields that only the pickup / POD endpoints may write. They were
+# writable here, which turned PATCH /delivery/delivery-tasks/<id>/ into a second
+# unaudited path through the last mile: any authenticated caller could mark a
+# task DELIVERED without collecting the goods or settling cash, and no order
+# status, shipped_qty or status-history row moved with it.
+TASK_LIFECYCLE_FIELDS = {
+    'status', 'pickup_at', 'delivered_at', 'accepted_at', 'offered_at',
+    'offer_count', 'attempt_no', 'staging_bin', 'packed_at',
+}
+
+
+def _refuse_lifecycle_write(request, fields=TASK_LIFECYCLE_FIELDS):
+    attempted = fields.intersection(request.data or {})
+    if attempted:
+        raise ValidationError({
+            field: 'Delivery task lifecycle fields are written by '
+                   'POST /delivery/handoff/pickup, /delivery/handoff/pod and '
+                   'the accept / advance actions.'
+            for field in sorted(attempted)
+        })
+
+
+def _owned_task(user, task):
+    """The caller must be the assigned rider, or an admin."""
+    from bounded.ds_ops.access import is_superuser
+
+    if is_superuser(user) or getattr(user, 'role', '') == 'ADMIN':
+        return task
+    profile = RiderProfile.objects.filter(user_id=user.user_id).first()
+    if profile is None:
+        raise ValidationError({'rider': 'No rider profile for this account.'})
+    if task.rider_id and task.rider_id != profile.rider_id:
+        raise ValidationError({'task': 'This delivery task is assigned to another rider.'})
+    return task
+
+
+def _my_profile(user):
+    return RiderProfile.objects.select_related('current_site').filter(
+        user_id=user.user_id).first()
+
+
+def _delivery_queryset_for(user, qs, rider_lookup, site_lookup):
+    """Scope a delivery row set the way DeliveryTask already is.
+
+    RoutePlan/RouteStop/RiderShift used to run `filter(rider=_my_profile(user))`
+    unconditionally, so any account that is not itself a rider (the WMS console,
+    the store operator, an admin) got an empty list even though the routes
+    exist. The Dispatch screen therefore always rendered "No route plans".
+
+    Riders still only see their own work; everyone else is scoped to the sites
+    they operate; superusers see everything.
+    """
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return qs.none()
+
+    from bounded.ds_ops.access import is_superuser, operator_site_codes
+
+    if is_superuser(user) or getattr(user, 'role', '') == 'ADMIN':
+        return qs
+
+    profile = _my_profile(user)
+    if profile is not None:
+        return qs.filter(**{rider_lookup: profile})
+
+    codes = operator_site_codes(user)
+    if codes:
+        return qs.filter(**{f'{site_lookup}__code__in': codes})
+    return qs.none()
+
+
+def _require_profile(user):
+    profile = _my_profile(user)
+    if profile is None:
+        raise ValidationError({
+            'profile': 'This account has no rider profile yet. Create one '
+                       'with POST /delivery/rider-profiles/bootstrap before '
+                       'taking jobs.'
+        })
+    return profile
+
+
+def _record_order_status(order, new_status, actor, previous):
+    """Move the customer order forward and append the tracking history row.
+
+    The rider's task status and the order the customer sees are two views of
+    the same journey. Only ever moves forward inside the rider's window and
+    never resurrects a cancelled or delivered order - a stale task action must
+    not rewind the customer's order to RIDER_ASSIGNED after a refund.
+    """
+    from bounded.orders.models import OrderStatusHistory
+
+    allowed_from = ORDER_STEP_WINDOWS.get(new_status)
+    if allowed_from is None or previous not in allowed_from:
+        return False
+    order.status = new_status
+    order.save(update_fields=['status'])
+    OrderStatusHistory.objects.create(
+        order=order, from_status=previous, to_status=new_status,
+        actor_type=actor.role, actor_id=str(actor.user_id))
+    return True
+
+
+# Where each rider-driven order status is allowed to start from. Anything not
+# listed (DELIVERED, CANCELLED, REFUNDED, PLACED...) is deliberately excluded.
+ORDER_STEP_WINDOWS = {
+    'RIDER_ASSIGNED': {'PACKED', 'PRICE_FINALIZED', 'STAGED'},
+    'OUT_FOR_DELIVERY': {'PACKED', 'PRICE_FINALIZED', 'STAGED',
+                         'RIDER_ASSIGNED', 'PICKED_UP'},
+    'ARRIVED': {'PACKED', 'PRICE_FINALIZED', 'STAGED', 'RIDER_ASSIGNED',
+                'PICKED_UP', 'OUT_FOR_DELIVERY'},
+}
+
+# Rider task transitions the rider drives themselves. Pickup and POD are not
+# here: they move stock and money and have their own guarded endpoints.
+TASK_TRANSITIONS = {
+    'AT_DS': ({'UNASSIGNED', 'OFFERED', 'ACCEPTED'}, None),
+    'EN_ROUTE': ({'AT_DS', 'PICKED_UP'}, 'OUT_FOR_DELIVERY'),
+    'ARRIVED': ({'EN_ROUTE', 'POD_PENDING'}, 'ARRIVED'),
+}
+
+
+class RiderProfileViewSet(viewsets.ModelViewSet):
+    queryset = RiderProfile.objects.select_related('user','current_site').all()
+    serializer_class = RiderProfileSerializer
+    filterset_fields = ['vehicle_type','kyc_status','is_online']
+
+    def get_queryset(self):
+        user = getattr(self.request, 'user', None)
+        if user is None or not getattr(user, 'is_authenticated', False):
+            return self.queryset.none()
+        from bounded.ds_ops.access import is_superuser
+        if is_superuser(user):
+            return self.queryset
+        # A rider is their own profile: without this every authenticated
+        # account could PATCH somebody else's is_online, phone or KYC state.
+        return self.queryset.filter(user_id=user.user_id)
+
+    @action(detail=False, methods=['post'])
+    @transaction.atomic
+    def bootstrap(self, request):
+        """Create this account's rider profile the first time they open the app.
+
+        Rider accounts are provisioned as iam users with no delivery rows, so
+        the first login had nothing to show and the old UI invented a demo
+        delivery instead. This gives them a real profile pinned to their own
+        user id, at the store they say they are working.
+        """
+        from bounded.network.models import Site
+
+        if _my_profile(request.user) is not None:
+            return Response(
+                {'error': 'This account already has a rider profile.'},
+                status=409)
+
+        site_code = request.data.get('site_code') or request.data.get('site')
+        site = None
+        if site_code:
+            site = Site.objects.filter(code=site_code).first()
+            if site is None:
+                return Response({'error': f'No store with code {site_code}.'},
+                                status=404)
+
+        serializer = RiderProfileSerializer(data={
+            **request.data,
+            'user': str(request.user.user_id),
+            'name': request.data.get('name') or request.user.full_name,
+        })
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.save(current_site=site)
+        return Response(RiderProfileSerializer(profile).data, status=201)
+
+    @action(detail=True, methods=['post'])
+    def set_online(self, request, pk=None):
+        profile = self.get_object()
+        if profile.user_id != request.user.user_id:
+            return Response({'error': 'Not your profile.'}, status=403)
+        online = str(request.data.get('is_online', '')).lower() in ('1', 'true', 'yes')
+        if online and profile.current_site_id is None:
+            return Response({
+                'error': 'Pick a store before going online - jobs are offered '
+                         'by store.'
+            }, status=400)
+        profile.is_online = online
+        profile.save(update_fields=['is_online'])
+        return Response(RiderProfileSerializer(profile).data)
+
+    @action(detail=False, methods=['get'])
+    def me(self, request):
+        profile = _my_profile(request.user)
+        if profile is None:
+            return Response({'has_profile': False})
+        return Response({'has_profile': True,
+                         **RiderProfileSerializer(profile).data})
+
+
+class RiderShiftViewSet(viewsets.ModelViewSet):
+    queryset = RiderShift.objects.select_related('rider','site').all()
+    serializer_class = RiderShiftSerializer
+    filterset_fields = ['status']
+
+    def get_queryset(self):
+        return _delivery_queryset_for(
+            getattr(self.request, 'user', None), self.queryset, 'rider', 'site')
+
+    def perform_create(self, serializer):
+        profile = _require_profile(self.request.user)
+        if serializer.validated_data.get('rider_id') not in (None, profile.rider_id):
+            raise ValidationError({'rider': 'You can only open a shift for yourself.'})
+        if RiderShift.objects.filter(rider=profile, status='OPEN').exists():
+            raise ValidationError({'shift': 'You already have an open shift.'})
+        serializer.save(rider=profile)
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def close(self, request, pk=None):
+        shift = self.get_object()
+        if shift.status == 'CLOSED':
+            return Response(RiderShiftSerializer(shift).data)
+        shift.status = 'CLOSED'
+        shift.ended_at = timezone.now()
+        shift.end_reason = request.data.get('reason') or 'MANUAL'
+        shift.save(update_fields=['status', 'ended_at', 'end_reason'])
+        return Response(RiderShiftSerializer(shift).data)
+
+    @action(detail=False, methods=['post'])
+    @transaction.atomic
+    def open(self, request):
+        profile = _require_profile(request.user)
+        existing = RiderShift.objects.select_for_update().filter(
+            rider=profile, status='OPEN').first()
+        if existing:
+            return Response(RiderShiftSerializer(existing).data)
+
+        from bounded.network.models import Site
+        code = request.data.get('site_code') or request.data.get('store_code')
+        site = None
+        if code:
+            site = Site.objects.filter(code=code).first()
+            if site is None:
+                return Response({'error': f'No store with code {code}.'},
+                                status=404)
+        else:
+            site = profile.current_site
+        if site is None:
+            return Response({
+                'error': 'No store to start a shift at. Set current_site on '
+                         'your rider profile first.'
+            }, status=400)
+
+        shift = RiderShift.objects.create(rider=profile, site=site)
+        return Response(RiderShiftSerializer(shift).data, status=201)
+
+
+class DeliveryTaskViewSet(viewsets.ModelViewSet):
+    queryset = DeliveryTask.objects.select_related('order','site','rider').all()
+    serializer_class = DeliveryTaskSerializer
+    filterset_fields = ['status','site','rider']
+
+    def get_queryset(self):
+        """A rider sees their own jobs; a store operator sees their own store."""
+        from bounded.ds_ops.access import is_superuser, operator_site_codes
+
+        user = self.request.user
+        if not user or not getattr(user, 'is_authenticated', False):
+            return self.queryset.none()
+        if is_superuser(user) or getattr(user, 'role', '') == 'ADMIN':
+            return self.queryset
+
+        profile = RiderProfile.objects.filter(user_id=user.user_id).first()
+        if profile is not None:
+            return self.queryset.filter(Q(rider=profile) | Q(rider__isnull=True))
+
+        # No rider profile, but the account may still be an operator assigned to
+        # a store - and the store is where the totes are staged, so it is exactly
+        # this operator who has to see them to hand them over. Without this the
+        # queryset returned none() for anyone who was not also a rider, and the
+        # counter screen had nothing to list.
+        codes = operator_site_codes(user)
+        if codes:
+            return self.queryset.filter(site__code__in=codes)
+        return self.queryset.none()
+
+    def perform_update(self, serializer):
+        _refuse_lifecycle_write(self.request)
+        return super().perform_update(serializer)
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def accept(self, request, pk=None):
+        """Take an offered job. The task must be unclaimed or already mine."""
+        profile = _require_profile(request.user)
+        task = self.get_object()
+
+        if task.rider_id and task.rider_id != profile.rider_id:
+            return Response(
+                {'error': 'Another rider has already taken this job.'},
+                status=409)
+        if task.status not in {'UNASSIGNED', 'OFFERED', 'ACCEPTED'}:
+            return Response({
+                'error': f'Task is {task.status}; it can no longer be accepted.'
+            }, status=409)
+        if not profile.is_online:
+            return Response({
+                'error': 'You are offline. Go online before taking a job.'
+            }, status=409)
+
+        now = timezone.now()
+        task.rider = profile
+        task.status = 'ACCEPTED'
+        task.accepted_at = task.accepted_at or now
+        task.offered_at = task.offered_at or now
+        task.save(update_fields=['rider', 'status', 'accepted_at', 'offered_at'])
+
+        previous = task.order.status
+        _record_order_status(task.order, 'RIDER_ASSIGNED', request.user,
+                             previous)
+        return Response(DeliveryTaskSerializer(task).data)
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def decline(self, request, pk=None):
+        """Hand a job back to the pool. The order itself is untouched."""
+        profile = _require_profile(request.user)
+        task = self.get_object()
+
+        if task.rider_id != profile.rider_id:
+            return Response({'error': 'This job is not yours to decline.'},
+                            status=409)
+        if task.status not in {'UNASSIGNED', 'OFFERED', 'ACCEPTED'}:
+            return Response({
+                'error': f'Task is {task.status}; it can no longer be declined.'
+            }, status=409)
+
+        task.rider = None
+        task.status = 'UNASSIGNED'
+        task.accepted_at = None
+        task.offer_count = (task.offer_count or 0) + 1
+        task.save(update_fields=['rider', 'status', 'accepted_at',
+                                 'offer_count'])
+        return Response(DeliveryTaskSerializer(task).data)
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def advance(self, request, pk=None):
+        """Move an accepted job to AT_DS / EN_ROUTE / ARRIVED.
+
+        Pickup and POD are excluded on purpose: those two cross a stock or cash
+        boundary and live behind /delivery/handoff/pickup and /handoff/pod.
+        """
+        target = str(request.data.get('to') or '').upper()
+        if target not in TASK_TRANSITIONS:
+            return Response({
+                'error': f"'to' must be one of {', '.join(sorted(TASK_TRANSITIONS))}."
+            }, status=400)
+
+        profile = _require_profile(request.user)
+        task = self.get_object()
+        if task.rider_id != profile.rider_id:
+            return Response({'error': 'This job is not assigned to you.'},
+                            status=409)
+
+        allowed_from, order_status = TASK_TRANSITIONS[target]
+        if task.status not in allowed_from:
+            return Response({
+                'error': f'Task is {task.status}; it cannot move to {target} '
+                         f'from there. Allowed from: '
+                         f'{", ".join(sorted(allowed_from))}.'
+            }, status=409)
+
+        task.status = target
+        task.save(update_fields=['status'])
+        if order_status:
+            previous = task.order.status
+            _record_order_status(task.order, order_status, request.user,
+                                 previous)
+
+        return Response(DeliveryTaskSerializer(task).data)
+
+
+class RoutePlanViewSet(viewsets.ModelViewSet):
+    queryset = RoutePlan.objects.select_related('rider','shift','site').all()
+    serializer_class = RoutePlanSerializer
+    filterset_fields = ['status','site']
+
+    def get_queryset(self):
+        return _delivery_queryset_for(
+            getattr(self.request, 'user', None), self.queryset, 'rider', 'site')
+
+
+class RouteStopViewSet(viewsets.ModelViewSet):
+    queryset = RouteStop.objects.select_related('route','task').all()
+    serializer_class = RouteStopSerializer
+
+    def get_queryset(self):
+        return _delivery_queryset_for(
+            getattr(self.request, 'user', None), self.queryset,
+            'route__rider', 'route__site')
+
+
+class DeliveryPickupView(APIView):
+    """Collect a staged order: verify the tote, move it to the rider, ship it."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        task_id = request.data.get('task_id')
+        if not task_id:
+            return Response({'error': 'task_id is required'}, status=400)
+        task = DeliveryTask.objects.select_related('order').filter(
+            task_id=task_id).first()
+        if task is None:
+            return Response({'error': 'Delivery task not found'}, status=404)
+        try:
+            _owned_task(request.user, task)
+        except ValidationError as e:
+            return Response({'error': 'Not your task.', **e.detail}, status=403)
+
+        try:
+            result = rider_pickup(
+                task=task, actor=request.user,
+                lpn_barcode=request.data.get('lpn_barcode'))
+        except HandoffError as e:
+            return Response({'error': e.message, **e.detail}, status=e.status)
+        return Response({'success': True, **result})
+
+
+class DeliveryPodView(APIView):
+    """Close a delivery against the customer's pickup code."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        task_id = request.data.get('task_id')
+        if not task_id:
+            return Response({'error': 'task_id is required'}, status=400)
+        task = DeliveryTask.objects.select_related('order').filter(
+            task_id=task_id).first()
+        if task is None:
+            return Response({'error': 'Delivery task not found'}, status=404)
+        try:
+            _owned_task(request.user, task)
+        except ValidationError as e:
+            return Response({'error': 'Not your task.', **e.detail}, status=403)
+
+        try:
+            result = complete_pod(
+                task=task, actor=request.user,
+                otp=request.data.get('otp'),
+                cod_amount=request.data.get('cod_amount'),
+                # Evidence of who accepted the bag. Optional - a door handover
+                # without a signature still happened - but recorded when given.
+                signature=request.data.get('signature'),
+                method=request.data.get('method'))
+        except HandoffError as e:
+            return Response({'error': e.message, **e.detail}, status=e.status)
+
+        if result.get('otp_required'):
+            return Response({
+                'error': 'This order needs a pickup code before it can be '
+                         'closed. It has been sent to the customer.',
+                **result,
+            }, status=409)
+        return Response({'success': True, **result})

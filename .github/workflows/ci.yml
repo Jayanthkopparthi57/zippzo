@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: zippzo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Not production: this job must boot against a plain local Postgres.
+      DJANGO_ENV: development
+      DEBUG: "false"
+      DJANGO_SECRET_KEY: ci-only-secret-key-not-used-outside-actions
+      DB_ENGINE: django.db.backends.postgresql
+      DB_NAME: zippzo_ci
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      # The .env defaults (sslmode=require, channel_binding=require) are for
+      # Neon's SCRAM endpoint and are rejected by a local Postgres.
+      DB_SSLMODE: prefer
+      DB_CHANNEL_BINDING: disable
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: No missing migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Production config must boot securely
+        # The guards live in settings.py; this proves they actually fire when
+        # DJANGO_ENV=production rather than only existing as code.
+        env:
+          DJANGO_ENV: production
+          DJANGO_SECRET_KEY: ci-production-secret-key-with-plenty-of-entropy-123456
+          ALLOWED_HOSTS: example.com
+          DJANGO_BEHIND_SSL: "true"
+        run: python manage.py check
+
+      - name: Django deploy audit
+        env:
+          DJANGO_ENV: production
+          DJANGO_SECRET_KEY: ci-production-secret-key-with-plenty-of-entropy-123456
+          ALLOWED_HOSTS: example.com
+          DJANGO_BEHIND_SSL: "true"
+        run: python manage.py check --deploy
+
+      - name: Run test suite
+        run: python manage.py test bounded --keepdb
+
+  frontend:
+    name: Frontend lint & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Native bundle must carry its own API base
+        # Guards the Capacitor split: build:native bakes VITE_API_BASE from
+        # .env.native, and the web build must not inherit it.
+        run: |
+          set -euo pipefail
+          npm run build:native
+          if ! grep -rq "10.0.2.2" dist/assets/; then
+            echo "::error::build:native did not bake VITE_API_BASE into dist/assets"
+            exit 1
+          fi
+          npm run build
+          if grep -rq "10.0.2.2" dist/assets/; then
+            echo "::error::VITE_API_BASE leaked into the web bundle"
+            exit 1
+          fi

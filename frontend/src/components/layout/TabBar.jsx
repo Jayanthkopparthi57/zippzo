@@ -1,49 +1,31 @@
 import React from 'react';
+import { X, Layers } from 'lucide-react';
 import { useTabs } from '../../context/TabContext';
-import { X, FileText, ArrowDownToLine, Package, ShoppingCart, Truck, Activity, Warehouse, Settings } from 'lucide-react';
-
-const TAB_ICON_MAP = {
-  'metrics-dashboard': Activity,
-  'inbound-asns': ArrowDownToLine,
-  'inbound-grns': ArrowDownToLine,
-  'inbound-putaway': ArrowDownToLine,
-  'inbound-discrepancies': ArrowDownToLine,
-  'sto': Package,
-  'transfer-orders': Package,
-  'picklists': ShoppingCart,
-  'batches': ShoppingCart,
-  'vehicle-assign': Truck,
-  'active-trips': Truck,
-  'inventory-lots': Warehouse,
-  'sites': Settings,
-  'skus': FileText,
-};
 
 export default function TabBar() {
   const { tabs, activeTabId, setActiveTabId, closeTab } = useTabs();
 
   return (
-    <div className="mdi-tab-bar">
+    <div className="tab-bar">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', paddingRight: '8px', borderRight: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '11px', fontWeight: '700' }}>
+        <Layers size={13} /> MDI VIEWS
+      </div>
+
       {tabs.map(tab => {
         const isActive = tab.id === activeTabId;
-        const IconComponent = TAB_ICON_MAP[tab.id] || FileText;
-
         return (
           <div
             key={tab.id}
-            className={`mdi-tab ${isActive ? 'active' : ''}`}
+            className={`tab-item ${isActive ? 'active' : ''}`}
             onClick={() => setActiveTabId(tab.id)}
           >
-            <IconComponent size={11} className="mdi-tab-icon" style={{ opacity: isActive ? 1 : 0.65 }} />
-            <span>{tab.title}</span>
-            {tab.closable && (
-              <span
-                className="mdi-tab-close"
+            <span>{tab.label}</span>
+            {tabs.length > 1 && (
+              <X
+                size={14}
+                className="tab-close"
                 onClick={(e) => closeTab(tab.id, e)}
-                title="Close Tab"
-              >
-                <X size={10} />
-              </span>
+              />
             )}
           </div>
         );

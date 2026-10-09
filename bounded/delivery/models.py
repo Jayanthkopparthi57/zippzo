@@ -1,0 +1,109 @@
+import uuid
+from django.db import models
+from django.conf import settings
+
+class RiderProfile(models.Model):
+    VEHICLE_CHOICES = [('BIKE','Bike'),('SCOOTER','Scooter'),('CYCLE','Cycle'),('MINI_VAN','Mini Van')]
+    KYC_CHOICES = [('PENDING','Pending'),('VERIFIED','Verified'),('REJECTED','Rejected')]
+    rider_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField('iam.User', on_delete=models.CASCADE, related_name='rider_profile')
+    name = models.CharField(max_length=80)
+    phone = models.CharField(max_length=15)
+    vehicle_type = models.CharField(max_length=20, choices=VEHICLE_CHOICES)
+    vehicle_number = models.CharField(max_length=15, blank=True)
+    vehicle_capacity_kg = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True)
+    vehicle_capacity_cbm = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True)
+    can_carry_cold = models.BooleanField(default=False)
+    kyc_status = models.CharField(max_length=20, choices=KYC_CHOICES, default='PENDING')
+    is_online = models.BooleanField(default=False)
+    current_site = models.ForeignKey('network.Site', null=True, on_delete=models.SET_NULL, related_name='rider_profiles')
+    rating = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'rider_profiles'
+        ordering = ['-created_at']
+
+class RiderShift(models.Model):
+    STATUS_CHOICES = [('OPEN','Open'),('CLOSED','Closed')]
+    END_REASON_CHOICES = [('MANUAL','Manual'),('AUTO_IDLE','Auto Idle'),('TIMEOUT','Timeout'),('FORCED','Forced')]
+    shift_id = models.UUIDField(primary_key=True, default=uuid.uuid4)
+    rider = models.ForeignKey('RiderProfile', on_delete=models.CASCADE, related_name='shifts')
+    site = models.ForeignKey('network.Site', on_delete=models.CASCADE, related_name='rider_shifts')
+    qr_in = models.ForeignKey('iam.QRCode', null=True, on_delete=models.SET_NULL, related_name='shifts')
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    end_reason = models.CharField(max_length=20, choices=END_REASON_CHOICES, null=True, blank=True)
+    orders_delivered = models.PositiveIntegerField(default=0)
+    distance_km = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='OPEN')
+    class Meta:
+        db_table = 'rider_shifts'
+        ordering = ['-started_at']
+
+class DeliveryTask(models.Model):
+    STATUS_CHOICES = [('UNASSIGNED','Unassigned'),('OFFERED','Offered'),('ACCEPTED','Accepted'),('AT_DS','At DS'),('PICKED_UP','Picked Up'),('EN_ROUTE','En Route'),('ARRIVED','Arrived'),('POD_PENDING','POD Pending'),('DELIVERED','Delivered'),('FAILED','Failed'),('RETURNED','Returned'),('WITHDRAWN','Withdrawn'),('RECALLED','Recalled')]
+    task_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.ForeignKey('orders.CustomerOrder', on_delete=models.CASCADE, related_name='delivery_tasks')
+    site = models.ForeignKey('network.Site', on_delete=models.CASCADE, related_name='delivery_tasks')
+    rider = models.ForeignKey('RiderProfile', null=True, on_delete=models.SET_NULL, related_name='delivery_tasks')
+    bin = models.CharField(max_length=50, null=True, blank=True)
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='UNASSIGNED')
+    offer_count = models.PositiveSmallIntegerField(default=0)
+    offer_surge = models.DecimalField(max_digits=6, decimal_places=3, default=0)
+    order_weight_kg = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    order_volume_cbm = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True)
+    requires_cold_chain = models.BooleanField(default=False)
+    offered_at = models.DateTimeField(null=True, blank=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    pickup_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    distance_m = models.PositiveIntegerField(null=True, blank=True)
+    eta_at = models.DateTimeField(null=True, blank=True)
+    attempt_no = models.PositiveSmallIntegerField(default=1)
+    route_plan_id = models.UUIDField(null=True, blank=True)
+    route_seq = models.PositiveSmallIntegerField(null=True, blank=True)
+    # Recorded when the order is actually packed, so the rider notification can
+    # say where to collect. Set-Together with the pack completion that raises the
+    # order.packed event; set to NULL rather than cascading if that pack row is
+    # removed, since the order itself is the durable record.
+    staging_bin = models.CharField(max_length=50, null=True, blank=True)
+    packed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'delivery_tasks'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['rider', 'status'], name='ix_deliverytask_rider_status'),
+            models.Index(fields=['site', 'status'], name='ix_deliverytask_site_status'),
+        ]
+
+class RoutePlan(models.Model):
+    STATUS_CHOICES = [('PLANNED','Planned'),('IN_PROGRESS','In Progress'),('COMPLETED','Completed'),('ABORTED','Aborted')]
+    route_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    rider = models.ForeignKey('RiderProfile', on_delete=models.CASCADE, related_name='route_plans')
+    shift = models.ForeignKey('RiderShift', null=True, on_delete=models.SET_NULL, related_name='route_plans')
+    site = models.ForeignKey('network.Site', on_delete=models.CASCADE, related_name='route_plans')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PLANNED')
+    stop_count = models.PositiveSmallIntegerField(default=0)
+    total_distance_m = models.PositiveIntegerField(null=True, blank=True)
+    estimated_min = models.PositiveIntegerField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'route_plans'
+        ordering = ['-created_at']
+
+class RouteStop(models.Model):
+    STATUS_CHOICES = [('PENDING','Pending'),('ARRIVED','Arrived'),('DELIVERED','Delivered'),('FAILED','Failed')]
+    stop_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    route = models.ForeignKey('RoutePlan', on_delete=models.CASCADE, related_name='stops')
+    task = models.ForeignKey('DeliveryTask', on_delete=models.CASCADE, related_name='route_stops')
+    seq = models.PositiveSmallIntegerField()
+    planned_eta = models.DateTimeField(null=True, blank=True)
+    actual_arrival = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    class Meta:
+        db_table = 'route_stops'
+        unique_together = [('route', 'seq')]

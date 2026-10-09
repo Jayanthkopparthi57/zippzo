@@ -1,0 +1,513 @@
+/**
+ * Scan-first workflow design system.
+ *
+ * Every operational screen in this app is driven by a barcode scan, so the
+ * primitives below are built around that: a large, always-visible scan target,
+ * explicit progress through a guided stepper, and unambiguous state feedback.
+ *
+ * These are real classes rather than inline styles so the views stop each
+ * inventing their own card/section/progress markup.
+ */
+
+/* ───────────────────────── Scan input ───────────────────────── */
+
+.scan-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scan-field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.scan-field-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.scan-input {
+  flex: 1;
+  min-height: 52px;
+  padding: 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-md);
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+
+.scan-input::placeholder {
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: normal;
+}
+
+.scan-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+
+.scan-input:disabled {
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.scan-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 0 20px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: filter var(--duration-fast) ease, transform var(--duration-fast) ease;
+}
+
+.scan-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.scan-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scan-btn--ghost {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 2px solid var(--border-color);
+}
+
+.scan-btn--success { background: var(--success); }
+.scan-btn--danger  { background: var(--danger); }
+.scan-btn--neutral { background: var(--text-secondary); }
+
+.scan-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+
+.scan-feedback--ok    { color: var(--success); background: var(--success-bg); border: 1px solid var(--success-border); }
+.scan-feedback--error { color: var(--danger);  background: var(--danger-bg);  border: 1px solid var(--danger-border); }
+.scan-feedback--hint  { color: var(--text-secondary); background: var(--bg-inset); border: 1px solid var(--border-color); }
+
+/* ───────────────────────── Workflow stepper ───────────────────────── */
+
+.wf-stepper {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin-bottom: 20px;
+  padding: 18px 20px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+}
+
+.wf-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 150px;
+  position: relative;
+}
+
+/* Connector line between steps. */
+.wf-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 17px;
+  left: calc(100% - 4px);
+  width: 12px;
+  height: 2px;
+  background: var(--border-color);
+}
+
+.wf-step--done:not(:last-child)::after { background: var(--success); }
+.wf-step--active:not(:last-child)::after { background: var(--accent); }
+
+.wf-step-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-inset);
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-full);
+}
+
+.wf-step--active .wf-step-marker {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+
+.wf-step--done .wf-step-marker {
+  color: #fff;
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.wf-step-text { padding-top: 2px; }
+
+.wf-step-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.wf-step--pending .wf-step-title { color: var(--text-muted); }
+
+.wf-step-desc {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+/* ───────────────────────── Progress ring ───────────────────────── */
+
+.progress-ring {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-ring__track { position: relative; flex-shrink: 0; }
+
+.progress-ring__value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.progress-ring__label { display: flex; flex-direction: column; }
+
+.progress-ring__label-main { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.progress-ring__label-sub  { font-size: 11px; color: var(--text-muted); }
+
+/* ───────────────────────── Progress bar ───────────────────────── */
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-inset);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.progress-bar__fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width var(--duration-normal) var(--ease-out);
+}
+
+.progress-bar__fill--success { background: var(--success); }
+.progress-bar__fill--warning { background: var(--warning); }
+.progress-bar__fill--danger  { background: var(--danger); }
+
+/* ───────────────────────── Status badge ───────────────────────── */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.status-badge--neutral { color: var(--text-secondary); background: var(--bg-inset); border-color: var(--border-color); }
+.status-badge--info    { color: var(--info);    background: var(--info-bg);    border-color: var(--info-border); }
+.status-badge--success { color: var(--success); background: var(--success-bg); border-color: var(--success-border); }
+.status-badge--warning { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-border); }
+.status-badge--danger  { color: var(--danger);  background: var(--danger-bg);  border-color: var(--danger-border); }
+.status-badge--accent  { color: var(--accent);  background: var(--accent-light); border-color: var(--accent-border); }
+
+/* ───────────────────────── Product / bin cards ───────────────────────── */
+
+.entity-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+
+.entity-card--active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.entity-card--done { border-color: var(--success-border); background: var(--success-bg); }
+.entity-card--error { border-color: var(--danger-border); background: var(--danger-bg); }
+
+.entity-card__thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  color: var(--accent);
+  background: var(--accent-light);
+  border-radius: var(--radius-md);
+}
+
+.entity-card__body { flex: 1; min-width: 0; }
+
+.entity-card__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.entity-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.entity-card__meta strong { color: var(--text-secondary); font-weight: 600; }
+
+.entity-card__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* ───────────────────────── Tally / expected-vs-actual ───────────────────────── */
+
+.tally-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.tally-tile {
+  padding: 12px 14px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.tally-tile__label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.tally-tile__value {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.tally-tile--ok    .tally-tile__value { color: var(--success); }
+.tally-tile--over .tally-tile__value { color: var(--warning); }
+.tally-tile--short .tally-tile__value { color: var(--danger); }
+
+/* ───────────────────────── Tote / LPN label ───────────────────────── */
+
+.tote-label {
+  width: 340px;
+  padding: 20px;
+  background: #fff;
+  color: #000;
+  border: 2px solid #000;
+  border-radius: 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.tote-label__title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-align: center;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #000;
+}
+
+.tote-label__meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 0;
+  border-bottom: 1px solid #000;
+}
+
+.tote-label__rows { margin: 8px 0; }
+
+.tote-label__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  padding: 3px 0;
+  border-bottom: 1px dotted #999;
+}
+
+.tote-label__barcode { margin-top: 12px; text-align: center; }
+.tote-label__barcode svg { max-width: 100%; height: auto; }
+
+/* ───────────────────────── Toast ───────────────────────── */
+
+.toast-stack {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: var(--z-toast, 2000);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 380px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(15, 23, 42, 0.12));
+  animation: toastIn var(--duration-normal) var(--ease-out);
+}
+
+.toast--success { border-left-color: var(--success); }
+.toast--error   { border-left-color: var(--danger); }
+.toast--info    { border-left-color: var(--info); }
+.toast--warning { border-left-color: var(--warning); }
+
+.toast__body { flex: 1; min-width: 0; }
+.toast__title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+.toast__msg   { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+.toast__close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ───────────────────────── Section scaffolding ───────────────────────── */
+
+.wf-panel {
+  padding: 20px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  margin-bottom: 16px;
+}
+
+.wf-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.wf-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.wf-panel__hint { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+.wf-panel__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.wf-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.wf-empty__icon { color: var(--border-color); }
+.wf-empty__title { font-size: 15px; font-weight: 700; color: var(--text-secondary); }
+.wf-empty__text  { font-size: 13px; max-width: 420px; }
+
+/* Grid helper for scan targets + tallies on wide screens. */
+.wf-split {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .wf-split { grid-template-columns: 1fr; }
+}

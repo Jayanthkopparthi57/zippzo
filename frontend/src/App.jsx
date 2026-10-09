@@ -1,160 +1,246 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { TabProvider, useTabs } from './context/TabContext';
 import Header from './components/layout/Header';
 import TabBar from './components/layout/TabBar';
 import Sidebar from './components/layout/Sidebar';
-import ApiDiagnosticsModal from './components/ui/ApiDiagnosticsModal';
+import BarcodeScannerModal from './components/ui/BarcodeScannerModal';
 import LoginView from './views/auth/LoginView';
-
-// Views
-import InboundView from './views/inbound/InboundView';
-import StoView from './views/outbound/StoView';
-import VehicleAssignmentView from './views/linehaul/VehicleAssignmentView';
-import DispatchPlanView from './views/outbound/DispatchPlanView';
-import ActiveTripsView from './views/linehaul/ActiveTripsView';
-import PicklistView from './views/outbound/PicklistView';
-import LotsView from './views/inventory/LotsView';
-import MasterDataView from './views/master/MasterDataView';
-import DashboardView from './views/dashboard/DashboardView';
-import StoreManagementView from './views/store/StoreManagementView';
-import ManPowerView from './views/metrics/ManPowerView';
+import DashboardView from './views/DashboardView';
+// PickListView import removed — not rendered in renderActiveView (dead import)
+import InboundView from './views/InboundView'; // kept for legacy compatibility — not rendered directly
+import InventoryView from './views/InventoryView';
+import OutboundProcessView from './views/OutboundProcessView';
+import PackingView from './views/PackingView';
+import BinTransferView from './views/BinTransferView';
+import BinContentsView from './views/BinContentsView';
+import TransferOrderView from './views/TransferOrderView';
+import ShippingView from './views/ShippingView';
+import FacilityView from './views/FacilityView';
+import MasterCatalogView from './views/MasterCatalogView';
+import PickExecutionView from './views/replenishment/PickExecutionView';
+import InboundReceivingView from './views/inbound/InboundReceivingView';
+import QcInspectionView from './views/inbound/QcInspectionView';
+import PutawayView from './views/inbound/PutawayView';
+import PackSealView from './views/replenishment/PackSealView';
+import CreateOrderView from './views/replenishment/CreateOrderView';
+import BinLookupView from './views/storage/BinLookupView';
+import DispatchView from './views/outbound/DispatchView';
+import PickQueuesView from './views/outbound/PickQueuesView';
+import FleetView from './views/FleetView';
+import EmployeeAssignmentView from './views/EmployeeAssignmentView';
+import RiderDashboardView from './views/RiderDashboardView';
+import AdminSettingsView from './views/AdminSettingsView';
+import CommandCenterView from './views/darkstore/CommandCenterView';
+import LpnReceiptView from './views/darkstore/LpnReceiptView';
+import ShelfPutawayView from './views/darkstore/ShelfPutawayView';
+import ShelfInventoryView from './views/darkstore/ShelfInventoryView';
+import StockLedgerView from './views/darkstore/StockLedgerView';
+import OrderPickingView from './views/darkstore/OrderPickingView';
+import OrderPackingView from './views/darkstore/OrderPackingView';
+import RiderHandoffView from './views/darkstore/RiderHandoffView';
+import ReturnsView from './views/darkstore/ReturnsView';
+import ShopperStorefrontView from './views/shopper/StorefrontView';
+import MyOrdersView from './views/shopper/MyOrdersView';
+import NotificationsView from './views/shopper/NotificationsView';
+import AccountView from './views/shopper/AccountView';
 
 function AppContent() {
   const { activeTabId } = useTabs();
   const [collapsed, setCollapsed] = useState(false);
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
-
-  useEffect(() => {
-    document.body.classList.remove('theme-parchment');
-    localStorage.removeItem('zippzo_theme');
-  }, []);
+  const [showScannerModal, setShowScannerModal] = useState(false);
 
   const renderActiveView = () => {
     switch (activeTabId) {
-      // Store Operations Management
-      case 'store-management':
-        return <StoreManagementView />;
-      case 'man-power':
-        return <ManPowerView />;
-      // Inbound
-      case 'inbound-asns':
-        return <InboundView initialSubtab="asns" />;
-      case 'inbound-grns':
-        return <InboundView initialSubtab="grns" />;
-      case 'inbound-putaway':
-        return <InboundView initialSubtab="putaway" />;
-      case 'inbound-discrepancies':
-        return <InboundView initialSubtab="discrepancies" />;
+      // ── INBOUND (scan-first: receive -> inspect -> put away) ──
+      case 'asns':
+        return <InboundReceivingView />;
+      case 'qc-testing':
+        return <QcInspectionView />;
+      case 'putaway-tasks':
+        return <PutawayView />;
 
-      // Outbound
-      case 'sto':
-      case 'transfer-orders':
-      case 'returns':
-      case 'cancellation-putaway':
-        return <StoView initialTab={activeTabId} />;
-      case 'picklists':
-      case 'batches':
-      case 'sorting-list':
-        return <PicklistView initialTab={activeTabId} />;
-      case 'dispatch-plan':
-      case 'manifests':
-      case 'totes-lpns':
-        return <DispatchPlanView initialTab={activeTabId} />;
-      case 'cross-dock':
-        return <InboundView initialSubtab="asns" />;
-
-      // Linehaul Transport
-      case 'vehicle-assign':
-        return <VehicleAssignmentView />;
-      case 'active-trips':
-      case 'all-trips':
-      case 'vehicle-checkin':
-        return <ActiveTripsView />;
-
-      // Inventory
-      case 'inventory-lots':
-      case 'transactions':
-      case 'droplists':
-      case 'cycle-counts':
-      case 'replenishment':
-        return <LotsView initialTab={activeTabId} />;
-
-      // Master Configs & Catalog
-      case 'sites':
+      // ── STORAGE & INVENTORY ──
+      // InventoryView's subtab ids are positions/feed/bins, so map the nav id
+      // rather than forwarding it verbatim.
+      case 'positions':
+        return <InventoryView initialTab="positions" />;
+      case 'movement-feed':
+        return <InventoryView initialTab="feed" />;
       case 'bins':
+        return <InventoryView initialTab="bins" />;
+      // legacy tab ids kept working
+      case 'inventory-lots':
+        return <InventoryView initialTab="positions" />;
+      case 'lpns':
+        return <InventoryView initialTab="bins" />;
+      case 'transaction-log':
+        return <InventoryView initialTab="feed" />;
+      case 'storage-bins':
+        return <InventoryView initialTab="bins" />;
+
+      // ── PACKING ──
+      case 'packing':
+      case 'packing-batches':
+        return <PackingView />;
+
+      // ── BIN OPERATIONS ──
+      // These used to be reachable only as InboundView subtabs, which meant the
+      // standalone pages (and the scanner inside them) could never be opened
+      // directly from the sidebar.
+      case 'bin-transfer':
+        return <BinTransferView />;
+      case 'bin-contents':
+      case 'bin-lookup':
+        return <BinLookupView />;
+      case 'transfer-orders':
+        return <TransferOrderView />;
+
+      // ── SHIPPING & DISPATCH ──
+      case 'shipping':
+      case 'cross-dock':
+        return <ShippingView initialTab={activeTabId === 'cross-dock' ? 'cross-dock' : 'dispatch-trips'} />;
+
+      // ── PICK & PACK EXECUTION (dark-store replenishment: create, scan, pack, dispatch) ──
+      case 'pick-execute':
+        return <PickExecutionView />;
+      case 'pack-seal':
+      case 'packing-seal':
+        return <PackSealView />;
+      case 'create-orders':
+        return <CreateOrderView />;
+
+      // ── OUTBOUND / FULFILLMENT ──
+      case 'batches':
+      case 'picklists':
+      case 'sorting-list':
+        return <PickQueuesView initialTab={activeTabId} />;
+
+      case 'dispatch-trips':
+      case 'manifests':
+        return <DispatchView initialTab={activeTabId} />;
+
+      case 'totes-lpns':
+      case 'dispatch-plan':
+      case 'user-orders':
+      case 'picker-details':
+      case 'rider-details':
+        return <OutboundProcessView initialTab={activeTabId} />;
+
+      // ── FLEET ──
+      case 'active-trips':
+        return <FleetView initialTab={activeTabId} />;
+
+      // ── FACILITY ──
+      case 'sites-registry':
       case 'zones':
       case 'dock-doors':
-      case 'cluster-zones':
-      case 'vehicle-types':
-        return <MasterDataView initialTab={activeTabId} />;
+        return <FacilityView initialTab={activeTabId} />;
 
+      // ── MASTER DATA ──
       case 'skus':
-      case 'categories':
       case 'vendors':
+      case 'categories':
       case 'transporters':
-        return <MasterDataView initialTab={activeTabId} />;
+        return <MasterCatalogView initialTab={activeTabId} />;
 
-      case 'users':
-      case 'reason-codes':
-        return <MasterDataView initialTab={activeTabId} />;
+      // ── EMPLOYEE ASSIGNMENTS ──
+      case 'employee-roster':
+      case 'employee-tasks':
+      case 'employee-productivity':
+        return <EmployeeAssignmentView initialTab={activeTabId === 'employee-tasks' ? 'tasks' : activeTabId === 'employee-productivity' ? 'productivity' : 'roster'} />;
 
-      // Dashboard
-      case 'metrics-dashboard':
-        return <DashboardView onOpenDiagnostics={() => setShowDiagnostics(true)} />;
+      // ── ADMIN SETTINGS ──
+      case 'admin-settings':
+        return <AdminSettingsView />;
 
+      // ── DARK STORE (scan-first: receive -> put away -> pick -> hand off) ──
+      // Deliberately keyed `ds-*` so no dark-store screen can fall through to a
+      // central-hub view. These wrap the /ds-ops endpoints, not the WMS ones.
+      case 'ds-dashboard':
+        return <CommandCenterView />;
+      case 'ds-lpn-receipt':
+        return <LpnReceiptView />;
+      case 'ds-shelf-putaway':
+        return <ShelfPutawayView />;
+      case 'ds-shelf-inventory':
+        return <ShelfInventoryView />;
+      case 'ds-ledger':
+        return <StockLedgerView />;
+      case 'ds-order-picking':
+        return <OrderPickingView />;
+      case 'ds-order-packing':
+        return <OrderPackingView />;
+      case 'ds-rider-handoff':
+        return <RiderHandoffView />;
+      case 'ds-returns':
+        return <ReturnsView />;
+
+      // ── SHOPPER ──
+      case 'shop-storefront':
+        return <ShopperStorefrontView />;
+      case 'shop-orders':
+        return <MyOrdersView />;
+      case 'shop-notifications':
+        return <NotificationsView />;
+      case 'shop-account':
+        return <AccountView />;
+
+      // ── DASHBOARD ──
+      case 'dashboard':
       default:
-        return <DashboardView onOpenDiagnostics={() => setShowDiagnostics(true)} />;
+        return <DashboardView />;
     }
   };
 
   return (
     <div className="app-container">
-      {/* Hierarchical Accordion Sidebar */}
       <Sidebar collapsed={collapsed} />
 
-      {/* Main Column */}
       <div className="app-main">
-        {/* Top Facility Header */}
         <Header
           onToggleSidebar={() => setCollapsed(prev => !prev)}
+          onOpenScanner={() => setShowScannerModal(true)}
         />
 
-        {/* Zepto Multi-Tab MDI Bar */}
         <TabBar />
 
-        {/* Active Tab Viewport */}
         <main className="workspace-viewport">
           {renderActiveView()}
         </main>
       </div>
 
-      {/* 42-API Diagnostics Matrix Modal */}
-      {showDiagnostics && (
-        <ApiDiagnosticsModal onClose={() => setShowDiagnostics(false)} />
+      {showScannerModal && (
+        <BarcodeScannerModal onClose={() => setShowScannerModal(false)} />
       )}
     </div>
   );
 }
 
 function AuthGate() {
-  const { user, loading } = useAuth();
+  const { user, appMode, loading } = useAuth();
 
   if (loading) {
     return (
-      <div className="login-page">
-        <div className="login-card" style={{ textAlign: 'center', padding: '40px' }}>
-          <div className="login-logo-badge" style={{ margin: '0 auto 12px' }}>Z</div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Loading...</div>
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
+        Loading Zippzo Enterprise Platform...
       </div>
     );
   }
 
+  // Not logged in -> Show Login View
   if (!user) {
     return <LoginView />;
   }
 
+  // Rider gets an isolated dashboard
+  if (appMode === 'RIDER') {
+    return <RiderDashboardView />;
+  }
+
+  // One WMS shell for every warehouse and dark store operator: which sidebar
+  // sections render depends on `isDarkStore` (the selected facility), not on a
+  // second app mode.
   return (
     <TabProvider>
       <AppContent />

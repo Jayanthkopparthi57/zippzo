@@ -1,7 +1,87 @@
+# Render blueprint.
+#
+# Build order matters: the SPA must exist before collectstatic and before the
+# process starts, because Django serves frontend/dist through WhiteNoise. The
+# previous buildCommand was `pip install && migrate` only, and frontend/dist is
+# gitignored, so a fresh deploy had no frontend at all.
+#
+# Node.js must be available on the Python instance for the `cd frontend` step.
+# If the build fails there, the deploy fails loudly — which is the intended
+# behaviour; the alternative was deploying a backend with nothing to serve at `/`.
 services:
   - type: web
-    name: zippzo-1
+    name: zippzo-wms
     runtime: python
-    buildCommand: pip install -r requirements.txt && python manage.py migrate && python manage.py seed_data
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      cd frontend && npm ci && npm run build && cd .. &&
+      python manage.py collectstatic --noinput &&
+      python manage.py migrate
     startCommand: gunicorn zippzo_wms.wsgi:application --bind 0.0.0.0:$PORT
-    healthCheckPath: /api/inbound/asns/
+    env:
+      # settings.py refuses to boot production with a placeholder secret or a
+      # missing ALLOWED_HOSTS, so these are load-bearing, not decorative.
+      - key: DJANGO_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DJANGO_BEHIND_SSL
+        value: "true"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      # Add every hostname the service answers on, comma-separated. onrender.com
+      # is the default; a custom domain must be appended here or Django returns
+      # 400 DisallowedHost for it.
+      - key: ALLOWED_HOSTS
+        value: zippzo-wms.onrender.com
+      # The only cross-origin clients are the Capacitor shells. The web SPA is
+      # served same-origin and does not need an entry.
+      - key: CORS_ALLOWED_ORIGINS
+        value: capacitor://localhost,https://localhost,http://localhost
+      # Database. Must match the instance actually provisioned below (or the
+      # Neon credentials in .env, if that is what this environment uses) —
+      # Render does not validate this at build time, only at first query.
+      - key: DB_ENGINE
+        value: django.db.backends.postgresql
+      - key: DB_NAME
+        value: zippzo
+      - key: DB_USER
+        value: postgres
+      - key: DB_PASSWORD
+        value: postgres
+      - key: DB_HOST
+        value: internal-zippzo-postgres
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_SSLMODE
+        value: require
+      - key: REDIS_URL
+        value: redis://internal-zippzo-redis:6379/0
+    healthCheckPath: /api/health/
+    plan: pro
+    regions:
+      - ap-south-1
+    autoDeploy: true
+    instances: 2
+    branches:
+      main:
+        deploy: true
+      staging:
+        deploy: true
+    envGroups:
+      - zippzo-production
+  - type: redis
+    name: zippzo-redis
+    plan: essential
+    size: 0.5
+    regions:
+      - ap-south-1
+  - type: postgres
+    name: zippzo-postgres
+    plan: essential
+    size: 0.5
+    regions:
+      - ap-south-1
+    databases:
+      - name: zippzo
+    version: 16

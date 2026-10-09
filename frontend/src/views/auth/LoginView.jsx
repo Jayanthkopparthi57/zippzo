@@ -1,126 +1,205 @@
 import React, { useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
-import { API_BASE } from '../../api/client';
-import { Mail, LockKeyhole, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
+import { describeError } from '../../api/client';
 
 export default function LoginView() {
-  const { login } = useAuth();
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [name, setName] = useState('');
+  const { login, loading, routeNotice } = useAuth();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [localError, setLocalError] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email.trim() || !email.includes('@')) {
-      setError('Enter a valid email address.');
-      return;
-    }
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
-      return;
-    }
-    setLoading(true);
-    setError('');
+    flushSync(() => {
+      setSubmitting(true);
+      setLocalError(null);
+    });
     try {
-      const res = await fetch(`${API_BASE}/platform/auth/${isRegistering ? 'register' : 'login'}/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          password,
-          ...(isRegistering ? { name: name.trim() } : {}),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Authentication failed.');
-        return;
-      }
-      login(data.token, data.user);
+      // The backend authenticates against iam.User and derives the console
+      // (shopper / rider / WMS) from the user's role. Dark store screens are
+      // not a separate console — the WMS shell shows them once a dark store
+      // facility is selected in the header picker.
+      await login(email, password);
     } catch (err) {
-      setError('Network error. Is the backend running?');
+      console.error('[LoginView] Login failed:', err);
+      const msg = describeError(err);
+      console.log('[LoginView] Setting localError:', msg);
+      flushSync(() => {
+        setLocalError(msg);
+      });
     } finally {
-      setLoading(false);
+      flushSync(() => {
+        setSubmitting(false);
+      });
     }
   };
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        {/* Logo */}
-        <div className="login-logo">
-          <img className="login-logo-image" src="/favicon.svg" alt="Zippzo" />
-          <div>
-            <div className="login-logo-brand">ZIPPZO</div>
-            <div className="login-logo-sub">WMS CORE V2.4</div>
+    <div style={{
+      minHeight: '100vh',
+      width: '100vw',
+      background: 'radial-gradient(ellipse at 50% 20%, #1e1b4b 0%, #090d16 60%, #030712 100%)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '24px',
+      color: '#f8fafc',
+      fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+      position: 'relative',
+      overflow: 'hidden'
+    }}>
+      <div style={{
+        position: 'absolute',
+        top: '-10%',
+        left: '20%',
+        width: '500px',
+        height: '500px',
+        background: 'radial-gradient(circle, rgba(14, 165, 233, 0.15) 0%, transparent 70%)',
+        filter: 'blur(60px)',
+        pointerEvents: 'none',
+        transition: 'all 0.5s ease'
+      }} />
+
+      <div style={{
+        width: '100%',
+        maxWidth: '450px',
+        background: 'rgba(17, 24, 39, 0.85)',
+        backdropFilter: 'blur(20px)',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        borderRadius: '20px',
+        padding: '36px 32px',
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05)',
+        position: 'relative',
+        zIndex: 10
+      }}>
+        <div style={{ textAlign: 'center', marginBottom: '28px' }}>
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '56px',
+            height: '56px',
+            borderRadius: '16px',
+            background: 'linear-gradient(135deg, #0284c7, #0369a1)',
+            color: '#fff',
+            fontWeight: '900',
+            fontSize: '26px',
+            marginBottom: '14px'
+          }}>
+            ZP
           </div>
+          <h2 style={{ fontSize: '24px', fontWeight: '800', margin: '0 0 6px 0' }}>
+            Zippzo Systems
+          </h2>
+          <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
+            Unified Supply Chain Platform
+          </p>
         </div>
 
-        <div className="login-divider"></div>
-
-        <h2 className="login-title">{isRegistering ? 'Create your account' : 'Sign in to Operations Console'}</h2>
-        <p className="login-subtitle">Use your email address and password to access the warehouse console.</p>
-
-        {error && (
-          <div className="login-error">
-            <AlertCircle size={14} />
-            <span>{error}</span>
+        {routeNotice && (
+          <div style={{
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            borderRadius: '10px',
+            padding: '12px 14px',
+            marginBottom: '20px',
+            fontSize: '12px',
+            color: '#fca5a5'
+          }}>
+            {routeNotice.message}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="login-form">
-          {isRegistering && (
-            <>
-              <label className="login-label">Name</label>
-              <div className="login-input-wrap">
-                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" required className="login-input" disabled={loading} />
-              </div>
-            </>
-          )}
-            <label className="login-label">Email Address</label>
-            <div className="login-input-wrap">
-              <Mail size={16} className="login-input-icon" />
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                autoFocus
-                required
-                className="login-input"
-                disabled={loading}
-              />
-            </div>
-            <label className="login-label">Password</label>
-            <div className="login-input-wrap">
-              <LockKeyhole size={16} className="login-input-icon" />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
-                required
-                minLength={8}
-                className="login-input"
-                disabled={loading}
-              />
-            </div>
-            <button type="submit" className="login-btn" disabled={loading}>
-              {loading ? <Loader2 size={16} className="spin" /> : <ArrowRight size={16} />}
-              <span>{loading ? 'Please wait...' : isRegistering ? 'Register' : 'Sign In'}</span>
-            </button>
+        {localError && (
+          <div
+            data-testid="login-error"
+            style={{
+              background: 'rgba(239, 68, 68, 0.15)',
+              border: '1px solid #ef4444',
+              borderRadius: '8px',
+              padding: '10px 14px',
+              marginBottom: '16px',
+              fontSize: '12px',
+              color: '#f87171'
+            }}>
+            {localError}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#e2e8f0', marginBottom: '6px' }}>
+              Email Address
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              placeholder="operator@zippzo.in"
+              style={{
+                width: '100%',
+                background: 'rgba(15, 23, 42, 0.8)',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                borderRadius: '10px',
+                padding: '11px 14px',
+                color: '#f8fafc',
+                fontSize: '13px',
+                outline: 'none',
+                boxSizing: 'border-box'
+              }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#e2e8f0', marginBottom: '6px' }}>
+              Password
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              placeholder="Enter your password"
+              style={{
+                width: '100%',
+                background: 'rgba(15, 23, 42, 0.8)',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                borderRadius: '10px',
+                padding: '11px 14px',
+                color: '#f8fafc',
+                fontSize: '13px',
+                outline: 'none',
+                boxSizing: 'border-box'
+              }}
+            />
+          </div>
+
+          <hr style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0', border: 'none' }} />
+
+          <button
+            type="submit"
+            disabled={submitting || loading}
+            style={{
+              width: '100%',
+              marginTop: '12px',
+              padding: '13px',
+              borderRadius: '10px',
+              border: 'none',
+              background: 'linear-gradient(135deg, #0284c7, #0369a1)',
+              color: '#ffffff',
+              fontSize: '14px',
+              fontWeight: '700',
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              opacity: submitting ? 0.7 : 1
+            }}
+          >
+            {submitting ? 'Authenticating...' : 'Sign In →'}
+          </button>
         </form>
-
-        <button type="button" className="login-back-btn" onClick={() => { setIsRegistering(!isRegistering); setError(''); }} disabled={loading}>
-          {isRegistering ? 'Already have an account? Sign in' : 'Need an account? Register'}
-        </button>
-
-        <div className="login-footer">
-          Warehouse Management System
-        </div>
       </div>
     </div>
   );

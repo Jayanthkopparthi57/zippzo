@@ -1,254 +1,177 @@
-import React, { useState } from 'react';
-import { useTabs } from '../../context/TabContext';
+import React from 'react';
 import {
-  BarChart3,
-  ArrowDownToLine,
-  ArrowRightLeft,
-  Layers,
-  Truck,
-  Warehouse,
-  Store,
-  Settings2,
-  BookOpen,
-  Users2,
-  Search,
-  ChevronRight,
+  LayoutDashboard, PackageCheck, ShieldCheck, Boxes, ArrowRightLeft,
+  Layers, Barcode, ClipboardList, MapPin, Truck, Tag, Users, Building2,
+  ListChecks, Send, Receipt, Package, PackagePlus, RefreshCw, Grid, Bike,
+  Undo2, Search, ShoppingBasket, Bell, History
 } from 'lucide-react';
-
-const MENU_GROUPS = [
-  {
-    id: 'store-ops',
-    title: 'Store Operations',
-    icon: <Store size={15} style={{ color: '#2563eb' }} />,
-    defaultOpen: true,
-    items: [
-      { id: 'store-management', title: 'Store Management', view: 'StoreManagementView', count: 'Spoke' },
-      { id: 'man-power', title: 'Man Power', view: 'ManPowerView' },
-    ],
-  },
-  {
-    id: 'metrics',
-    title: 'Metrics',
-    icon: <BarChart3 size={15} />,
-    defaultOpen: true,
-    items: [
-      { id: 'metrics-dashboard', title: 'Dashboard', view: 'DashboardView' },
-    ],
-  },
-  {
-    id: 'inbound',
-    title: 'Inbound',
-    icon: <ArrowDownToLine size={15} />,
-    defaultOpen: true,
-    items: [
-      { id: 'inbound-asns', title: 'ASNs (Advance Shipping)', view: 'InboundView', initialSubtab: 'asns', count: 7 },
-      { id: 'inbound-grns', title: 'Inwarding & GRN', view: 'InboundView', initialSubtab: 'grns', count: 4 },
-      { id: 'inbound-putaway', title: 'Putaway Tasks', view: 'InboundView', initialSubtab: 'putaway', count: 6 },
-      { id: 'inbound-discrepancies', title: 'Dock Discrepancies', view: 'InboundView', initialSubtab: 'discrepancies', count: 6 },
-    ],
-  },
-  {
-    id: 'outbound',
-    title: 'Outbound',
-    icon: <ArrowRightLeft size={15} />,
-    defaultOpen: true,
-    items: [
-      { id: 'sto', title: 'STO', view: 'StoView', count: 20 },
-      { id: 'transfer-orders', title: 'Transfer Orders', view: 'StoView' },
-      { id: 'returns', title: 'Returns', view: 'StoView' },
-      { id: 'cancellation-putaway', title: 'Cancellation Putaway', view: 'StoView' },
-    ],
-  },
-  {
-    id: 'outbound-process',
-    title: 'Outbound Process',
-    icon: <Layers size={15} />,
-    defaultOpen: false,
-    items: [
-      { id: 'batches', title: 'Batches', view: 'PicklistView', count: 5 },
-      { id: 'picklists', title: 'Picklists', view: 'PicklistView', count: 5 },
-      { id: 'sorting-list', title: 'Sorting List', view: 'PicklistView' },
-      { id: 'dispatch-plan', title: 'Dispatch Plan', view: 'DispatchPlanView', count: 3 },
-      { id: 'manifests', title: 'Manifests', view: 'DispatchPlanView' },
-      { id: 'totes-lpns', title: 'Totes / LPNs', view: 'DispatchPlanView' },
-      { id: 'cross-dock', title: 'Cross Dock', view: 'InboundView', initialSubtab: 'asns' },
-    ],
-  },
-  {
-    id: 'linehaul',
-    title: 'Linehaul',
-    icon: <Truck size={15} />,
-    defaultOpen: true,
-    items: [
-      { id: 'vehicle-assign', title: 'Vehicle Assignment', view: 'VehicleAssignmentView', count: 15 },
-      { id: 'vehicle-checkin', title: 'Vehicle Check In', view: 'ActiveTripsView' },
-      { id: 'active-trips', title: 'Active Trips', view: 'ActiveTripsView', count: 15 },
-      { id: 'all-trips', title: 'All Trips', view: 'ActiveTripsView' },
-    ],
-  },
-  {
-    id: 'inventory',
-    title: 'Inventory',
-    icon: <Warehouse size={15} />,
-    defaultOpen: false,
-    items: [
-      { id: 'inventory-lots', title: 'Inventory Lots', view: 'LotsView', count: 90 },
-      { id: 'transactions', title: 'Transaction Log', view: 'LotsView' },
-      { id: 'droplists', title: 'Droplists (Movement)', view: 'LotsView' },
-      { id: 'cycle-counts', title: 'Cycle Counts', view: 'LotsView' },
-      { id: 'replenishment', title: 'Replenishment', view: 'LotsView' },
-    ],
-  },
-  {
-    id: 'mh-configs',
-    title: 'MH Configs',
-    icon: <Settings2 size={15} />,
-    defaultOpen: false,
-    items: [
-      { id: 'sites', title: 'Sites Registry', view: 'MasterDataView' },
-      { id: 'zones', title: 'Zones', view: 'MasterDataView' },
-      { id: 'bins', title: 'Storage Bins', view: 'MasterDataView' },
-      { id: 'dock-doors', title: 'Dock Doors', view: 'MasterDataView' },
-      { id: 'cluster-zones', title: 'Cluster Zones', view: 'MasterDataView' },
-      { id: 'vehicle-types', title: 'Vehicle Types', view: 'MasterDataView' },
-    ],
-  },
-  {
-    id: 'catalog',
-    title: 'Catalog',
-    icon: <BookOpen size={15} />,
-    defaultOpen: false,
-    items: [
-      { id: 'skus', title: 'SKUs', view: 'MasterDataView', count: 15 },
-      { id: 'categories', title: 'Categories', view: 'MasterDataView' },
-      { id: 'vendors', title: 'Vendors', view: 'MasterDataView' },
-      { id: 'transporters', title: 'Transporters', view: 'MasterDataView' },
-    ],
-  },
-  {
-    id: 'user-management',
-    title: 'User Management',
-    icon: <Users2 size={15} />,
-    defaultOpen: false,
-    items: [
-      { id: 'users', title: 'Users & Roles', view: 'MasterDataView' },
-      { id: 'reason-codes', title: 'Reason Codes', view: 'MasterDataView' },
-    ],
-  },
-];
+import { useTabs } from '../../context/TabContext';
+import { useAuth } from '../../context/AuthContext';
 
 export default function Sidebar({ collapsed }) {
-  const { openTab, activeTabId } = useTabs();
-  const [expandedGroups, setExpandedGroups] = useState({
-    metrics: true,
-    inbound: true,
-    outbound: true,
-    'outbound-process': false,
-    linehaul: true,
-    inventory: false,
-    'mh-configs': false,
-    catalog: false,
-    'user-management': false,
-  });
-  const [filterQuery, setFilterQuery] = useState('');
+  const { activeTabId, openTab } = useTabs();
+  const { isDarkStore, user } = useAuth();
 
-  const toggleGroup = (groupId) => {
-    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
-  };
+  const adminSystemItems = user?.is_admin ? [
+    { id: 'admin-settings', label: 'Admin & System Config', icon: ShieldCheck }
+  ] : [];
+
+  // A shopper is not a warehouse operator with the operator screens hidden —
+  // they are a different job. Rendering the WMS menu for a CUSTOMER login put
+  // "Dispatch", "Fleet & Trips" and "Bins & Locations" in front of somebody
+  // whose entire job is a basket and a delivery address.
+  const isShopper = user?.role === 'CUSTOMER' && !user?.is_admin;
+
+  const shopperSections = [
+    {
+      group: 'SHOPPING',
+      items: [
+        { id: 'shop-storefront', label: 'Order Groceries', icon: ShoppingBasket },
+        { id: 'shop-orders', label: 'My Orders', icon: ClipboardList },
+        { id: 'shop-notifications', label: 'Notifications', icon: Bell },
+        { id: 'shop-account', label: 'Account & Address Book', icon: Users },
+      ]
+    },
+  ];
+
+  // Dark store screens are keyed `ds-*` rather than reusing the mother-hub ids.
+  // The ids used to be shared ('asns', 'putaway-tasks', 'user-orders', ...), so
+  // every dark-store entry rendered a central-hub screen: an operator standing
+  // in a 200 sq ft store was shown batch waves and dispatch trips. Distinct ids
+  // also mean the two menus can never silently shadow each other again.
+  //
+  // This is one console, not two: the shell, the brand and the app mode are the
+  // WMS ones, and only the section list reacts to which facility the operator
+  // has selected in the header picker.
+  const menuSections = isShopper ? shopperSections
+    : isDarkStore ? [
+    {
+      group: 'STORE OPS',
+      items: [
+        { id: 'ds-dashboard', label: 'Command Center', icon: LayoutDashboard },
+        { id: 'ds-shelf-inventory', label: 'Shelf Inventory', icon: Layers },
+        { id: 'ds-ledger', label: 'Stock Ledger', icon: History },
+        { id: 'ds-returns', label: 'Returns & Restock', icon: Undo2 },
+      ]
+    },
+    {
+      group: 'FULFILLMENT',
+      items: [
+{ id: 'ds-order-picking', label: 'Order Picking', icon: ClipboardList },
+  { id: 'ds-order-packing', label: 'Packing', icon: PackageCheck },
+  { id: 'ds-rider-handoff', label: 'Rider Handoff', icon: Bike },
+      ]
+    },
+    {
+      group: 'REPLENISHMENT',
+      items: [
+        { id: 'ds-lpn-receipt', label: 'Receive Totes', icon: PackageCheck },
+        { id: 'ds-shelf-putaway', label: 'Shelf Putaway', icon: Boxes },
+      ]
+    },
+    {
+      group: 'SYSTEM',
+      items: [
+        { id: 'employee-roster', label: 'Staff & Shifts', icon: Users },
+        { id: 'skus', label: 'Product Catalog', icon: Tag },
+        ...adminSystemItems
+      ]
+    }
+  ] : [
+    {
+      group: 'INBOUND',
+      items: [
+        { id: 'asns', label: 'Consignments', icon: PackageCheck },
+        { id: 'qc-testing', label: 'QC Testing', icon: ShieldCheck },
+        { id: 'putaway-tasks', label: 'Putaway Tasks', icon: Boxes },
+      ]
+    },
+    {
+      group: 'STORAGE',
+      items: [
+        { id: 'bin-contents', label: 'Bin Lookup', icon: Search },
+        { id: 'inventory-lots', label: 'Inventory', icon: Layers },
+        { id: 'transaction-log', label: 'Stock Movements', icon: ClipboardList },
+        { id: 'storage-bins', label: 'Bins & Locations', icon: MapPin },
+        { id: 'bin-transfer', label: 'Bin Transfer', icon: ArrowRightLeft },
+      ]
+    },
+    {
+      group: 'REPLENISHMENT',
+      items: [
+        { id: 'create-orders', label: 'Create Orders', icon: PackagePlus },
+        { id: 'pick-execute', label: 'Pick Execution', icon: Barcode },
+        { id: 'pack-seal', label: 'Pack & Seal', icon: Package },
+        { id: 'transfer-orders', label: 'Transfer Orders', icon: ArrowRightLeft },
+        { id: 'sorting-list', label: 'Sorting', icon: Grid },
+      ]
+    },
+    {
+      group: 'PACKING',
+      items: [
+        { id: 'packing', label: 'Packing (Batches)', icon: Package },
+      ]
+    },
+    {
+      group: 'OUTBOUND',
+      items: [
+        { id: 'batches', label: 'Batches & Waves', icon: ArrowRightLeft },
+        { id: 'picklists', label: 'Picklists', icon: ListChecks },
+        { id: 'dispatch-trips', label: 'Dispatch', icon: Truck },
+      ]
+    },
+    {
+      group: 'SHIPPING',
+      items: [
+        { id: 'manifests', label: 'Shipments & Manifests', icon: Receipt },
+        { id: 'cross-dock', label: 'Cross-Dock Transfers', icon: Send },
+      ]
+    },
+    {
+      group: 'SYSTEM',
+      items: [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'employee-roster', label: 'Employee Shifts & Tasks', icon: Users },
+        { id: 'sites-registry', label: 'Stores', icon: Building2 },
+        { id: 'skus', label: 'SKU Catalog', icon: Tag },
+        { id: 'vendors', label: 'Vendors', icon: Users },
+        { id: 'active-trips', label: 'Fleet & Trips', icon: Truck },
+        ...adminSystemItems
+      ]
+    }
+  ];
 
   return (
-    <aside className={`app-sidebar ${collapsed ? 'collapsed' : ''}`}>
-      {/* Brand Header */}
+    <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-header">
-        <div className="brand-badge">
-          <div className="brand-icon">Z</div>
-          {!collapsed && (
-            <div>
-              <div className="brand-name">ZIPPZO</div>
-              <div className="brand-sub">WMS CORE v2.4</div>
-            </div>
-          )}
-        </div>
+        <div className="brand-badge">Z</div>
+        {!collapsed && <span className="brand-title">{isShopper ? 'Zippzo' : 'Zippzo WMS'}</span>}
       </div>
 
-      {/* Search Input */}
-      {!collapsed && (
-        <div className="sidebar-search-box">
-          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-            <input
-              type="text"
-              placeholder="Search module..."
-              value={filterQuery}
-              onChange={(e) => setFilterQuery(e.target.value)}
-            />
-            <Search size={12} style={{ position: 'absolute', right: 8, color: 'var(--text-muted)' }} />
+      <div className="sidebar-content">
+        {menuSections.map((sec, idx) => (
+          <div key={idx} style={{ marginBottom: '12px' }}>
+            {!collapsed && (
+              <div className="nav-group-title">{sec.group}</div>
+            )}
+            {sec.items.map(item => {
+              const IconComp = item.icon;
+              const isActive = activeTabId === item.id;
+              return (
+                <div
+                  key={item.id}
+                  data-testid={`nav-${item.id}`}
+                  className={`nav-item ${isActive ? 'active' : ''}`}
+                  onClick={() => openTab(item.id, item.label, item.icon.name)}
+                  title={item.label}
+                >
+                  <IconComp size={16} style={{ minWidth: 16 }} />
+                  {!collapsed && <span>{item.label}</span>}
+                </div>
+              );
+            })}
           </div>
-        </div>
-      )}
-
-      {/* Accordion Menu */}
-      <div className="sidebar-menu">
-        {MENU_GROUPS.map(group => {
-          const isOpen = expandedGroups[group.id] || Boolean(filterQuery);
-          const visibleItems = filterQuery
-            ? group.items.filter(item => item.title.toLowerCase().includes(filterQuery.toLowerCase()))
-            : group.items;
-
-          if (filterQuery && visibleItems.length === 0) return null;
-
-          return (
-            <div key={group.id} className="accordion-group">
-              <div
-                className="accordion-header"
-                onClick={() => toggleGroup(group.id)}
-                title={group.title}
-              >
-                <div className="accordion-title">
-                  <span className="accordion-icon">{group.icon}</span>
-                  {!collapsed && <span>{group.title}</span>}
-                </div>
-                {!collapsed && (
-                  <span className={`accordion-caret ${isOpen ? 'open' : ''}`}>
-                    <ChevronRight size={13} />
-                  </span>
-                )}
-              </div>
-
-              {isOpen && !collapsed && (
-                <div className="accordion-children">
-                  {visibleItems.map(item => {
-                    const isActive = activeTabId === item.id;
-                    return (
-                      <div
-                        key={item.id}
-                        className={`subnav-item ${isActive ? 'active' : ''}`}
-                        onClick={() => openTab({
-                          id: item.id,
-                          title: item.title,
-                          view: item.view,
-                          initialSubtab: item.initialSubtab
-                        })}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{
-                            width: 4,
-                            height: 4,
-                            borderRadius: '50%',
-                            background: isActive ? 'var(--c-teal)' : 'var(--border-mid)'
-                          }}></span>
-                          <span>{item.title}</span>
-                        </div>
-                        {item.count != null && (
-                          <span className="subnav-count">{item.count}</span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        ))}
       </div>
     </aside>
   );
