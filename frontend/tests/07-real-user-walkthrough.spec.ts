@@ -18,23 +18,16 @@
  * front of a cold remote Neon instance that occasionally 5xxs once.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { login, selectDarkStore, TEST_USERS } from './utils';
+import { login, loginShopper, selectDarkStore, TEST_USERS } from './utils';
 
 const LONG = { timeout: 240_000 };
 
 /**
- * A shopper's sidebar has only `shop-storefront` — no `nav-skus` — so the
- * shared `login()` helper's nav landmark never appears for a CUSTOMER. Log in
- * the same way but wait on the landmark the shopper actually gets.
+ * The customer application is its own entry point with its own sidebar, so the
+ * shared store-console `login()` helper cannot be used for it.
  */
 async function loginAsCustomer(page: Page) {
-  await page.goto('/login');
-  await page.waitForLoadState('networkidle');
-  await page.fill('input[type="email"]', TEST_USERS.customer.email);
-  await page.fill('input[type="password"]', TEST_USERS.customer.password);
-  await page.click('button[type="submit"]');
-  await page.locator('[data-testid="nav-shop-storefront"]').waitFor({ state: 'visible', timeout: 90_000 });
-  await page.waitForLoadState('networkidle');
+  await loginShopper(page, TEST_USERS.customer);
 }
 
 type Json = any;
@@ -217,8 +210,9 @@ test.describe('real-user walkthrough — every tab, every mode, nothing stubbed'
     // them.
     await selectDarkStore(page);
     await expect(page.locator('[data-testid="nav-ds-dashboard"]')).toBeVisible(LONG);
-    // Merged into WMS: the sidebar must stay the WMS shell, not a second brand.
-    await expect(page.locator('.brand-title')).toHaveText('Zippzo WMS', LONG);
+    // The dark-store sections belong to the store application's own shell, so
+    // picking a site must not swap the sidebar for a second brand.
+    await expect(page.locator('.brand-title')).toHaveText('Zippzo Store', LONG);
     const w = watch(page);
 
     // StoreGate: if the session has no store and more than one dark store is

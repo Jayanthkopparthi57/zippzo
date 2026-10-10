@@ -22,6 +22,47 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+
+    // Three applications ship out of one Android project, in the same way the
+    // big quick-commerce players ship a customer app, a store-partner app and a
+    // delivery-partner app. Each flavor is its own install: its own
+    // applicationId, its own launcher name, and its own web bundle (see
+    // src/<flavor>/assets, written by scripts/build-android.mjs).
+    //
+    // The flavor dimension is called "app" so Gradle emits assembleStoreDebug,
+    // assembleShopperRelease and so on rather than the generic product-flavor
+    // names.
+    flavorDimensions "app"
+    productFlavors {
+        store {
+            dimension "app"
+            applicationId "com.zippzo.app"
+            versionNameSuffix "-store"
+        }
+        shopper {
+            dimension "app"
+            applicationId "com.zippzo.shopper"
+            versionNameSuffix "-shopper"
+        }
+        rider {
+            dimension "app"
+            applicationId "com.zippzo.rider"
+            versionNameSuffix "-rider"
+        }
+    }
+
+    sourceSets {
+        // Capacitor's sync writes the web bundle to src/main/assets/public,
+        // which every flavor would then package identically. The build script
+        // moves each synced bundle into the flavor's own assets dir, and these
+        // source sets put it back in front of that flavor's launcher.
+        main {
+            // Deliberately left alone: the moved bundle is the only public dir.
+        }
+        store { assets.srcDirs += ['src/store/assets'] }
+        shopper { assets.srcDirs += ['src/shopper/assets'] }
+        rider { assets.srcDirs += ['src/rider/assets'] }
+    }
 }
 
 repositories {

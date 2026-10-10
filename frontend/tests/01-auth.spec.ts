@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, TEST_USERS } from './utils';
+import { login, loginRider, APP_ENTRIES, TEST_USERS } from './utils';
 
 test.describe('Authentication & Navigation', () => {
   test.beforeEach(async ({ page }) => {
@@ -11,7 +11,7 @@ test.describe('Authentication & Navigation', () => {
       }
     });
     
-    await page.goto('/login');
+    await page.goto(APP_ENTRIES.store);
     await page.waitForLoadState('networkidle');
   });
 
@@ -29,8 +29,12 @@ test.describe('Authentication & Navigation', () => {
   });
 
   test('rider login shows the rider console', async ({ page }) => {
-    await login(page, TEST_USERS.rider);
-    // Rider gets its own isolated console (never the WMS sidebar).
+    // The rider entry is a cold bundle on a cold backend, and login() allows
+    // itself two 60s waits before giving up, so the 30s default is too tight.
+    test.setTimeout(120_000);
+    await loginRider(page);
+    // Rider gets its own isolated console on its own entry point (never the
+    // store sidebar, which is not even in this bundle).
     // rider@ has no delivery profile yet, so the first screen is setup; a
     // rider who already has one lands on the Zippzo Rider dashboard.
     await expect(
@@ -38,6 +42,21 @@ test.describe('Authentication & Navigation', () => {
     ).toBeVisible({ timeout: 60000 });
     await expect(page.locator('[data-testid="nav-skus"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="nav-ds-dashboard"]')).toHaveCount(0);
+  });
+
+  test('a rider account is refused by the store app', async ({ page }) => {
+    // The three applications are separate installs. A rider account opened in
+    // the store console is told which app it belongs to rather than being
+    // handed an empty operator shell. login() cannot be used here: it waits
+    // for a token, and a mismatch deliberately never issues one.
+    await page.goto(APP_ENTRIES.store);
+    await page.waitForLoadState('networkidle');
+    await page.fill('input[type="email"]', TEST_USERS.rider.email);
+    await page.fill('input[type="password"]', TEST_USERS.rider.password);
+    await page.click('button[type="submit"]');
+    await expect(page.getByText('Wrong Zippzo app')).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId('wrong-app-open')).toBeVisible();
+    await page.waitForFunction(() => !window.localStorage.getItem('zippzo_jwt'));
   });
 
   test.skip('invalid credentials shows error - skipped due to test env React render timing', async ({ page }) => {

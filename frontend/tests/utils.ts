@@ -1,4 +1,4 @@
-import { Page, Locator, expect } from '@playwright/test';
+import { test, Page, Locator, expect } from '@playwright/test';
 
 export const TEST_USERS = {
   admin: { email: 'admin@zippzo.in', password: 'admin123', role: 'SUPER_ADMIN' },
@@ -8,8 +8,23 @@ export const TEST_USERS = {
   customer: { email: 'customer@zippzo.in', password: 'customer123', role: 'CUSTOMER' },
 };
 
-export async function login(page: Page, user = TEST_USERS.admin) {
-  await page.goto('/login');
+/**
+ * The three Zippzo applications are three separate web entries out of one
+ * source tree. An account only signs in on the entry that matches its role, so
+ * each helper below starts from its own HTML file.
+ */
+export const APP_ENTRIES = {
+  store: '/index.html',
+  shopper: '/shopper.html',
+  rider: '/rider.html',
+};
+
+export async function login(
+  page: Page,
+  user = TEST_USERS.admin,
+  entry: string = APP_ENTRIES.store,
+) {
+  await page.goto(entry);
   await page.waitForLoadState('networkidle');
   await page.fill('input[type="email"]', user.email);
   await page.fill('input[type="password"]', user.password);
@@ -48,9 +63,29 @@ export async function login(page: Page, user = TEST_USERS.admin) {
   await page.waitForLoadState('networkidle');
 }
 
-/** Rider gets an isolated console (no sidebar). */
+/**
+ * The three applications each boot their own bundle, and login() allows itself
+ * two 60s waits before giving up. The 30s Playwright default would kill a
+ * merely-slow cold-backend login, so give these helpers room.
+ */
+function allowSlowLogin() {
+  const info = test.info();
+  if (info && info.timeout < 120_000) info.setTimeout(120_000);
+}
+
+/** The customer application: storefront, orders, notifications, account. */
+export async function loginShopper(page: Page, user = TEST_USERS.customer) {
+  allowSlowLogin();
+  await login(page, user, APP_ENTRIES.shopper);
+  await page
+    .locator('[data-testid="nav-shop-storefront"]')
+    .waitFor({ state: 'visible', timeout: 90_000 });
+}
+
+/** Rider gets an isolated console (no sidebar), on its own entry point. */
 export async function loginRider(page: Page, user = TEST_USERS.rider) {
-  await login(page, user);
+  allowSlowLogin();
+  await login(page, user, APP_ENTRIES.rider);
   await page
     .locator('[data-testid="rider-shell"], [data-testid="rider-setup"], [data-testid="rider-loading"]')
     .first()

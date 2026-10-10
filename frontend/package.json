@@ -5,12 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:shopper": "vite --open /shopper.html",
+    "dev:rider": "vite --open /rider.html",
     "build": "vite build",
-    "build:native": "vite build --mode native",
+    "build:native": "vite build --mode native --outDir dist-native",
     "lint": "oxlint",
     "preview": "vite preview",
-    "cap:sync": "npm run build:native && cap sync android",
-    "cap:android": "npm run cap:sync && cap open android"
+    "android:store": "node scripts/build-android.mjs store",
+    "android:shopper": "node scripts/build-android.mjs shopper",
+    "android:rider": "node scripts/build-android.mjs rider",
+    "android:all": "node scripts/build-android.mjs"
   },
   "dependencies": {
     "@zxing/browser": "^0.2.1",

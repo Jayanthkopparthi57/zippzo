@@ -1,0 +1,11 @@
+{
+  "appId": "com.zippzo.rider",
+  "appName": "Zippzo Rider",
+  "webDir": "dist-native",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

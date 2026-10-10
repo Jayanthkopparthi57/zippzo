@@ -28,3 +28,9 @@ blob-report
 *.njsproj
 *.sln
 *.sw?
+dist-native/
+
+# Staged per-app Capacitor config. scripts/build-android.mjs copies
+# capacitor.<app>.json here before each `cap sync`, so this file is a build
+# artefact and never the source of truth.
+capacitor.config.json

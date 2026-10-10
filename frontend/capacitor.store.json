@@ -1,0 +1,11 @@
+{
+  "appId": "com.zippzo.app",
+  "appName": "Zippzo Store",
+  "webDir": "dist-native",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

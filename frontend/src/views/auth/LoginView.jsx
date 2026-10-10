@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { describeError } from '../../api/client';
 
 export default function LoginView() {
-  const { login, loading, routeNotice } = useAuth();
+  const { login, loading, routeNotice, appMeta } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -18,11 +18,19 @@ export default function LoginView() {
       setLocalError(null);
     });
     try {
-      // The backend authenticates against iam.User and derives the console
-      // (shopper / rider / WMS) from the user's role. Dark store screens are
-      // not a separate console — the WMS shell shows them once a dark store
-      // facility is selected in the header picker.
-      await login(email, password);
+      // The backend authenticates against iam.User and derives which of the
+      // three Zippzo applications the account belongs to from its role
+      // (target_app_for() in bounded/iam/views.py). A login whose role belongs
+      // to a different application is rejected here and AuthGate renders the
+      // wrong-app screen pointing at the right one.
+      const result = await login(email, password);
+      if (result?.mismatch) {
+        flushSync(() => {
+          setLocalError(
+            `This account does not sign in to ${appMeta.name}. Check which Zippzo app you opened.`,
+          );
+        });
+      }
     } catch (err) {
       console.error('[LoginView] Login failed:', err);
       const msg = describeError(err);
@@ -92,10 +100,10 @@ export default function LoginView() {
             ZP
           </div>
           <h2 style={{ fontSize: '24px', fontWeight: '800', margin: '0 0 6px 0' }}>
-            Zippzo Systems
+            {appMeta.name}
           </h2>
           <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
-            Unified Supply Chain Platform
+            {appMeta.tagline}
           </p>
         </div>
 
@@ -132,14 +140,15 @@ export default function LoginView() {
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div>
             <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#e2e8f0', marginBottom: '6px' }}>
-              Email Address
+              {appMeta.emailLabel}
             </label>
             <input
+              data-testid="login-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              placeholder="operator@zippzo.in"
+              placeholder={appMeta.emailPlaceholder}
               style={{
                 width: '100%',
                 background: 'rgba(15, 23, 42, 0.8)',

@@ -1,7 +1,7 @@
 {
-  "appId": "com.zippzo.app",
-  "appName": "Zippzo",
-  "webDir": "dist",
+  "appId": "com.zippzo.rider",
+  "appName": "Zippzo Rider",
+  "webDir": "dist-native",
   "server": {
     "androidScheme": "https"
   },

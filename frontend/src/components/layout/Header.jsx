@@ -4,8 +4,13 @@ import { useAuth } from '../../context/AuthContext';
 import { useTabs } from '../../context/TabContext';
 
 export default function Header({ onToggleSidebar, onOpenScanner }) {
-  const { user, facility, logout, facilitiesList, switchFacility } = useAuth();
+  const { user, facility, logout, facilitiesList, switchFacility, appKey } = useAuth();
   const { activeTabId } = useTabs();
+
+  // The facility picker and barcode scanner are store-operator tools. The
+  // customer app has neither in its bundle, and the rider app has no header at
+  // all, so both are gated on the store console specifically.
+  const isStoreConsole = appKey === 'store';
 
   // switchFacility() already existed on the context but nothing ever called it,
   // so the menu could only ever be whatever target_app_for() returned at login.
@@ -79,14 +84,19 @@ export default function Header({ onToggleSidebar, onOpenScanner }) {
       </div>
 
       <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <button className="btn-scanner" onClick={onOpenScanner} title="Handheld Laser Scanner Tool">
-          <QrCode size={14} /> <span>Scan Barcode</span>
-        </button>
+        {isStoreConsole && (
+          <button className="btn-scanner" onClick={onOpenScanner} title="Handheld Laser Scanner Tool">
+            <QrCode size={14} /> <span>Scan Barcode</span>
+          </button>
+        )}
 
 
 
-        {/* Site picker — drives which sidebar sections render. Both site types
-            stay in the WMS shell; only the menu changes. */}
+        {/* Site picker - drives which sidebar sections render inside the store
+            console. Both site types stay in the store app; only the menu
+            changes. A customer has no facility to pick, so it is not rendered
+            for them. */}
+        {isStoreConsole && (
         <select
           data-testid="facility-switcher"
           aria-label="Switch facility"
@@ -127,8 +137,10 @@ export default function Header({ onToggleSidebar, onOpenScanner }) {
             </optgroup>
           )}
         </select>
+        )}
 
-        {/* Current Facility Badge */}
+        {/* Current Facility Badge — a store operator's site, not a customer's. */}
+        {isStoreConsole && (
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -145,6 +157,7 @@ export default function Header({ onToggleSidebar, onOpenScanner }) {
           <span>{facility?.code || '—'} • {facility?.name ? facility.name.toUpperCase() : 'NO FACILITY SELECTED'}</span>
           <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', marginLeft: '2px' }} title="Online Live Fulfillment" />
         </div>
+        )}
 
         {/* User Profile & Logout */}
         <div className="user-meta" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -160,7 +173,7 @@ export default function Header({ onToggleSidebar, onOpenScanner }) {
             fontSize: '12px',
             fontWeight: '800'
           }}>
-            {user?.avatar || 'WMS'}
+            {user?.avatar || 'Z'}
           </div>
           <div style={{ textAlign: 'left', lineHeight: 1.2 }}>
             <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-primary)' }}>

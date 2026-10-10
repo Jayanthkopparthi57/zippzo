@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { fetchApi, postApi, setAuthToken, getAuthToken, describeError } from '../api/client';
+import { APP, APPS } from '../apps/registry';
 
 const AuthContext = createContext();
 
@@ -20,30 +21,19 @@ function readStorage(key, fallback) {
   }
 }
 
-// App mode is persisted as a bare string (not JSON), so it must not go through
-// readStorage(): JSON.parse('DARK_STORE') throws and would silently reset the
-// operator back into the WMS console on every reload.
+// Which console this bundle renders is fixed at build time by the HTML entry
+// point (src/apps/registry.js), not chosen at runtime. There is no longer an
+// appMode state to switch: a rider bundle cannot render the shopper shell
+// because those view modules are not in its chunk, and a shopper bundle cannot
+// reach the store console for the same reason.
 //
-// RIDER and SHOPPER are produced by target_app_for() in iam.views: without
-// them in this list readAppMode() rejected the backend's answer and fell back
-// to 'WMS', which is why the rider app could never be reached after login.
-//
-// DARK_STORE is deliberately absent: the dark store console is not a separate
-// app, it is a section of the WMS shell selected by which facility the operator
-// has picked (Sidebar reads facility.site_type). Anything still carrying the
-// retired value — an old localStorage write, or a backend that still answers
-// target_app='DARK_STORE' — is normalised back to 'WMS' rather than dropped to
-// the login screen.
-const APP_MODES = ['WMS', 'SHOPPER', 'RIDER'];
+// DARK_STORE is a retired mode — the store screens are a section of the store
+// app selected by which facility the operator has picked — so an older backend
+// still answering target_app='DARK_STORE' is normalised to 'WMS'.
 const RETIRED_MODES = { DARK_STORE: 'WMS' };
 
 function normaliseMode(raw) {
-  if (RETIRED_MODES[raw]) return RETIRED_MODES[raw];
-  return APP_MODES.includes(raw) ? raw : 'WMS';
-}
-
-function readAppMode() {
-  return normaliseMode(localStorage.getItem(STORAGE_KEY_MODE));
+  return RETIRED_MODES[raw] || raw || null;
 }
 
 /**
@@ -82,10 +72,16 @@ function splitSites(sites) {
   };
 }
 
-export function AuthProvider({ children }) {
+export function AuthProvider({ appKey = APP.key, children }) {
+  const appMeta = APPS[appKey] || APP;
   const [user, setUser] = useState(() => normaliseUser(readStorage(STORAGE_KEY_USER, null)));
   const [facility, setFacility] = useState(() => readStorage(STORAGE_KEY_FACILITY, null));
-  const [appMode, setAppMode] = useState(readAppMode);
+  // The console is the one this bundle was built as. It never changes.
+  const appMode = appMeta.targetApp;
+  // Set when a login answered with a target_app for a different application,
+  // e.g. a rider account typed into the store app. The token is dropped and
+  // the user is told which app their account belongs to.
+  const [appMismatch, setAppMismatch] = useState(null);
   const [facilitiesList, setFacilitiesList] = useState({
     warehouses: [],
     dark_stores: [],
@@ -93,6 +89,16 @@ export function AuthProvider({ children }) {
   });
   const [loading, setLoading] = useState(false);
   const [routeNotice, setRouteNotice] = useState(null);
+
+  // Drop the in-memory session and everything persisted for it.
+  const clearSession = () => {
+    setAuthToken(null);
+    setUser(null);
+    setFacility(null);
+    localStorage.removeItem(STORAGE_KEY_USER);
+    localStorage.removeItem(STORAGE_KEY_FACILITY);
+    localStorage.removeItem(STORAGE_KEY_MODE);
+  };
 
   // Whether the selected facility is a dark store drives the sidebar sections.
   // The facility object that arrives in the login payload does not always carry
@@ -137,26 +143,31 @@ export function AuthProvider({ children }) {
       setUser(null);
       return;
     }
+    // The three web entries share one origin, so they share localStorage: a
+    // token restored here may belong to a different application. Drop it and
+    // send that user to their own entry point instead of rendering an empty
+    // console.
+    if (normaliseMode(localStorage.getItem(STORAGE_KEY_MODE)) !== appMeta.targetApp) {
+      clearSession();
+      setAppMismatch({ expected: appMeta, actualKey: normaliseMode(localStorage.getItem(STORAGE_KEY_MODE)) });
+      return;
+    }
     setLoading(true);
     fetchApi('/iam/users/')
       .then(() => { if (!cancelled) loadFacilities(); })
       .catch(() => {
         if (cancelled) return;
         // Token rejected by the backend: drop the stale session.
-        setAuthToken(null);
-        setUser(null);
-        setFacility(null);
-        localStorage.removeItem(STORAGE_KEY_USER);
-        localStorage.removeItem(STORAGE_KEY_FACILITY);
-        localStorage.removeItem(STORAGE_KEY_MODE);
+        clearSession();
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [loadFacilities]);
+  }, [loadFacilities, appMeta]);
 
   const login = async (email, password) => {
     setLoading(true);
     setRouteNotice(null);
+    setAppMismatch(null);
     try {
       const resp = await postApi('/iam/auth/login', { email, password });
       const loggedUser = normaliseUser(resp?.user);
@@ -165,14 +176,25 @@ export function AuthProvider({ children }) {
       }
       const targetApp = normaliseMode(resp.target_app);
 
+      // Wrong application: this account belongs to a different console. Drop
+      // the token rather than mounting a shell the backend will refuse, and
+      // tell the user which app to open.
+      if (targetApp !== appMeta.targetApp) {
+        setAuthToken(null);
+        setAppMismatch({
+          expected: appMeta,
+          actualKey: Object.values(APPS).find(a => a.targetApp === targetApp)?.key || null,
+        });
+        return { success: false, mismatch: true, targetApp };
+      }
+
       if (resp.token) setAuthToken(resp.token);
       setUser(loggedUser);
-      setAppMode(targetApp);
       setFacility(resp.facility || null);
 
       localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(loggedUser));
       if (resp.facility) localStorage.setItem(STORAGE_KEY_FACILITY, JSON.stringify(resp.facility));
-      localStorage.setItem(STORAGE_KEY_MODE, targetApp);
+      localStorage.setItem(STORAGE_KEY_MODE, appMeta.targetApp);
 
       loadFacilities();
 
@@ -194,9 +216,9 @@ export function AuthProvider({ children }) {
       });
       return false;
     }
-    // Picking a dark store keeps the operator in the WMS shell — the sidebar
-    // just swaps to the store-ops sections — so it still needs the same
-    // clearance as the warehouse branch above.
+    // Picking a dark store keeps the operator in the store console — the
+    // sidebar just swaps to the store-ops sections — so it still needs the
+    // same clearance as the warehouse branch above.
     if (newFacility.site_type === 'DS' && !user?.can_access_dark_store) {
       setRouteNotice({
         type: 'warning',
@@ -206,38 +228,13 @@ export function AuthProvider({ children }) {
     }
     setFacility(newFacility);
     localStorage.setItem(STORAGE_KEY_FACILITY, JSON.stringify(newFacility));
-    // Facility drives which menu sections render, not which app is mounted.
-    // Anything that is not a shopper or a rider console belongs to the WMS shell.
-    if (appMode !== 'SHOPPER' && appMode !== 'RIDER') {
-      setAppMode('WMS');
-      localStorage.setItem(STORAGE_KEY_MODE, 'WMS');
-    }
     setRouteNotice(null);
-    return true;
-  };
-
-  const switchAppMode = (mode) => {
-    if (mode === 'WMS' && !user?.can_access_warehouse) {
-      setRouteNotice({
-        type: 'warning',
-        message: 'Your account does not have clearance for WMS Central Hub.',
-      });
-      return false;
-    }
-    setAppMode(mode);
-    localStorage.setItem(STORAGE_KEY_MODE, mode);
     return true;
   };
 
   const logout = () => {
-    setAuthToken(null);
-    setUser(null);
-    setFacility(null);
-    setAppMode('WMS');
-    setRouteNotice(null);
-    localStorage.removeItem(STORAGE_KEY_USER);
-    localStorage.removeItem(STORAGE_KEY_FACILITY);
-    localStorage.removeItem(STORAGE_KEY_MODE);
+    clearSession();
+    setAppMismatch(null);
   };
 
   return (
@@ -246,7 +243,12 @@ export function AuthProvider({ children }) {
         user,
         facility,
         isDarkStore,
+        appKey: appMeta.key,
         appMode,
+        appMeta,
+        appMismatch,
+        appName: appMeta.name,
+        appBrand: appMeta.brand,
         facilitiesList,
         loading,
         routeNotice,
@@ -254,7 +256,6 @@ export function AuthProvider({ children }) {
         login,
         logout,
         switchFacility,
-        switchAppMode,
         refreshFacilities: loadFacilities,
       }}
     >

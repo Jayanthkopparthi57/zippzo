@@ -1,7 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Zippzo</string>
-    <string name="title_activity_main">Zippzo</string>
     <string name="package_name">com.zippzo.app</string>
     <string name="custom_url_scheme">com.zippzo.app</string>
 </resources>

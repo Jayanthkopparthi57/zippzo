@@ -10,17 +10,17 @@ import { useAuth } from '../../context/AuthContext';
 
 export default function Sidebar({ collapsed }) {
   const { activeTabId, openTab } = useTabs();
-  const { isDarkStore, user } = useAuth();
+  const { isDarkStore, user, appKey, appBrand } = useAuth();
 
   const adminSystemItems = user?.is_admin ? [
     { id: 'admin-settings', label: 'Admin & System Config', icon: ShieldCheck }
   ] : [];
 
-  // A shopper is not a warehouse operator with the operator screens hidden —
-  // they are a different job. Rendering the WMS menu for a CUSTOMER login put
-  // "Dispatch", "Fleet & Trips" and "Bins & Locations" in front of somebody
-  // whose entire job is a basket and a delivery address.
-  const isShopper = user?.role === 'CUSTOMER' && !user?.is_admin;
+  // Which menu this sidebar renders is decided by which application this
+  // bundle is, not by the signed-in role. The store console is one app with two
+  // menu sets (hub vs dark store) selected by the facility; the customer app is
+  // a different bundle entirely and never imports the operator screens.
+  const isShopper = appKey === 'shopper';
 
   const shopperSections = [
     {
@@ -34,15 +34,8 @@ export default function Sidebar({ collapsed }) {
     },
   ];
 
-  // Dark store screens are keyed `ds-*` rather than reusing the mother-hub ids.
-  // The ids used to be shared ('asns', 'putaway-tasks', 'user-orders', ...), so
-  // every dark-store entry rendered a central-hub screen: an operator standing
-  // in a 200 sq ft store was shown batch waves and dispatch trips. Distinct ids
-  // also mean the two menus can never silently shadow each other again.
-  //
-  // This is one console, not two: the shell, the brand and the app mode are the
-  // WMS ones, and only the section list reacts to which facility the operator
-  // has selected in the header picker.
+  // Dark store screens are keyed `ds-*` rather than reusing the hub ids, so
+  // the two menu sets can never silently shadow each other.
   const menuSections = isShopper ? shopperSections
     : isDarkStore ? [
     {
@@ -145,7 +138,7 @@ export default function Sidebar({ collapsed }) {
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-header">
         <div className="brand-badge">Z</div>
-        {!collapsed && <span className="brand-title">{isShopper ? 'Zippzo' : 'Zippzo WMS'}</span>}
+        {!collapsed && <span className="brand-title">{appBrand}</span>}
       </div>
 
       <div className="sidebar-content">
