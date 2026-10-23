@@ -1,9 +1,9 @@
 /**
  * Scan-first workflow design system.
  *
- * Every operational screen in this app is driven by a barcode scan, so the
- * primitives below are built around that: a large, always-visible scan target,
- * explicit progress through a guided stepper, and unambiguous state feedback.
+ * Every operational screen is driven by a barcode scan, so the primitives
+ * below are built around that: a large, always-visible scan target, explicit
+ * progress through a guided stepper, and unambiguous state feedback.
  *
  * These are real classes rather than inline styles so the views stop each
  * inventing their own card/section/progress markup.
@@ -14,17 +14,17 @@
 .scan-field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .scan-field-label {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--text-secondary);
 }
 
@@ -34,24 +34,28 @@
   align-items: stretch;
 }
 
+/* min-width:0 lets the input shrink below its content width; without it a long
+   barcode in the mono font pushes the Scan button out of the panel, where the
+   next panel's cards cover it. */
 .scan-input {
-  flex: 1;
-  min-height: 52px;
-  padding: 0 16px;
-  font-size: 18px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 14px;
+  font-size: 17px;
   font-weight: 600;
   font-family: var(--font-mono, ui-monospace, monospace);
   letter-spacing: 0.02em;
   color: var(--text-primary);
   background: var(--bg-surface);
-  border: 2px solid var(--border-color);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+  transition: border-color var(--duration-fast) ease;
 }
 
 .scan-input::placeholder {
   font-family: inherit;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--text-muted);
   letter-spacing: normal;
@@ -60,7 +64,6 @@
 .scan-input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-glow);
 }
 
 .scan-input:disabled {
@@ -69,13 +72,16 @@
   cursor: not-allowed;
 }
 
+.scan-field-row > .scan-btn { flex-shrink: 0; }
+
 .scan-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 52px;
-  padding: 0 20px;
-  font-size: 14px;
+  flex-shrink: 0;
+  min-height: 48px;
+  padding: 0 18px;
+  font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
   color: #fff;
@@ -83,34 +89,37 @@
   border: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: filter var(--duration-fast) ease, transform var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease;
 }
 
 .scan-btn:hover:not(:disabled) {
-  filter: brightness(1.08);
+  background: var(--accent-hover);
 }
 
 .scan-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .scan-btn--ghost {
   color: var(--text-primary);
   background: var(--bg-surface);
-  border: 2px solid var(--border-color);
+  border: 1px solid var(--border-color);
 }
 
+.scan-btn--ghost:hover:not(:disabled) { background: var(--bg-hover); }
 .scan-btn--success { background: var(--success); }
+.scan-btn--success:hover:not(:disabled) { background: #15803d; }
 .scan-btn--danger  { background: var(--danger); }
+.scan-btn--danger:hover:not(:disabled) { background: #b91c1c; }
 .scan-btn--neutral { background: var(--text-secondary); }
 
 .scan-feedback {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 10px 14px;
-  font-size: 13px;
+  padding: 9px 13px;
+  font-size: 12px;
   font-weight: 600;
   border-radius: var(--radius-sm);
 }
@@ -125,8 +134,8 @@
   display: flex;
   align-items: flex-start;
   gap: 0;
-  margin-bottom: 20px;
-  padding: 18px 20px;
+  margin-bottom: 18px;
+  padding: 16px 18px;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -138,7 +147,7 @@
   align-items: flex-start;
   gap: 10px;
   flex: 1;
-  min-width: 150px;
+  min-width: 148px;
   position: relative;
 }
 
@@ -146,7 +155,7 @@
 .wf-step:not(:last-child)::after {
   content: "";
   position: absolute;
-  top: 17px;
+  top: 16px;
   left: calc(100% - 4px);
   width: 12px;
   height: 2px;
@@ -161,13 +170,13 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  font-size: 14px;
+  width: 32px;
+  height: 32px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-muted);
   background: var(--bg-inset);
-  border: 2px solid var(--border-color);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-full);
 }
 
@@ -175,7 +184,6 @@
   color: #fff;
   background: var(--accent);
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-glow);
 }
 
 .wf-step--done .wf-step-marker {
@@ -187,7 +195,7 @@
 .wf-step-text { padding-top: 2px; }
 
 .wf-step-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -218,20 +226,20 @@
   align-items: center;
   justify-content: center;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
   color: var(--text-primary);
 }
 
 .progress-ring__label { display: flex; flex-direction: column; }
 
-.progress-ring__label-main { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.progress-ring__label-main { font-size: 13px; font-weight: 700; color: var(--text-primary); }
 .progress-ring__label-sub  { font-size: 11px; color: var(--text-muted); }
 
 /* ───────────────────────── Progress bar ───────────────────────── */
 
 .progress-bar {
   width: 100%;
-  height: 8px;
+  height: 6px;
   background: var(--bg-inset);
   border-radius: var(--radius-full);
   overflow: hidden;
@@ -254,11 +262,11 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 10px;
-  font-size: 11px;
+  padding: 2px 9px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   border-radius: var(--radius-full);
   border: 1px solid transparent;
   white-space: nowrap;
@@ -276,17 +284,16 @@
 .entity-card {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding: 16px;
+  gap: 13px;
+  padding: 14px;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+  transition: border-color var(--duration-fast) ease;
 }
 
 .entity-card--active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .entity-card--done { border-color: var(--success-border); background: var(--success-bg); }
@@ -297,8 +304,8 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
   color: var(--accent);
   background: var(--accent-light);
   border-radius: var(--radius-md);
@@ -307,7 +314,7 @@
 .entity-card__body { flex: 1; min-width: 0; }
 
 .entity-card__title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -315,9 +322,9 @@
 .entity-card__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
-  margin-top: 4px;
-  font-size: 12px;
+  gap: 4px 13px;
+  margin-top: 3px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -329,12 +336,12 @@
 
 .tally-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 10px;
 }
 
 .tally-tile {
-  padding: 12px 14px;
+  padding: 11px 13px;
   background: var(--bg-inset);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -349,8 +356,8 @@
 }
 
 .tally-tile__value {
-  font-size: 22px;
-  font-weight: 800;
+  font-size: 20px;
+  font-weight: 700;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
   margin-top: 2px;
@@ -364,7 +371,7 @@
 
 .tote-label {
   width: 340px;
-  padding: 20px;
+  padding: 18px;
   background: #fff;
   color: #000;
   border: 2px solid #000;
@@ -373,8 +380,8 @@
 }
 
 .tote-label__title {
-  font-size: 20px;
-  font-weight: 800;
+  font-size: 19px;
+  font-weight: 700;
   letter-spacing: 0.06em;
   text-align: center;
   padding-bottom: 8px;
@@ -408,25 +415,25 @@
 
 .toast-stack {
   position: fixed;
-  top: 80px;
-  right: 24px;
+  top: 72px;
+  right: 22px;
   z-index: var(--z-toast, 2000);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-width: 380px;
+  gap: 8px;
+  max-width: 370px;
 }
 
 .toast {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 12px 14px;
+  padding: 11px 13px;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
-  border-left-width: 4px;
+  border-left-width: 3px;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg, 0 10px 30px rgba(15, 23, 42, 0.12));
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(24, 24, 27, 0.12));
   animation: toastIn var(--duration-normal) var(--ease-out);
 }
 
@@ -450,18 +457,18 @@
 }
 
 @keyframes toastIn {
-  from { opacity: 0; transform: translateX(16px); }
+  from { opacity: 0; transform: translateX(12px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 
 /* ───────────────────────── Section scaffolding ───────────────────────── */
 
 .wf-panel {
-  padding: 20px;
+  padding: 18px;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .wf-panel__header {
@@ -470,14 +477,14 @@
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .wf-panel__title {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -491,22 +498,25 @@
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 48px 24px;
+  padding: 44px 24px;
   text-align: center;
   color: var(--text-muted);
 }
 
 .wf-empty__icon { color: var(--border-color); }
-.wf-empty__title { font-size: 15px; font-weight: 700; color: var(--text-secondary); }
-.wf-empty__text  { font-size: 13px; max-width: 420px; }
+.wf-empty__title { font-size: 14px; font-weight: 700; color: var(--text-secondary); }
+.wf-empty__text  { font-size: 12px; max-width: 400px; }
 
 /* Grid helper for scan targets + tallies on wide screens. */
 .wf-split {
   display: grid;
-  grid-template-columns: minmax(320px, 420px) 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(300px, 400px) 1fr;
+  gap: 14px;
   align-items: start;
 }
+
+/* Grid items default to min-width:auto and refuse to shrink below content. */
+.wf-split > * { min-width: 0; }
 
 @media (max-width: 1100px) {
   .wf-split { grid-template-columns: 1fr; }

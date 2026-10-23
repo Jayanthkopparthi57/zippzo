@@ -6,7 +6,6 @@ import {
 import ScanInput from '../../components/ui/ScanInput';
 import WorkflowStepper from '../../components/ui/WorkflowStepper';
 import ProgressRing from '../../components/ui/ProgressRing';
-import ProductCard from '../../components/ui/ProductCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import ToteLabel from '../../components/ui/ToteLabel';
 import { useToast } from '../../components/ui/Toast';
@@ -558,25 +557,39 @@ export default function PackSealView() {
           )}
 
           {orders.length > 0 && (
-            <div className="item-list" data-testid="pack-queue">
-              {orders.map((t) => (
-                <ProductCard
-                  key={t.transfer_id}
-                  dataTestId={`pack-queue-${t.transfer_id}`}
-                  product={{
-                    name: `Transfer ${String(t.transfer_id).slice(0, 8)}`,
-                    // Resolved per row: the open order's own src/dest are null
-                    // while the queue is showing, so using them here printed
-                    // "? → ?" on every transfer.
-                    sku_code: `${siteById[String(t.source_site)]?.code || String(t.source_site || '—')} → ${siteById[String(t.dest_site)]?.code || String(t.dest_site || '—')}`,
-                  }}
-                  picked={0}
-                  expected={Number(t.total_qty) || 0}
-                  state="pending"
-                  action={<StatusBadge status={t.status} />}
-                  onSelect={() => openOrder(t)}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Transfer</th>
+                    <th>Lane</th>
+                    <th>Qty</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="pack-queue">
+                  {orders.map((t) => (
+                    <tr
+                      key={t.transfer_id}
+                      data-testid={`pack-queue-${t.transfer_id}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => openOrder(t)}
+                    >
+                      <td data-testid={`pack-queue-${t.transfer_id}-name`}>
+                        Transfer {String(t.transfer_id).slice(0, 8)}
+                      </td>
+                      <td className="code-cell">
+                        {siteById[String(t.source_site)]?.code || String(t.source_site || '—')} →{' '}
+                        {siteById[String(t.dest_site)]?.code || String(t.dest_site || '—')}
+                      </td>
+                      <td className="mono-num" data-testid={`pack-queue-${t.transfer_id}-qty`}>
+                        {Number(t.total_qty) || 0}
+                      </td>
+                      <td><StatusBadge status={t.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -741,22 +754,49 @@ export default function PackSealView() {
           </div>
 
           <div className="form-group">
-            <div className="item-list" data-testid="pack-lines">
-              {lines.map((l) => {
-                const s = skuFor(l.skuId);
-                const got = receivedFor(l.skuId);
-                return (
-                  <ProductCard
-                    key={String(l.skuId)}
-                    dataTestId={`pack-line-${l.skuId}`}
-                    product={{ name: s?.name, sku_code: s?.sku_code || String(l.skuId), ean: s?.ean }}
-                    picked={got}
-                    expected={l.expected}
-                    state={got === 0 ? 'pending' : got < l.expected ? 'active' : 'done'}
-                    onScan={step === 2 ? () => document.getElementById('pack-unit-scan-text')?.focus() : undefined}
-                  />
-                );
-              })}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Packed / Expected</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody data-testid="pack-lines">
+                  {lines.map((l) => {
+                    const s = skuFor(l.skuId);
+                    const got = receivedFor(l.skuId);
+                    return (
+                      <tr key={String(l.skuId)} data-testid={`pack-line-${l.skuId}`}>
+                        <td data-testid={`pack-line-${l.skuId}-name`}>{s?.name}</td>
+                        <td className="code-cell">
+                          {s?.sku_code || String(l.skuId)}
+                          {s?.ean ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>EAN {s.ean}</div> : null}
+                        </td>
+                        <td className="mono-num" data-testid={`pack-line-${l.skuId}-qty`}>
+                          {got}
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}> / {l.expected}</span>
+                        </td>
+                        <td>
+                          {step === 2 && (
+                            <button
+                              type="button"
+                              className="scan-btn"
+                              style={{ minHeight: 30, padding: '0 10px', fontSize: 12 }}
+                              data-testid={`pack-line-${l.skuId}-scan`}
+                              onClick={() => document.getElementById('pack-unit-scan-text')?.focus()}
+                            >
+                              Scan
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
 

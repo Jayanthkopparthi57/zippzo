@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  PackageCheck, Package, AlertTriangle, RefreshCw, MapPin, Check, X,
+  PackageCheck, AlertTriangle, RefreshCw, MapPin, Check, X,
 } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import ScanInput from '../../components/ui/ScanInput';
@@ -202,32 +202,43 @@ function PackStation({ siteId }) {
           </div>
         ) : (
           <div className="form-group">
-            <div className="item-list" data-testid="ds-pack-queue">
-              {queue.map((o) => (
-                <div key={o.order_id} className="entity-card" data-testid={`ds-pack-order-${o.order_no}`}>
-                  <div className="entity-card__thumb"><Package size={22} /></div>
-                  <div className="entity-card__body">
-                    <div className="entity-card__title mono-num">{o.order_no}</div>
-                    <div className="entity-card__meta">
-                      <span>Picked <strong>{o.placed_at ? new Date(o.placed_at).toLocaleString() : '—'}</strong></span>
-                      <span>Payment <strong>{o.payment_method} · {o.payment_status}</strong></span>
-                      <span>Total <strong>₹{num(o.grand_total).toLocaleString('en-IN')}</strong></span>
-                    </div>
-                  </div>
-                  <div className="entity-card__actions">
-                    <StatusBadge status={o.status} dataTestId={`ds-pack-status-${o.order_no}`} />
-                    <button
-                      className="scan-btn"
-                      style={{ minHeight: 34, fontSize: 12, marginTop: 6 }}
-                      onClick={() => choose(o)}
-                      disabled={busy || !PACKABLE.has(o.status)}
-                      data-testid={`ds-pack-open-${o.order_no}`}
-                    >
-                      Pack
-                    </button>
-                  </div>
-                </div>
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Order</th>
+                    <th>Picked</th>
+                    <th>Payment</th>
+                    <th>Total</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody data-testid="ds-pack-queue">
+                  {queue.map((o) => (
+                    <tr key={o.order_id} data-testid={`ds-pack-order-${o.order_no}`}>
+                      <td className="mono-num">{o.order_no}</td>
+                      <td>{o.placed_at ? new Date(o.placed_at).toLocaleString() : '—'}</td>
+                      <td>{o.payment_method} · {o.payment_status}</td>
+                      <td className="mono-num">₹{num(o.grand_total).toLocaleString('en-IN')}</td>
+                      <td>
+                        <StatusBadge status={o.status} dataTestId={`ds-pack-status-${o.order_no}`} />
+                      </td>
+                      <td>
+                        <button
+                          className="scan-btn"
+                          style={{ minHeight: 34, fontSize: 12 }}
+                          onClick={() => choose(o)}
+                          disabled={busy || !PACKABLE.has(o.status)}
+                          data-testid={`ds-pack-open-${o.order_no}`}
+                        >
+                          Pack
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}

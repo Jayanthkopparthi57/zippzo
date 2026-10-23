@@ -7,7 +7,6 @@ import ScanInput from '../../components/ui/ScanInput';
 import WorkflowStepper from '../../components/ui/WorkflowStepper';
 import ProgressRing from '../../components/ui/ProgressRing';
 import ProductCard from '../../components/ui/ProductCard';
-import BinCard from '../../components/ui/BinCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../api/client';
@@ -50,8 +49,10 @@ export default function PutawayView() {
 
   const [tasks, setTasks] = useState([]);
   const [skus, setSkus] = useState([]);
+  const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [assignBusy, setAssignBusy] = useState('');
 
   const [task, setTask] = useState(null);
   const [step, setStep] = useState(0);
@@ -68,12 +69,14 @@ export default function PutawayView() {
     setLoading(true);
     setLoadError('');
     try {
-      const [statusLists, skuRows] = await Promise.all([
+      const [statusLists, skuRows, staffRows] = await Promise.all([
         Promise.all(
           OPEN_TASK_STATUS.map((s) => fetchApi(`/supply/putaway-tasks/?status=${s}&page_size=100`))
         ),
         // PutawayTask.sku is a Sku UUID; resolve the scannable codes.
         fetchApi('/catalog/skus/?page_size=1000'),
+        // Who a putaway can be handed to — the assignment board's staff list.
+        fetchApi('/iam/users/?page_size=500'),
       ]);
       const seen = new Set();
       const open = [];
@@ -87,6 +90,7 @@ export default function PutawayView() {
       });
       setTasks(open);
       setSkus(asList(skuRows, '/catalog/skus/'));
+      setStaff(asList(staffRows, '/iam/users/').filter((u) => u.role !== 'CUSTOMER'));
     } catch (e) {
       setLoadError(describeError(e));
     } finally {
@@ -95,6 +99,19 @@ export default function PutawayView() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  /* Hand a putaway to one worker (or clear it). Mirrors the assignment board. */
+  const assignTask = async (t, userId) => {
+    setAssignBusy(String(t.task_id));
+    try {
+      await postApi(`/supply/putaway-tasks/${t.task_id}/assign/`, { user: userId || null });
+      await load();
+    } catch (e) {
+      toast.error('Could not assign putaway', describeError(e));
+    } finally {
+      setAssignBusy('');
+    }
+  };
 
   const skuById = useMemo(() => {
     const map = {};
@@ -330,19 +347,54 @@ export default function PutawayView() {
           )}
 
           {tasks.length > 0 && (
-            <div className="item-list" data-testid="put-queue">
-              {tasks.map((t) => (
-                <ProductCard
-                  key={t.task_id}
-                  dataTestId={`put-queue-${t.task_id}`}
-                  product={{ name: skuFor(t)?.name || `SKU ${t.sku}`, sku_code: skuFor(t)?.sku_code || t.sku }}
-                  picked={0}
-                  expected={Number(t.qty) || 0}
-                  state="pending"
-                  action={<StatusBadge status={t.status} />}
-                  onSelect={() => openTask(t)}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '100%' }}>Product</th>
+                    <th>SKU</th>
+                    <th>Qty</th>
+                    <th>Status</th>
+                    <th>Assignee</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="put-queue">
+                  {tasks.map((t) => (
+                    <tr
+                      key={t.task_id}
+                      data-testid={`put-queue-${t.task_id}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => openTask(t)}
+                    >
+                      <td data-testid={`put-queue-${t.task_id}-name`}>
+                        {skuFor(t)?.name || `SKU ${t.sku}`}
+                      </td>
+                      <td className="code-cell">{skuFor(t)?.sku_code || t.sku}</td>
+                      <td className="mono-num" data-testid={`put-queue-${t.task_id}-qty`}>
+                        {Number(t.qty) || 0}
+                      </td>
+                      <td><StatusBadge status={t.status} /></td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <select
+                            className="form-input"
+                            data-testid={`put-assign-${t.task_id}`}
+                            disabled={assignBusy === String(t.task_id)}
+                            value={t.assigned_to ? String(t.assigned_to) : ''}
+                            onChange={(e) => assignTask(t, e.target.value)}
+                            style={{ height: 26, fontSize: 11, padding: '0 6px', minWidth: 0 }}>
+                            <option value="">— Unassigned —</option>
+                            {staff.map((u) => (
+                              <option key={u.user_id} value={String(u.user_id)}>{u.full_name || u.email}</option>
+                            ))}
+                          </select>
+                          {assignBusy === String(t.task_id) && <span style={{ fontSize: 11 }}>…</span>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -525,8 +577,22 @@ export default function PutawayView() {
           </div>
 
           {scannedBin && (
-            <div className="item-list" data-testid="put-bin-card">
-              <BinCard bin={scannedBin.location || { barcode: scannedBin.label }} lineCount={1} totalQty={placed + 1} />
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr><th>Bin</th><th>Products</th><th>Units</th></tr>
+                </thead>
+                <tbody data-testid="put-bin-card">
+                  <tr data-testid="bin-card">
+                    <td className="mono-num">
+                      {scannedBin.location?.barcode || scannedBin.location?.code ||
+                        scannedBin.location?.location_code || scannedBin.location?.id || scannedBin.label}
+                    </td>
+                    <td>1 product</td>
+                    <td className="mono-num">{placed + 1} units</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           )}
 

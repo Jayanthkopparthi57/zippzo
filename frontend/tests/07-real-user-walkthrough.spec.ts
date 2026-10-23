@@ -112,6 +112,34 @@ interface Tab {
   refresh?: string | null;
 }
 
+// Every list/queue/ledger container in the store console is a table body, not
+// a stack of cards. These ids are contract: each is asserted below.
+const LIST_CONTAINERS = [
+  'rcv-queue', 'asn-lines', 'rcv-lines', 'qc-queue', 'qc-batch-lines', 'qc-tally',
+  'put-queue', 'put-bin-card', 'co-lines', 'co-stock', 'co-result-tasks',
+  'pack-queue', 'pack-lines', 'bin-lookup-candidates', 'bin-lookup-rows',
+  'pick-queue', 'ds-shelf-rows', 'ds-ledger-rows', 'ds-return-pending',
+  'ds-return-settled', 'ds-pick-queue', 'ds-pick-lines', 'ds-pack-queue',
+  'ds-handoff-queue', 'ds-handoff-closed', 'ds-receipt-queue',
+  'ds-putaway-totes', 'ds-putaway-lines', 'cr-custody', 'cr-movements',
+  'ov-table', 'rf-table', 'ds-overview-queues', 'ds-store-options',
+];
+
+async function assertListTables(page: Page) {
+  const offenders = await page.evaluate((ids) => {
+    const out: string[] = [];
+    for (const id of ids) {
+      const el = document.querySelector(`[data-testid="${id}"]`);
+      if (!el) continue;
+      if (el.tagName !== 'TBODY' || !el.closest('table.data-table')) {
+        out.push(`${id}=${el.tagName}`);
+      }
+    }
+    return out;
+  }, LIST_CONTAINERS);
+  expect(offenders, 'every list section renders as a data table body').toEqual([]);
+}
+
 // Every entry visible in the Sidebar for a SUPER_ADMIN (WMS) session, with the
 // selector that proves that specific view actually rendered.
 const WMS_TABS: Tab[] = [
@@ -147,6 +175,9 @@ const WMS_TABS: Tab[] = [
 const DS_TABS: Tab[] = [
   { id: 'ds-dashboard', arrival: ['[data-testid="ds-overview-tiles"]', '[data-testid="ds-overview-error"]'], error: ['[data-testid="ds-overview-error"]'], refresh: 'ds-overview-refresh' },
   { id: 'ds-shelf-inventory', arrival: ['[data-testid="ds-shelf-summary"]', '[data-testid="ds-shelf-rows"]', '[data-testid="ds-shelf-empty"]', '[data-testid="ds-shelf-error"]'], error: ['[data-testid="ds-shelf-error"]'], refresh: 'ds-shelf-refresh' },
+  // Not in this list until now: the store's Stock Ledger had never been opened
+  // by any test, which is how it came to render an empty label on every row.
+  { id: 'ds-ledger', arrival: ['[data-testid="ds-ledger-rows"]', '[data-testid="ds-ledger-empty"]', '[data-testid="ds-ledger-error"]'], error: ['[data-testid="ds-ledger-error"]'], refresh: 'ds-ledger-refresh' },
   { id: 'ds-returns', arrival: ['[data-testid="ds-return-pending"]', '[data-testid="ds-return-settled"]', '[data-testid="ds-return-empty"]', '[data-testid="ds-return-error"]'], error: ['[data-testid="ds-return-error"]'], refresh: null },
   { id: 'ds-order-picking', arrival: ['[data-testid="ds-pick-queue"]', '[data-testid="ds-pick-empty"]', '[data-testid="ds-pick-queue-error"]'], error: ['[data-testid="ds-pick-queue-error"]'], refresh: null },
   { id: 'ds-order-packing', arrival: ['[data-testid="ds-pack-queue"]', '[data-testid="ds-pack-empty"]', '[data-testid="ds-pack-queue-error"]'], error: ['[data-testid="ds-pack-queue-error"]'], refresh: null },
@@ -174,6 +205,7 @@ test.describe('real-user walkthrough — every tab, every mode, nothing stubbed'
       const viewport = page.locator('main.workspace-viewport');
       const text = await viewport.innerText();
       expect(text.trim().length, `WMS ${t.id}: workspace is not blank`).toBeGreaterThan(30);
+      await assertListTables(page);
       // Generic DataTable tabs must actually render their content: a data
       // table for tabular views, the metric grid for the dashboard.
       if (t.id === 'transfer-orders') {
@@ -240,7 +272,31 @@ test.describe('real-user walkthrough — every tab, every mode, nothing stubbed'
       await settleAgainstErrors(page, t.arrival, t.error || [], t.refresh ?? null, `DS ${t.id}`);
       const text = await page.locator('main.workspace-viewport').innerText();
       expect(text.trim().length, `DS ${t.id}: workspace is not blank`).toBeGreaterThan(30);
+      await assertListTables(page);
     }
+
+    // Mounting is not enough for the ledger: it labels, filters and searches
+    // every row from the movement type, and an empty one still renders a
+    // perfectly plausible-looking screen. Demand a real type on the rows and
+    // in the filter.
+    await page.click('[data-testid="nav-ds-ledger"]');
+    await waitAny(page, [
+      '[data-testid="ds-ledger-rows"]',
+      '[data-testid="ds-ledger-empty"]',
+      '[data-testid="ds-ledger-error"]',
+    ]);
+    if (await page.locator('[data-testid="ds-ledger-rows"]').count()) {
+      await expect(page.locator('[data-testid="ds-ledger-row-0"] .entity-card__title'))
+        .not.toMatch(/^\s*·/);
+      const typeLabels = await page
+        .locator('[data-testid="ds-ledger-type"] option:not([value="ALL"])')
+        .allInnerTexts();
+      expect(typeLabels.length, 'the type filter must offer a real movement type').toBeGreaterThan(0);
+      for (const label of typeLabels) {
+        expect(label.trim(), 'a movement type label must not be blank').not.toBe('');
+      }
+    }
+
     clean(w);
   });
 

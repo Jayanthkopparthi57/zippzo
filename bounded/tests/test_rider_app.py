@@ -617,4 +617,13 @@ class DeliverySettlementTests(RiderAppBase):
             f'/api/money/payments/?status=CAPTURED')
         self.assertEqual(200, listing.status_code, listing.data)
         rows = listing.data if isinstance(listing.data, list) else listing.data['results']
+        self.assertEqual(1, len(rows),
+                         'the customer can read the capture on their own order')
+        self.assertEqual('COD_CASH', rows[0]['method'])
+
+        # A stranger with no orders of their own still reads nothing.
+        stranger = self.api_for(self.ops).get(
+            f'/api/money/payments/?status=CAPTURED')
+        self.assertEqual(200, stranger.status_code, stranger.data)
+        rows = stranger.data if isinstance(stranger.data, list) else stranger.data['results']
         self.assertEqual([], rows, 'no stranger reads the payment table')

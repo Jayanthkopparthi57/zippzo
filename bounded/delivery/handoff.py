@@ -86,8 +86,8 @@ def _settle_delivery(*, order, task, actor, cod, delivered_at,
     flaky connection and a double-counted cash custody is unrecoverable.
     """
     from bounded.lastmile.models import PODEvidence
-    from bounded.money.models import (CashMovement, RiderCustodyState,
-                                      RiderEarnings)
+    from bounded.money.models import (CashMovement, Payment,
+                                      RiderCustodyState, RiderEarnings)
 
     rider_id = task.rider_id
     if rider_id is None and getattr(actor, 'role', '') == 'RIDER':
@@ -132,6 +132,21 @@ def _settle_delivery(*, order, task, actor, cod, delivered_at,
 
     if cod is None or rider_id is None:
         return None
+
+    # The Payment row that CAPTURED on this order is talking about. COD has no
+    # gateway, so the capture is a person handing cash to a rider at the door;
+    # without this row the order read "captured" and the money app had nothing
+    # to show for it. One row per order - a replayed POD must not book the
+    # same cash twice.
+    Payment.objects.get_or_create(
+        order=order, method='COD_CASH',
+        defaults={
+            'customer_id': order.customer_id,
+            'gateway': 'CASH',
+            'amount': cod,
+            'status': 'CAPTURED',
+            'captured_at': timezone.now(),
+        })
 
     _, was_created = CashMovement.objects.get_or_create(
         idempotency_key=f'COD_COLLECT:{order.order_id}',
@@ -311,6 +326,18 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
             f'Delivery task {task.task_id} is {task.status}; the order has not '
             f'been picked up yet.')
 
+    # `advance` will walk AT_DS straight to EN_ROUTE, and `complete_pod` used
+    # to read the status alone, so a task could be delivered without ever
+    # leaving the store: shipped_qty stayed 0, no SHIP movement was written and
+    # the units were still counted as sellable on the shelf while the customer
+    # had them. Pickup is the step that books them out, so it is required here
+    # regardless of what the task now says about itself.
+    if task.pickup_at is None:
+        raise HandoffError(
+            f'{order.order_no} has not been collected from the store yet; '
+            f'record the pickup before handing it over.',
+            pickup_required=True)
+
     if not order.pod_otp_hash:
         _start_pod(order, actor)
         # Park the task so the rider's screen shows "waiting for the customer's
@@ -392,6 +419,35 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
     order.pod_otp_hash = None
     fields.append('pod_otp_hash')
     order.save(update_fields=fields)
+
+    # The goods leave the tote at the customer's door, so from here it is an
+    # empty tote again and it goes back into service at the store that packed
+    # it. That store's pool is `current_site = store AND status in (EMPTY,
+    # CREATED)`, which is what the pack screen offers the packer - and until
+    # this existed pickup parked the tote IN_TRANSIT with no site at all and
+    # nothing ever brought it back, so a store that had delivered once ran out
+    # of plastic and could never pack a second order.
+    #
+    # `LpnContent` is deliberately left alone. The manifest is the record of
+    # what the tote carried, and the journey suite leans on that: a discrepancy
+    # has to stay investigable after the delivery rather than being erased by
+    # the tote going back on the shelf.
+    if task.bin:
+        from bounded.inventory.models import LpnMaster
+
+        returned = LpnMaster.objects.select_for_update().filter(
+            pk=task.bin).first()
+        if returned is not None:
+            returned.status = 'EMPTY'
+            returned.current_site_id = order.site_id
+            returned.current_container = None
+            returned.current_ref_id = None
+            # Each load is sealed as it is packed, so keeping the old stamp
+            # would date the next pack of this tote to the delivery before it.
+            returned.sealed_at = None
+            returned.save(update_fields=[
+                'status', 'current_site', 'current_container',
+                'current_ref_id', 'sealed_at'])
 
     OrderStatusHistory.objects.create(
         order=order, from_status=previous, to_status='DELIVERED',

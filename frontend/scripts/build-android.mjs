@@ -68,11 +68,37 @@ function run(cmd, cmdArgs, label, opts = {}) {
  * wrapper so a normal machine keeps using the pinned version.
  */
 function resolveGradle() {
+  const gradleBin = process.platform === 'win32' ? 'gradle.bat' : 'gradle';
+  const wrapperName = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew';
+  const probe = (cmd) =>
+    spawnSync(cmd, ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' });
+
   if (process.env.GRADLE_CMD) return { cmd: process.env.GRADLE_CMD, label: 'gradle ($GRADLE_CMD)' };
-  const onPath = process.platform === 'win32' ? 'gradle.bat' : 'gradle';
-  const probe = spawnSync(onPath, ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' });
-  if (probe.status === 0) return { cmd: onPath, label: `gradle (${onPath} on PATH)` };
-  const wrapper = join(frontend, 'android', process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
+  if (process.env.GRADLE_HOME) {
+    const home = join(process.env.GRADLE_HOME, 'bin', gradleBin);
+    if (existsSync(home) && probe(home).status === 0) {
+      return { cmd: home, label: `gradle ($GRADLE_HOME: ${home})` };
+    }
+  }
+  if (probe(gradleBin).status === 0) return { cmd: gradleBin, label: `gradle (${gradleBin} on PATH)` };
+  // JDK-managed installs (IntelliJ / .jdks) are usually on this machine even
+  // when nothing is on PATH; use the newest one found.
+  const jdkHomes = join(process.env.USERPROFILE ?? '', '.jdks');
+  const homes = existsSync(jdkHomes)
+    ? readdirSync(jdkHomes).filter((n) => /^gradle-/i.test(n)).sort().reverse()
+    : [];
+  for (const name of homes) {
+    const bin = join(jdkHomes, name, 'bin', gradleBin);
+    if (existsSync(bin) && probe(bin).status === 0) {
+      return { cmd: bin, label: `gradle (${name})` };
+    }
+  }
+  const wrapper = join(frontend, 'android', wrapperName);
+  console.warn(
+    `[build-android] no local Gradle found - falling back to ${wrapper}, which must ` +
+      'download its distribution from services.gradle.org (unreachable on some ' +
+      'networks). Install Gradle 8.x or set GRADLE_CMD to use an existing copy.',
+  );
   return { cmd: wrapper, label: `gradle wrapper (${wrapper})` };
 }
 
@@ -121,6 +147,14 @@ for (const app of targets) {
       if (entry && entry[1] !== app.key) rmSync(join(chunkAssets, name));
     }
   }
+
+  // AGP packages into the APK file that is already there, and an entry which
+  // shrinks between runs leaves its old bytes behind: the shopper and rider
+  // APKs each carried 139 KB of zero-filled dead space (and a stale local
+  // header) in front of the shared useDarkStore chunk - about 3% of every
+  // download, for a hole nothing reads. Dropping this flavor's previous
+  // outputs makes each build write a fresh file.
+  rmSync(join(androidApp, 'build', 'outputs', 'apk', app.flavor), { recursive: true, force: true });
 
   const task = `assemble${app.flavor[0].toUpperCase()}${app.flavor.slice(1)}${release ? 'Release' : 'Debug'}`;
   const gradle = resolveGradle();

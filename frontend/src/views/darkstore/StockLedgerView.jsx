@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  History, RefreshCw, AlertTriangle, Search, Package, ArrowDownToLine,
-  ArrowUpFromLine, Timer,
+  History, RefreshCw, AlertTriangle, Search, Package, Timer,
 } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
@@ -54,19 +53,24 @@ function Ledger({ siteId, storeCode }) {
   const rows = useMemo(() => moves || [], [moves]);
   const waiting = useMemo(() => aging || [], [aging]);
 
+  // `apply_stock` records the type in `movement_ref` and leaves `movement_type`
+  // blank on every row - `test_ledger_integrity` pins that as deliberate. This
+  // screen read the blank column instead, so every row rendered an empty label,
+  // the type dropdown offered a single empty option, and the type filter could
+  // never match. The WMS ledger next door already reads `movement_ref`.
   const types = useMemo(
-    () => [...new Set(rows.map((r) => r.movement_type))].sort(),
+    () => [...new Set(rows.map((r) => r.movement_ref))].filter(Boolean).sort(),
     [rows]
   );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return rows.filter((m) => {
-      if (type !== 'ALL' && m.movement_type !== type) return false;
+      if (type !== 'ALL' && m.movement_ref !== type) return false;
       if (!q) return true;
       const sku = skuFor(m.sku);
       return (
-        String(movementLabel(m.movement_type)).toLowerCase().includes(q) ||
+        String(movementLabel(m.movement_ref)).toLowerCase().includes(q) ||
         String(sku?.sku_code || m.sku || '').toLowerCase().includes(q) ||
         String(sku?.name || '').toLowerCase().includes(q) ||
         String(m.ref_id || '').toLowerCase().includes(q) ||
@@ -196,36 +200,41 @@ function Ledger({ siteId, storeCode }) {
               </div>
             </div>
           </div>
-          <div className="form-group">
-            <div className="item-list">
-              {waiting.map((w, i) => (
-                <div
-                  key={w.aging_id}
-                  className="entity-card"
-                  data-testid={`ds-ledger-staged-${i}`}
-                  data-status={w.current_stage}
-                >
-                  <div className="entity-card__thumb">
-                    <Timer size={20} />
-                  </div>
-                  <div className="entity-card__body">
-                    <div className="entity-card__title mono-num">
-                      {String(w.order_id).slice(0, 8)}
-                    </div>
-                    <div className="entity-card__meta">
-                      <span>Staged <strong>{new Date(w.staged_at).toLocaleString()}</strong></span>
-                    </div>
-                  </div>
-                  <div className="entity-card__actions">
-                    <StatusBadge
-                      status={w.current_stage}
-                      tone={STAGE_TONE[w.current_stage]}
-                      dataTestId={`ds-ledger-staged-status-${i}`}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Staged at</th>
+                  <th>Stage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {waiting.map((w, i) => (
+                  <tr
+                    key={w.aging_id}
+                    data-testid={`ds-ledger-staged-${i}`}
+                    data-status={w.current_stage}
+                  >
+                    <td>
+                      <div className="entity-card__title mono-num">
+                        {String(w.order_id).slice(0, 8)}
+                      </div>
+                    </td>
+                    <td className="mono-num">
+                      <strong>{new Date(w.staged_at).toLocaleString()}</strong>
+                    </td>
+                    <td>
+                      <StatusBadge
+                        status={w.current_stage}
+                        tone={STAGE_TONE[w.current_stage]}
+                        dataTestId={`ds-ledger-staged-status-${i}`}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -250,43 +259,54 @@ function Ledger({ siteId, storeCode }) {
             </div>
           </div>
         ) : (
-          <div className="form-group">
-            <div className="item-list" data-testid="ds-ledger-rows">
-              {filtered.map((m, i) => {
-                const dir = directionOf(m);
-                const sku = skuFor(m.sku);
-                const delta = num(m.sellable_delta);
-                return (
-                  <div
-                    key={m.entry_id}
-                    className="entity-card"
-                    data-testid={`ds-ledger-row-${i}`}
-                    data-status={dir}
-                  >
-                    <div className="entity-card__thumb">
-                      {dir === 'IN' ? <ArrowDownToLine size={20} />
-                        : dir === 'OUT' ? <ArrowUpFromLine size={20} />
-                          : <Package size={20} />}
-                    </div>
-                    <div className="entity-card__body">
-                      <div className="entity-card__title">
-                        {movementLabel(m.movement_type)}
-                        {sku?.name ? ` · ${sku.name}` : ''}
-                      </div>
-                      <div className="entity-card__meta">
-                        <span>SKU <strong>{sku?.sku_code || String(m.sku).slice(0, 8)}</strong></span>
-                        {m.from_ref_id && (
-                          <span>From <strong>{m.from_container}:{String(m.from_ref_id).slice(0, 8)}</strong></span>
-                        )}
-                        {m.to_ref_id && (
-                          <span>To <strong>{m.to_container}:{String(m.to_ref_id).slice(0, 8)}</strong></span>
-                        )}
-                        {m.ref_id && <span>Ref <strong>{String(m.ref_id).slice(0, 8)}</strong></span>}
-                        <span>{new Date(m.created_at).toLocaleString()}</span>
-                      </div>
-                    </div>
-                    <div className="entity-card__actions">
-                      <div style={{ textAlign: 'right' }}>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Movement</th>
+                  <th>SKU</th>
+                  <th>From</th>
+                  <th>To</th>
+                  <th>Ref</th>
+                  <th>Qty</th>
+                  <th>Actor</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody data-testid="ds-ledger-rows">
+                {filtered.map((m, i) => {
+                  const dir = directionOf(m);
+                  const sku = skuFor(m.sku);
+                  const delta = num(m.sellable_delta);
+                  return (
+                    <tr
+                      key={m.entry_id}
+                      data-testid={`ds-ledger-row-${i}`}
+                      data-status={dir}
+                    >
+                      <td>
+                        <div className="entity-card__title">
+                          {movementLabel(m.movement_ref)}
+                          {sku?.name ? ` · ${sku.name}` : ''}
+                        </div>
+                      </td>
+                      <td className="mono-num">
+                        <strong>{sku?.sku_code || String(m.sku).slice(0, 8)}</strong>
+                      </td>
+                      <td className="mono-num">
+                        {m.from_ref_id
+                          ? <strong>{m.from_container}:{String(m.from_ref_id).slice(0, 8)}</strong>
+                          : '—'}
+                      </td>
+                      <td className="mono-num">
+                        {m.to_ref_id
+                          ? <strong>{m.to_container}:{String(m.to_ref_id).slice(0, 8)}</strong>
+                          : '—'}
+                      </td>
+                      <td className="mono-num">
+                        {m.ref_id ? <strong>{String(m.ref_id).slice(0, 8)}</strong> : '—'}
+                      </td>
+                      <td>
                         <div
                           data-testid={`ds-ledger-qty-${i}`}
                           style={{
@@ -296,15 +316,14 @@ function Ledger({ siteId, storeCode }) {
                         >
                           {delta > 0 ? `+${delta}` : delta || '—'}
                         </div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                          {m.actor_type}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                      </td>
+                      <td>{m.actor_type}</td>
+                      <td className="mono-num">{new Date(m.created_at).toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

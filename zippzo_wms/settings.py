@@ -135,33 +135,74 @@ TEMPLATES = [
 WSGI_APPLICATION = 'zippzo_wms.wsgi.application'
 ASGI_APPLICATION = 'zippzo_wms.asgi.application'
 
-DATABASES = {
-    'default': {
+def _db_options(sslmode=None):
+    """Options every connection gets, however the database is named."""
+    return {
+        'sslmode': sslmode or os.environ.get('DB_SSLMODE', 'require'),
+        # Passed straight through to libpq. Without it a connect that
+        # never completes blocks indefinitely - a stalled Neon connect sat
+        # for two hours mid-suite and had to be killed, which is worse
+        # than a failure you can see and rerun.
+        'connect_timeout': int(os.environ.get('DB_CONNECT_TIMEOUT', '10')),
+        # Applied as libpq start-up parameters, alongside `sslmode` rather
+        # than on top of it. This used to be a second assignment of a fresh
+        # dict over the whole OPTIONS block, which silently threw the
+        # `sslmode` above away and left every connection on libpq's `prefer`.
+        'options': '-c timezone=Asia/Kolkata',
+    }
+
+
+def _database_from_url(url):
+    """Split a PaaS `DATABASE_URL` back into the settings below.
+
+    Render injects a single URL for the Postgres instance in the blueprint -
+    password and all - while `DATABASES` reads DB_NAME/DB_USER/DB_HOST. A
+    deploy had to be handed the same database twice, and the blueprint was
+    filled in with a hostname and password that match no instance it creates,
+    so the deploy only worked if somebody had also edited the env group. When
+    the URL is there it is the authority; DB_* stays as the override for a
+    database living somewhere else (Neon, a laptop, CI's local Postgres).
+    """
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    return {
         'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.postgresql'),
-        'NAME': os.environ.get('DB_NAME', 'neondb'),
-        'USER': os.environ.get('DB_USER', 'neondb_owner'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
-        'HOST': os.environ.get('DB_HOST', ''),
-        'PORT': os.environ.get('DB_PORT', '5432'),
-        'OPTIONS': {
-            'sslmode': os.environ.get('DB_SSLMODE', 'require'),
-            # Passed straight through to libpq. Without it a connect that
-            # never completes blocks indefinitely - a stalled Neon connect sat
-            # for two hours mid-suite and had to be killed, which is worse
-            # than a failure you can see and rerun.
-            'connect_timeout': int(os.environ.get('DB_CONNECT_TIMEOUT', '10')),
-            # Applied as libpq start-up parameters, alongside `sslmode` rather
-            # than on top of it. This used to be a second assignment of a fresh
-            # dict over the whole OPTIONS block, which silently threw the
-            # `sslmode` above away and left every connection on libpq's `prefer`.
-            'options': '-c timezone=Asia/Kolkata',
-        },
+        'NAME': unquote(parsed.path.lstrip('/')),
+        'USER': unquote(parsed.username or ''),
+        'PASSWORD': unquote(parsed.password or ''),
+        'HOST': parsed.hostname or '',
+        'PORT': str(parsed.port or os.environ.get('DB_PORT', '5432')),
+        # Only the query string can carry sslmode, and `sslmode=require` is
+        # what makes a plain `postgres://` URL safe to use as it arrives.
+        'OPTIONS': _db_options((query.get('sslmode') or [None])[0]),
         # Neon's pooled endpoint drops connections without warning. Django
         # would keep handing the dead one back, so a single blip failed every
         # query that followed it - in the test suite, every later setUpClass.
         # Check the connection before borrowing it and reconnect instead.
         'CONN_HEALTH_CHECKS': True,
     }
+
+
+_database_url = os.environ.get('DATABASE_URL', '').strip()
+DATABASES = {
+    'default': (
+        _database_from_url(_database_url) if _database_url else {
+            'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.postgresql'),
+            'NAME': os.environ.get('DB_NAME', 'neondb'),
+            'USER': os.environ.get('DB_USER', 'neondb_owner'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'HOST': os.environ.get('DB_HOST', ''),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+            'OPTIONS': _db_options(),
+            # Neon's pooled endpoint drops connections without warning. Django
+            # would keep handing the dead one back, so a single blip failed every
+            # query that followed it - in the test suite, every later setUpClass.
+            # Check the connection before borrowing it and reconnect instead.
+            'CONN_HEALTH_CHECKS': True,
+        }
+    )
 }
 
 AUTH_PASSWORD_VALIDATORS = []

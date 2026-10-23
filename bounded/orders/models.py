@@ -60,7 +60,7 @@ class CartLine(models.Model):
 
 class CustomerOrder(models.Model):
     STATUS_CHOICES = [('PLACED','Placed'),('PAYMENT_PENDING','Payment Pending'),('PAYMENT_FAILED','Payment Failed'),('CONFIRMED','Confirmed'),('PICKING','Picking'),('INTERRUPTED','Interrupted'),('PICKED','Picked'),('PARTIALLY_FULFILLED','Partially Fulfilled'),('PACKED','Packed'),('PRICE_FINALIZED','Price Finalized'),('STAGED','Staged'),('RIDER_ASSIGNED','Rider Assigned'),('PICKED_UP','Picked Up'),('OUT_FOR_DELIVERY','Out for Delivery'),('ARRIVED','Arrived'),('DELIVERED','Delivered'),('CANCELLED','Cancelled'),('CANCELLED_PENDING_RETURN','Cancelled Pending Return'),('EXPIRED','Expired'),('FAILED','Failed'),('CLOSED_RTO','Closed RTO'),('REFUNDED','Refunded')]
-    PAYMENT_METHODS = [('PREPAID','Prepaid'),('COD','COD')]
+    PAYMENT_METHODS = [('COD','Cash on Delivery'),('UPI','UPI'),('CARD','Card')]
     PAYMENT_STATUS = [('PENDING','Pending'),('CAPTURED','Captured'),('FAILED','Failed'),('REFUNDED','Refunded')]
     order_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order_no = models.CharField(max_length=20, unique=True)
@@ -89,6 +89,8 @@ class CustomerOrder(models.Model):
     # permission to close the order again.
     pod_otp_hash = models.CharField(max_length=64, null=True, blank=True)
     pod_issued_at = models.DateTimeField(null=True, blank=True)
+    delivery_slot = models.CharField(max_length=60, blank=True)
+    coupon_code = models.CharField(max_length=30, blank=True)
     placed_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'customer_orders'

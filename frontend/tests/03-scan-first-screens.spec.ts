@@ -71,6 +71,37 @@ test.describe('Scan-first warehouse screens render', () => {
     });
   }
 
+  test('each outbound destination opens the queue it names', async ({ page }) => {
+    await login(page);
+
+    // Picklists: the pick queue only — the sorting-wave panel is not rendered.
+    await page.locator('[data-testid="nav-picklists"]').click();
+    await expect(page.locator('[data-testid="pq-root"]')).toBeVisible({ timeout: 60000 });
+    await expect(
+      page.locator('[data-testid="pq-picks"], [data-testid="pq-picks-empty"], [data-testid="pq-picks-error"]').first()
+    ).toBeVisible({ timeout: 60000 });
+    await expect(page.getByTestId('pq-waves')).toHaveCount(0);
+    await expect(page.getByTestId('pq-waves-empty')).toHaveCount(0);
+
+    // Sorting: the wave table only — no pick queue, no scan gate.
+    await page.getByTestId('pq-tab-waves').click();
+    await expect(
+      page.locator('[data-testid="pq-waves"], [data-testid="pq-waves-empty"], [data-testid="pq-waves-error"]').first()
+    ).toBeVisible({ timeout: 60000 });
+    await expect(page.getByTestId('pq-picks')).toHaveCount(0);
+    await expect(page.getByTestId('pq-picks-empty')).toHaveCount(0);
+
+    // Batches is the combined view: both queues are on screen.
+    await page.locator('[data-testid="nav-batches"]').click();
+    await expect(page.getByTestId('pq-tab-both')).toHaveClass(/active/, { timeout: 60000 });
+    await expect(
+      page.locator('[data-testid="pq-waves"], [data-testid="pq-waves-empty"], [data-testid="pq-waves-error"]').first()
+    ).toBeVisible({ timeout: 60000 });
+    await expect(
+      page.locator('[data-testid="pq-picks"], [data-testid="pq-picks-empty"], [data-testid="pq-picks-error"]').first()
+    ).toBeVisible({ timeout: 60000 });
+  });
+
   test('bin lookup resolves a real bin and reports its contents', async ({ page }) => {
     await login(page);
     await page.locator('[data-testid="nav-bin-contents"]').click();

@@ -31,6 +31,7 @@ ORDERS = '/api/orders/orders/'
 ADDRESSES = '/api/orders/addresses/'
 CHECKOUT = '/api/orders/checkout'
 POD = '/api/delivery/handoff/pod'
+PICKUP = '/api/delivery/handoff/pickup'
 
 
 class ShopperUxBase(TestCase):
@@ -81,12 +82,26 @@ class ShopperUxBase(TestCase):
             payment_method='COD', subtotal=Decimal('90.00'),
             grand_total=Decimal('110.00'))
 
-    def make_task(self, order, *, status='ARRIVED'):
+    def make_task(self, order, *, status='AT_DS'):
+        # AT_DS: staged at the store, waiting for the rider to collect. The
+        # old default of ARRIVED described a task already at the customer's
+        # door with nothing ever shipped out of the store, which is exactly the
+        # state pickup refuses and POD used to accept.
         return DeliveryTask.objects.create(
             order=order, site=self.site, rider=self.profile, status=status)
 
     def rider_requests_code(self, task, order):
-        """The rider's first POD call, which mints the code and hands back nothing."""
+        """The rider's first POD call, which mints the code and hands back nothing.
+
+        The collection is recorded first. `complete_pod` now refuses a task
+        that has never been picked up - a task could otherwise be walked to
+        DELIVERED straight out of the store with `shipped_qty` still 0 and no
+        SHIP movement behind it - so a code cannot be minted until the goods
+        have actually left.
+        """
+        collected = self.api_for(self.rider).post(
+            PICKUP, {'task_id': str(task.task_id)}, format='json')
+        self.assertEqual(200, collected.status_code, collected.data)
         response = self.api_for(self.rider).post(
             POD, {'task_id': str(task.task_id)}, format='json')
         self.assertEqual(409, response.status_code, response.data)

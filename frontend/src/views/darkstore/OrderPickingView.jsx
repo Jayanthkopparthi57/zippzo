@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ClipboardList, Check, X, AlertTriangle, Package, Lock, RefreshCw,
+  ClipboardList, Check, X, AlertTriangle, Lock, RefreshCw,
   Undo2, MapPin,
 } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import ScanInput from '../../components/ui/ScanInput';
 import WorkflowStepper from '../../components/ui/WorkflowStepper';
-import ProductCard from '../../components/ui/ProductCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../context/AuthContext';
@@ -507,46 +506,54 @@ function OrderQueue({ siteId, storeCode }) {
           </div>
         ) : (
           <div className="form-group">
-            <div className="item-list" data-testid="ds-pick-queue">
-              {queue.map((o) => {
-                const blocked = !COMPLETABLE.has(o.status);
-                return (
-                  <div
-                    key={o.order_id}
-                    className="entity-card"
-                    data-testid={`ds-pick-order-${o.order_no}`}
-                  >
-                    <div className="entity-card__thumb">
-                      {blocked ? <Lock size={22} /> : <Package size={22} />}
-                    </div>
-                    <div className="entity-card__body">
-                      <div className="entity-card__title mono-num">{o.order_no}</div>
-                      <div className="entity-card__meta">
-                        <span>Placed <strong>{o.placed_at ? new Date(o.placed_at).toLocaleString() : '—'}</strong></span>
-                        <span>Payment <strong>{o.payment_status}</strong></span>
-                        <span>Total <strong>₹{num(o.grand_total).toLocaleString('en-IN')}</strong></span>
-                      </div>
-                      {blocked && BLOCKED_REASON[o.status] && (
-                        <div className="scan-feedback scan-feedback--hint" style={{ marginTop: 8 }}>
-                          {BLOCKED_REASON[o.status]}
-                        </div>
-                      )}
-                    </div>
-                    <div className="entity-card__actions">
-                      <StatusBadge status={o.status} dataTestId={`ds-pick-status-${o.order_no}`} />
-                      <button
-                        className="scan-btn"
-                        style={{ minHeight: 34, fontSize: 12, marginTop: 6 }}
-                        onClick={() => openOrder(o)}
-                        disabled={busy}
-                        data-testid={`ds-pick-open-${o.order_no}`}
-                      >
-                        {blocked ? 'Inspect' : 'Pick'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Order</th>
+                    <th>Placed</th>
+                    <th>Payment</th>
+                    <th>Total</th>
+                    <th>Status</th>
+                    <th>Notes</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody data-testid="ds-pick-queue">
+                  {queue.map((o) => {
+                    const blocked = !COMPLETABLE.has(o.status);
+                    return (
+                      <tr key={o.order_id} data-testid={`ds-pick-order-${o.order_no}`}>
+                        <td className="mono-num">{o.order_no}</td>
+                        <td>{o.placed_at ? new Date(o.placed_at).toLocaleString() : '—'}</td>
+                        <td>{o.payment_status}</td>
+                        <td className="mono-num">₹{num(o.grand_total).toLocaleString('en-IN')}</td>
+                        <td>
+                          <StatusBadge status={o.status} dataTestId={`ds-pick-status-${o.order_no}`} />
+                        </td>
+                        <td>
+                          {blocked && BLOCKED_REASON[o.status] ? (
+                            <div className="scan-feedback scan-feedback--hint">
+                              {BLOCKED_REASON[o.status]}
+                            </div>
+                          ) : '—'}
+                        </td>
+                        <td>
+                          <button
+                            className="scan-btn"
+                            style={{ minHeight: 34, fontSize: 12 }}
+                            onClick={() => openOrder(o)}
+                            disabled={busy}
+                            data-testid={`ds-pick-open-${o.order_no}`}
+                          >
+                            {blocked ? 'Inspect' : 'Pick'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -668,42 +675,66 @@ function OrderQueue({ siteId, storeCode }) {
           ) : (
             <>
               <div className="form-group" style={{ marginTop: 12 }}>
-                <div className="item-list" data-testid="ds-pick-lines">
-                  {lines.map((l, i) => {
-                    const sku = skuIndex?.byId.get(String(l.sku));
-                    const outstanding = num(l.outstanding);
-                    const active =
-                      !!confirmedBin && l.bin_location_id === confirmedBin.location_id;
-                    const split = (l.bins || []).filter((b) => b.allocated).length > 1;
-                    return (
-                      <div key={l.line_id}>
-                        <ProductCard
-                          dataTestId={`ds-pick-line-${i}`}
-                          product={{ name: sku?.name, sku_code: l.sku_code || sku?.sku_code, ean: sku?.ean }}
-                          picked={num(l.picked_qty)}
-                          expected={num(l.qty)}
-                          state={outstanding === 0 ? 'done' : active ? 'active' : 'pending'}
-                        />
-                        <div
-                          className="scan-feedback scan-feedback--hint"
-                          style={{ marginTop: 4 }}
-                          data-testid={`ds-pick-line-bin-${i}`}
-                        >
-                          {l.bin ? (
-                            <>
-                              Bin <strong>{l.bin}</strong>
-                              {split && (
-                                <> · split across {(l.bins || []).filter((b) => b.allocated).length} bins</>
+                <div className="table-container">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Product</th>
+                        <th>SKU / EAN</th>
+                        <th>Qty</th>
+                        <th>Bin</th>
+                        <th>State</th>
+                      </tr>
+                    </thead>
+                    <tbody data-testid="ds-pick-lines">
+                      {lines.map((l, i) => {
+                        const sku = skuIndex?.byId.get(String(l.sku));
+                        const outstanding = num(l.outstanding);
+                        const active =
+                          !!confirmedBin && l.bin_location_id === confirmedBin.location_id;
+                        const split = (l.bins || []).filter((b) => b.allocated).length > 1;
+                        const state = outstanding === 0 ? 'done' : active ? 'active' : 'pending';
+                        return (
+                          <tr
+                            key={l.line_id}
+                            data-testid={`ds-pick-line-${i}`}
+                            data-state={state}
+                          >
+                            <td data-testid={`ds-pick-line-${i}-name`}>
+                              {sku?.name || 'Unknown product'}
+                            </td>
+                            <td className="mono-num" data-testid={`ds-pick-line-${i}-sku`}>
+                              {l.sku_code || sku?.sku_code || '—'}
+                              {sku?.ean ? (
+                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                  EAN {sku.ean}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="mono-num" data-testid={`ds-pick-line-${i}-qty`}>
+                              {num(l.picked_qty)} / {num(l.qty)}
+                            </td>
+                            <td data-testid={`ds-pick-line-bin-${i}`}>
+                              {l.bin ? (
+                                <>
+                                  Bin <strong>{l.bin}</strong>
+                                  {split && (
+                                    <> · split across {(l.bins || []).filter((b) => b.allocated).length} bins</>
+                                  )}
+                                  {' · '}{num(l.available_qty)} on the shelf
+                                </>
+                              ) : (
+                                'Not shelved in any bin at this store — this line needs a putaway before it can be picked.'
                               )}
-                              {' · '}{num(l.available_qty)} on the shelf
-                            </>
-                          ) : (
-                            'Not shelved in any bin at this store — this line needs a putaway before it can be picked.'
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                            </td>
+                            <td>
+                              {outstanding === 0 ? 'Done' : active ? 'Active' : 'Pending'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 

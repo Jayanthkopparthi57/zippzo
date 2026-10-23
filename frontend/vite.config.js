@@ -27,6 +27,12 @@ export default defineConfig({
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
+      // Product photos uploaded through the admin catalog live under Django's
+      // MEDIA_ROOT. Without this the <img> tags 404 on the dev origin (:3000).
+      '/media': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
     },
   },
 })

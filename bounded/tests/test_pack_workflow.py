@@ -222,6 +222,40 @@ class PackGuardTests(PackBase):
         self.assertEqual(409, response.status_code)
         self.assertEqual(0, self.tote_qty())
 
+    def test_a_tote_sealed_onto_another_order_here_is_refused(self):
+        """The cross-site case above is not the only way to be busy.
+
+        A tote this store sealed onto a *different* order, or one still out
+        with a rider on one, sits at this store in a busy state - so the
+        site-only guard waved it through and two orders ended up recorded in
+        the same tote under two delivery tasks.
+        """
+        self.tote.status = 'STAGED'
+        self.tote.current_ref_id = str(uuid.uuid4())
+        self.tote.save(update_fields=['status', 'current_ref_id'])
+        self.pick_all()
+
+        response = self.pack(lpn_barcode=self.tote.barcode)
+
+        self.assertEqual(409, response.status_code, response.data)
+        self.assertEqual('STAGED', response.data['lpn_status'])
+        self.assertEqual(0, self.tote_qty(),
+                         'another order\'s goods went into a sealed tote')
+        self.assertEqual(0, DeliveryTask.objects.count())
+
+    def test_a_tote_out_with_a_rider_here_is_refused(self):
+        """Same story, but the tote has already left the building."""
+        self.tote.status = 'IN_TRANSIT'
+        self.tote.current_ref_id = str(uuid.uuid4())
+        self.tote.save(update_fields=['status', 'current_ref_id'])
+        self.pick_all()
+
+        response = self.pack(lpn_barcode=self.tote.barcode)
+
+        self.assertEqual(409, response.status_code, response.data)
+        self.assertEqual('IN_TRANSIT', response.data['lpn_status'])
+        self.assertEqual(0, self.tote_qty())
+
     def test_an_operator_at_another_store_cannot_pack(self):
         self.pick_all()
         self.api.force_authenticate(self.stranger)

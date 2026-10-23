@@ -6,7 +6,6 @@ import {
 import ScanInput from '../../components/ui/ScanInput';
 import WorkflowStepper from '../../components/ui/WorkflowStepper';
 import ProgressRing from '../../components/ui/ProgressRing';
-import ProductCard from '../../components/ui/ProductCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../context/AuthContext';
@@ -469,28 +468,49 @@ export default function QcInspectionView() {
           )}
 
           {rows.length > 0 && (
-            <div className="item-list" data-testid="qc-queue">
-              {rows.map((r) => (
-                <ProductCard
-                  key={r.gl.line_id}
-                  dataTestId={`qc-queue-${r.gl.line_id}`}
-                  product={{ name: r.name, sku_code: r.skuCode, ean: r.ean }}
-                  picked={r.qc ? (Number(r.qc.pass_count) || 0) + (Number(r.qc.fail_count) || 0) : 0}
-                  expected={r.received}
-                  state={!r.qc ? 'pending' : ['PASSED', 'FAILED'].includes(String(r.qc.status).toUpperCase()) ? 'done' : 'active'}
-                  action={r.qc ? <StatusBadge status={r.qc.status} /> : <StatusBadge status="PENDING" />}
-                  onSelect={() => {
-                    setBatch({
-                      kind: 'asn',
-                      label: r.skuCode,
-                      sub: '1 received line',
-                      lineIds: [String(r.gl.line_id)],
-                    });
-                    setScanText('');
-                    setStep(1);
-                  }}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Inspected</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="qc-queue">
+                  {rows.map((r) => (
+                    <tr
+                      key={r.gl.line_id}
+                      data-testid={`qc-queue-${r.gl.line_id}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => {
+                        setBatch({
+                          kind: 'asn',
+                          label: r.skuCode,
+                          sub: '1 received line',
+                          lineIds: [String(r.gl.line_id)],
+                        });
+                        setScanText('');
+                        setStep(1);
+                      }}
+                    >
+                      <td data-testid={`qc-queue-${r.gl.line_id}-name`}>{r.name}</td>
+                      <td className="code-cell">
+                        {r.skuCode}
+                        {r.ean ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>EAN {r.ean}</div> : null}
+                      </td>
+                      <td className="mono-num" data-testid={`qc-queue-${r.gl.line_id}-qty`}>
+                        {r.qc ? (Number(r.qc.pass_count) || 0) + (Number(r.qc.fail_count) || 0) : 0}
+                        {r.received > 0 && (
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}> / {r.received}</span>
+                        )}
+                      </td>
+                      <td>{r.qc ? <StatusBadge status={r.qc.status} /> : <StatusBadge status="PENDING" />}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -614,19 +634,40 @@ export default function QcInspectionView() {
           )}
 
           {!line && (
-            <div className="item-list" data-testid="qc-batch-lines">
-              {batchRows.map((r) => (
-                <ProductCard
-                  key={r.gl.line_id}
-                  dataTestId={`qc-batch-line-${r.gl.line_id}`}
-                  product={{ name: r.name, sku_code: r.skuCode, ean: r.ean }}
-                  picked={r.qc ? (Number(r.qc.pass_count) || 0) + (Number(r.qc.fail_count) || 0) : 0}
-                  expected={r.received}
-                  state={!r.qc ? 'pending' : ['PASSED', 'FAILED'].includes(String(r.qc.status).toUpperCase()) ? 'done' : 'active'}
-                  action={r.qc ? <StatusBadge status={r.qc.status} /> : <StatusBadge status="PENDING" />}
-                  onSelect={() => openLine(r)}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Inspected</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="qc-batch-lines">
+                  {batchRows.map((r) => (
+                    <tr
+                      key={r.gl.line_id}
+                      data-testid={`qc-batch-line-${r.gl.line_id}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => openLine(r)}
+                    >
+                      <td data-testid={`qc-batch-line-${r.gl.line_id}-name`}>{r.name}</td>
+                      <td className="code-cell">
+                        {r.skuCode}
+                        {r.ean ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>EAN {r.ean}</div> : null}
+                      </td>
+                      <td className="mono-num" data-testid={`qc-batch-line-${r.gl.line_id}-qty`}>
+                        {r.qc ? (Number(r.qc.pass_count) || 0) + (Number(r.qc.fail_count) || 0) : 0}
+                        {r.received > 0 && (
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}> / {r.received}</span>
+                        )}
+                      </td>
+                      <td>{r.qc ? <StatusBadge status={r.qc.status} /> : <StatusBadge status="PENDING" />}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -649,24 +690,31 @@ export default function QcInspectionView() {
           </div>
 
           {line ? (
-            <div className="item-list" data-testid="qc-tally">
-              <div className="tally-grid">
-                <div className="tally-tile tally-tile--ok">
-                  <div className="tally-tile__label">Pass</div>
-                  <div className="tally-tile__value" data-testid="qc-pass">{pass}</div>
-                </div>
-                <div className="tally-tile tally-tile--short">
-                  <div className="tally-tile__label">Fail</div>
-                  <div className="tally-tile__value" data-testid="qc-fail">{fail}</div>
-                </div>
-                <div className="tally-tile">
-                  <div className="tally-tile__label">Sampled</div>
-                  <div className="tally-tile__value" data-testid="qc-sampled">{totalScanned}</div>
-                </div>
-                <div className="tally-tile">
-                  <div className="tally-tile__label">Received</div>
-                  <div className="tally-tile__value" data-testid="qc-received">{sampled}</div>
-                </div>
+            <>
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Metric</th><th>Count</th></tr>
+                  </thead>
+                  <tbody data-testid="qc-tally">
+                    <tr>
+                      <td>Pass</td>
+                      <td className="mono-num" data-testid="qc-pass">{pass}</td>
+                    </tr>
+                    <tr>
+                      <td>Fail</td>
+                      <td className="mono-num" data-testid="qc-fail">{fail}</td>
+                    </tr>
+                    <tr>
+                      <td>Sampled</td>
+                      <td className="mono-num" data-testid="qc-sampled">{totalScanned}</td>
+                    </tr>
+                    <tr>
+                      <td>Received</td>
+                      <td className="mono-num" data-testid="qc-received">{sampled}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
 
               <div className="entity-card">
@@ -692,7 +740,7 @@ export default function QcInspectionView() {
                   </span>
                 </div>
               )}
-            </div>
+            </>
           ) : (
             <div className="wf-empty" data-testid="qc-no-line">
               <FlaskConical size={40} className="wf-empty__icon" />

@@ -17,6 +17,12 @@ OPEN_RETURN_STATES = {
     'RECEIVED_AT_DS', 'QC_IN_PROGRESS', 'REFUND_DECISION',
 }
 
+# States the goods can still be taken in from. Once inspection has happened
+# the return is past receipt, and RECEIVED_AT_DS is where it lands after.
+RECEIVABLE_STATES = {
+    'RETURN_CREATED', 'APPROVED', 'PICKUP_SCHEDULED', 'PICKED_UP',
+}
+
 QC_DISPOSITIONS = {'RESTOCK', 'SCRAP', 'DAMAGED', 'RETURN_TO_VENDOR'}
 
 
@@ -43,6 +49,14 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
     queryset = ReturnOrder.objects.select_related('order').all()
     serializer_class = ReturnOrderSerializer
     filterset_fields = ['status', 'fault']
+    # A return is an append-only record: it is opened, received, inspected and
+    # closed, and none of those steps is an edit of an earlier one. Leaving the
+    # default ModelViewSet verbs in place meant DELETE was routed against the
+    # visible queryset, so a shopper could delete their *own* settled return and
+    # the one-open-per-order guard would then let them file a second one against
+    # the same delivered order - restocking the same units again. No field here
+    # is writable either, so PUT/PATCH could only ever have been confusing.
+    http_method_names = ['get', 'post', 'head', 'options']
 
     def get_queryset(self):
         return _visible_returns(self.request.user)
@@ -79,11 +93,22 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
                          f'{", ".join(sorted(RETURNABLE_ORDER_STATES))}.'
             }, status=409)
 
+        # One return per order, and it covers the whole order - a return has no
+        # lines of its own. Opening a second one after the first was closed put
+        # the same units back on the shelf a second time and asked for a second
+        # refund on goods the customer already sent back, which is how a store's
+        # stock quietly grew every time somebody ran the returns screen. Only a
+        # denial leaves the order open to another attempt.
         already = ReturnOrder.objects.filter(order=order).exclude(
-            status__in=OPEN_RETURN_STATES | {'RETURN_DENIED', 'CLOSED'}).first()
+            status='RETURN_DENIED').order_by('-created_at').first()
         if already is not None:
+            if already.status in OPEN_RETURN_STATES:
+                error = f'A return is already open for {order.order_no}.'
+            else:
+                error = (f'{order.order_no} has already been returned and '
+                         f'settled; the goods are back with us.')
             return Response({
-                'error': f'A return is already open for {order.order_no}.',
+                'error': error,
                 'return_id': str(already.return_id),
             }, status=409)
 
@@ -94,6 +119,68 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
         ret = ReturnOrder.objects.create(order=order, reason=reason,
                                          fault='NONE', status='RETURN_CREATED')
         return Response(ReturnOrderSerializer(ret).data, status=201)
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def receive(self, request, pk=None):
+        """The store takes physical custody of goods coming back.
+
+        This is the missing first step of the console, and the reason the
+        whole flow was unreachable: `received_at_ds` had no setter anywhere,
+        `qc` refused without it, and `restock` refused without the disposition
+        `qc` is the only thing that writes. Each gate blocked the other, so no
+        return opened through the API could ever be inspected or put back on
+        sale. Receipt is now its own action, in the order the goods actually
+        move: receive, inspect, restock.
+        """
+        from django.utils import timezone
+
+        from bounded.ds_ops.access import require_site_access
+
+        ret = ReturnOrder.objects.select_related('order').filter(pk=pk).first()
+        if ret is None:
+            return Response({'success': False, 'error': 'Return not found'},
+                            status=404)
+        if ret.order.site_id is None:
+            return Response({'success': False,
+                             'error': 'This order has no store against it.'},
+                            status=409)
+        site = ret.order.site
+        try:
+            require_site_access(request.user, site.code)
+        except Exception as exc:  # PermissionDenied carries the reason
+            return Response({'success': False, 'error': str(exc)}, status=403)
+
+        # A caller may name the store it thinks it is working at. If it does,
+        # it has to be the store the order was delivered from, or a picker
+        # could file somebody else's goods against their own shelves.
+        code = request.data.get('site_code') or request.data.get('store_code')
+        if code and code != site.code:
+            return Response({
+                'success': False,
+                'error': f'{code} did not deliver this order; it belongs to '
+                         f'{site.code}.',
+            }, status=400)
+
+        if ret.received_at_ds:
+            return Response({'success': True, 'already_received': True,
+                             'return_id': str(ret.return_id),
+                             'received_at_ds': str(ret.received_at_ds),
+                             'site': site.code})
+
+        if ret.status not in RECEIVABLE_STATES:
+            return Response({
+                'success': False,
+                'error': f'{ret.order.order_no} is {ret.status}; there is '
+                         f'nothing left to receive.',
+            }, status=409)
+
+        ret.received_at_ds = timezone.now()
+        ret.status = 'RECEIVED_AT_DS'
+        ret.save(update_fields=['received_at_ds', 'status'])
+        return Response({'success': True, 'return_id': str(ret.return_id),
+                         'site': site.code,
+                         'received_at_ds': str(ret.received_at_ds)})
 
     @action(detail=True, methods=['post'])
     @transaction.atomic
@@ -111,27 +198,44 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
         except Exception as exc:  # PermissionDenied carries the reason
             return Response({'error': str(exc)}, status=403)
 
+        if ret.received_at_ds is None:
+            return Response({
+                'error': 'Goods have not been received back at the store yet. '
+                         'Receive the return first, then inspect it.'
+            }, status=409)
+        if ret.status == 'CLOSED':
+            return Response({
+                'error': 'These goods are already back on the shelf, so the '
+                         'inspection cannot be changed now.'
+            }, status=409)
+        if ret.status == 'RETURN_DENIED':
+            # A declined return is settled. Without this the inspection could
+            # be run again with RESTOCK, which overwrites the disposition while
+            # the status stays RETURN_DENIED - so restock would book the units
+            # for an order that has since had a *second* return opened against
+            # it, and both would be restocked.
+            return Response({
+                'error': 'This return was declined, so the inspection is '
+                         'settled and cannot be run again.'
+            }, status=409)
+
         disposition = str(request.data.get('qc_disposition') or '').upper()
         if disposition not in QC_DISPOSITIONS:
             return Response({
                 'error': f'qc_disposition must be one of '
                          f'{", ".join(sorted(QC_DISPOSITIONS))}.'
             }, status=400)
-        if ret.received_at_ds is None:
-            return Response({
-                'error': 'Goods have not been received back at the store yet.'
-            }, status=409)
 
-        ret.qc_disposition = disposition
-        if ret.status in OPEN_RETURN_STATES:
-            ret.status = 'REFUND_DECISION' if disposition == 'RESTOCK' else 'RETURN_DENIED'
-        ret.save(update_fields=['qc_disposition', 'status'])
-
-        refund = request.data.get('refund_amount')
-        if refund is not None and disposition == 'RESTOCK':
+        # The refund is validated before anything is written. This action runs
+        # in a transaction, but returning a Response from inside @atomic exits
+        # it *normally* - so a 400 on the amount used to commit the disposition
+        # it was meant to reject, leaving a return half-inspected.
+        refund = None
+        if request.data.get('refund_amount') is not None and disposition == 'RESTOCK':
             from decimal import Decimal, InvalidOperation
             try:
-                amount = Decimal(str(refund)).quantize(Decimal('0.01'))
+                amount = Decimal(str(request.data['refund_amount'])).quantize(
+                    Decimal('0.01'))
             except (InvalidOperation, ValueError, ArithmeticError):
                 return Response({'error': 'refund_amount is not an amount.'},
                                 status=400)
@@ -143,8 +247,16 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
                     'error': f'A refund cannot exceed the {order.grand_total} '
                              f'paid for {order.order_no}.'
                 }, status=400)
-            ret.refund_amount = amount
-            ret.save(update_fields=['refund_amount'])
+            refund = amount
+
+        ret.qc_disposition = disposition
+        if ret.status in OPEN_RETURN_STATES:
+            ret.status = 'REFUND_DECISION' if disposition == 'RESTOCK' else 'RETURN_DENIED'
+        fields = ['qc_disposition', 'status']
+        if refund is not None:
+            ret.refund_amount = refund
+            fields.append('refund_amount')
+        ret.save(update_fields=fields)
 
         return Response(ReturnOrderSerializer(ret).data)
 
@@ -156,18 +268,19 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
         RESTOCK disposition -> balance increases and a RETURN movement is
         written. Idempotent: a second call is a no-op.
 
-        The no-op holds for two independent reasons, because the ledger alone is
-        not enough. `apply_stock` keys each movement on (type, ref, sku, lot,
-        site, direction, container, container_ref), so replaying with the *same*
-        bin is already swallowed by the idempotency check. Restocking the same
-        return into a *different* bin is a different key and would add the units
-        a second time, so `received_at_ds` is checked up front under
-        select_for_update to close that window too.
+        The no-op holds for two independent reasons, because the ledger alone
+        is not enough. `apply_stock` keys each movement on (type, ref, sku,
+        lot, site, direction, container, container_ref), so replaying with the
+        *same* bin is already swallowed by the idempotency check. Restocking
+        the same return into a *different* bin is a different key and would
+        add the units a second time, so the return's own state is checked up
+        front under select_for_update: either it is already closed off, or a
+        RETURN movement for it exists at this store - whichever bin that
+        movement landed in.
         """
-        from django.utils import timezone
-
         from bounded.catalog.models import InventoryLot, Sku
         from bounded.ds_ops.access import require_site_access
+        from bounded.inventory.models import StockMovement
         from bounded.inventory.stock import apply_stock
         from bounded.network.models import Site, Location
 
@@ -190,19 +303,10 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
         if ret is None:
             return Response({'success': False, 'error': 'Return not found'}, status=404)
 
-        if ret.received_at_ds:
-            return Response({'success': True, 'already_restocked': True,
-                             'return_id': str(ret.return_id),
-                             'received_at_ds': str(ret.received_at_ds),
-                             'site': ret.order.site.code if ret.order.site_id else None,
-                             'restocked': []})
-
-        if ret.qc_disposition != 'RESTOCK':
-            return Response({
-                'success': False,
-                'error': f'QC disposition is {ret.qc_disposition or "unset"}; only RESTOCK puts goods back into stock.',
-            }, status=400)
-
+        # The store named in the body has to be the store that delivered the
+        # order. Without that, an operator holding two sites could restock
+        # store A's goods onto store B's shelves and the ledger would record
+        # them as B's.
         code = request.data.get('site_code') or request.data.get('store_code')
         if not code:
             return Response({'success': False, 'error': 'site_code is required'}, status=400)
@@ -210,6 +314,45 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
             site = Site.objects.get(code=code)
         except Site.DoesNotExist:
             return Response({'success': False, 'error': 'Site not found'}, status=404)
+        if site.pk != ret.order.site_id:
+            return Response({
+                'success': False,
+                'error': f'{site.code} did not deliver this order; it belongs '
+                         f'to {ret.order.site.code}.',
+            }, status=400)
+
+        already = ret.status == 'CLOSED' or StockMovement.objects.filter(
+            movement_ref='RETURN', ref_id=str(ret.return_id), site=site).exists()
+        if already:
+            return Response({'success': True, 'already_restocked': True,
+                             'return_id': str(ret.return_id),
+                             'received_at_ds': str(ret.received_at_ds),
+                             'site': site.code,
+                             'restocked': []})
+
+        if ret.received_at_ds is None:
+            return Response({
+                'success': False,
+                'error': 'Goods have not been received back at the store yet. '
+                         'Receive the return first, then inspect it.',
+            }, status=409)
+
+        if ret.qc_disposition != 'RESTOCK':
+            return Response({
+                'success': False,
+                'error': f'QC disposition is {ret.qc_disposition or "unset"}; only RESTOCK puts goods back into stock.',
+            }, status=400)
+
+        if ret.status == 'RETURN_DENIED':
+            # Defence in depth for rows written before `qc` refused to re-open
+            # a declined return: disposition RESTOCK on a RETURN_DENIED return
+            # is exactly the combination that would book units for an order
+            # that has since had another return opened against it.
+            return Response({
+                'success': False,
+                'error': 'This return was declined; declined goods are not '
+                         'put back into stock.',
+            }, status=409)
 
         bin_code = request.data.get('bin') or ''
         if bin_code:
@@ -261,11 +404,15 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
                 moved.append({'sku': sku.sku_code, 'lot': str(lot.lot_id),
                               'qty': line.shipped_qty})
 
-        ret.received_at_ds = ret.received_at_ds or timezone.now()
-        ret.save(update_fields=['received_at_ds'])
+        # Receipt and inspection both happened before this point; restock is
+        # the store's last step, and closing the return is what the console
+        # reads as "settled".
+        ret.status = 'CLOSED'
+        ret.save(update_fields=['status'])
 
         return Response({'success': True, 'return_id': str(ret.return_id),
-                         'site': site.code, 'restocked': moved})
+                         'site': site.code, 'status': ret.status,
+                         'restocked': moved})
 
 
 def _scoped_orders(user, model):

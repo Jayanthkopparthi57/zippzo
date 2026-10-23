@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Payment, CancelIntent, Refund, RefundDecision, CashMovement, RiderCustodyState, RiderEarnings
+from .models import Payment, CancelIntent, Refund, RefundDecision, CashMovement, RiderCustodyState, RiderEarnings, DeliveryPricingRule
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -42,3 +42,27 @@ class RiderEarningsSerializer(serializers.ModelSerializer):
         model = RiderEarnings
         fields = ['earning_id','rider','order','amount','delivery_fee','tips','status','created_at']
         read_only_fields = ['earning_id','created_at']
+
+class DeliveryPricingRuleSerializer(serializers.ModelSerializer):
+    site_code = serializers.CharField(source='site.code', read_only=True)
+
+    class Meta:
+        model = DeliveryPricingRule
+        fields = ['rule_id','site','site_code','base_fee','free_above','is_active','updated_by','created_at','updated_at']
+        read_only_fields = ['rule_id','updated_by','created_at','updated_at']
+
+    def validate_base_fee(self, value):
+        if value < 0:
+            raise serializers.ValidationError('A delivery fee cannot be negative.')
+        if value > 1000:
+            raise serializers.ValidationError('A delivery fee above ₹1000 needs a conversation, not a form.')
+        return value
+
+    def validate_free_above(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError(
+                'A free-delivery threshold cannot be negative.')
+        if value is not None and 0 < value < 50:
+            raise serializers.ValidationError(
+                'A free-delivery threshold below ₹50 is not an incentive.')
+        return value

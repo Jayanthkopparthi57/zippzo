@@ -12,8 +12,8 @@ class RiderProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = RiderProfile
-        fields = ['rider_id','user','name','phone','vehicle_type','vehicle_number','vehicle_capacity_kg','vehicle_capacity_cbm','can_carry_cold','kyc_status','is_online','current_site','current_site_code','rating','created_at']
-        read_only_fields = ['rider_id','created_at']
+        fields = ['rider_id','user','name','phone','vehicle_type','vehicle_number','vehicle_capacity_kg','vehicle_capacity_cbm','can_carry_cold','kyc_status','is_online','current_site','current_site_code','rating','last_lat','last_lng','last_seen_at','created_at']
+        read_only_fields = ['rider_id','last_lat','last_lng','last_seen_at','created_at']
 
     def get_current_site_code(self, obj):
         return getattr(obj.current_site, 'code', None)
@@ -50,10 +50,16 @@ class DeliveryTaskSerializer(serializers.ModelSerializer):
         # shipped_qty is the whole point of a pickup: it is what actually left
         # the store. None (not 0) before a pickup, so "not shipped yet" and
         # "shipped nothing" stay distinguishable.
-        total = obj.order.lines.filter(shipped_qty__gt=0).aggregate(
-            total=Coalesce(Sum('shipped_qty'), 0))['total']
         if not obj.pickup_at:
             return None
+        order = getattr(obj, 'order', None)
+        if not order:
+            return None
+        lines = getattr(order, '_prefetched_objects_cache', {}).get('lines')
+        if lines is not None:
+            return sum(line.shipped_qty for line in lines if (line.shipped_qty or 0) > 0)
+        total = order.lines.filter(shipped_qty__gt=0).aggregate(
+            total=Coalesce(Sum('shipped_qty'), 0))['total']
         return total
 
     def _viewer_sees_address(self, obj):

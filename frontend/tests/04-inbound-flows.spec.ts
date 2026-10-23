@@ -6,8 +6,7 @@ import { login, openTab } from './utils';
 
 const API = '/api';
 const TS = Date.now();
-const ASN_NO = `TMP-RCV-${TS}`;
-/* The dev server answers requests slowly against the remote Neon database. */
+/* Dev server answers requests slowly against the remote Neon database. */
 const LONG = { timeout: 180_000 };
 
 type Json = any;
@@ -91,8 +90,9 @@ test.describe('inbound views — render + real flow', () => {
     const bin = (await apiGet(page, '/network/locations/?location_type=BIN&page_size=1', token)).results[0];
     expect(bin, 'at least one BIN location exists').toBeTruthy();
 
+    // asn_no is assigned server-side (ASN-YYYYMMDD-NNNN) and is read-only on
+    // the wire, so the fixture works with whatever number comes back.
     const asn = await apiPost(page, '/supply/asns/', token, {
-      asn_no: ASN_NO,
       type: 'VENDOR_PO',
       dest_site: bin.site,
       po_ref: `TMP-PO-${TS}`,
@@ -103,19 +103,22 @@ test.describe('inbound views — render + real flow', () => {
     });
     expect(asn.status, `create ASN: ${JSON.stringify(asn.body)}`).toBe(201);
     const asnId = asn.body.asn_id;
+    const ASN_NO: string = asn.body.asn_no;
+    expect(ASN_NO, 'the server assigned a real ASN number').toMatch(/^ASN-\d{8}-\d{4}$/);
 
     for (const [i, sku] of [skuA, skuB].entries()) {
       const line = await apiPost(page, '/supply/asn-lines/', token, {
-        asn: asnId, line_no: i + 1, sku: sku.sku_id, ordered_qty: 2,
+        asn: asnId, sku: sku.sku_id, ordered_qty: 2,
       });
       expect(line.status, `create ASN line: ${JSON.stringify(line.body)}`).toBe(201);
+      expect(line.body.line_no, 'line numbers are assigned server-side').toBe(i + 1);
     }
 
     // ================= 1. RECEIVING =================
     await openTab(page, 'asns');
     const rcvRow = page.locator(`[data-testid="rcv-queue-${asnId}"]`);
     await expect(rcvRow).toBeVisible(LONG);
-    await rcvRow.click();
+    await rcvRow.locator('td').first().click();
 
     // step 1 — batch / LPN code creates the GRN and expands the expected lines
     await expect(page.getByText(ASN_NO).first()).toBeVisible();
@@ -169,7 +172,7 @@ test.describe('inbound views — render + real flow', () => {
 
     const putRow = page.locator(`[data-testid="put-queue-${task.task_id}"]`);
     await expect(putRow).toBeVisible(LONG);
-    await putRow.click();
+    await putRow.locator('td').first().click();
 
     // a product other than the task's SKU is rejected
     const other = taskSku.sku_id === skuA.sku_id ? skuB : skuA;
@@ -278,3 +281,4 @@ test.describe('inbound views — render + real flow', () => {
     expect(w.failed, 'failed request').toEqual([]);
   });
 });
+

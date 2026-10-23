@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { PackageCheck, Package, RefreshCw, AlertTriangle, Boxes, ScanLine, Truck, Send, XCircle, Building2, Store } from 'lucide-react';
+import { PackageCheck, Package, RefreshCw, AlertTriangle, Boxes, ScanLine, Truck, Send, XCircle, Building2, Store, Plus, X, FilePlus2 } from 'lucide-react';
 import ScanInput from '../../components/ui/ScanInput';
 import WorkflowStepper from '../../components/ui/WorkflowStepper';
 import ProgressRing from '../../components/ui/ProgressRing';
-import ProductCard from '../../components/ui/ProductCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../context/AuthContext';
@@ -114,6 +113,85 @@ export default function InboundReceivingView() {
   const [completing, setCompleting] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [rejects, setRejects] = useState([]);
+
+  /* ── ASN creation wizard ── */
+  const [showCreate, setShowCreate] = useState(false);
+  const [sites, setSites] = useState([]);
+  const [vendors, setVendors] = useState([]);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
+  const [newAsn, setNewAsn] = useState({
+    type: 'VENDOR_PO', dest_site: '', source_vendor: '', po_ref: '',
+  });
+  const [newLines, setNewLines] = useState([]);
+  const [lineDraft, setLineDraft] = useState({ code: '', qty: '' });
+
+  const openCreate = async () => {
+    setCreateError('');
+    setShowCreate(true);
+    if (sites.length === 0) {
+      try {
+        const [siteRows, vendorRows] = await Promise.all([
+          fetchApi('/network/sites/?page_size=200'),
+          fetchApi('/supply/vendors/?page_size=200'),
+        ]);
+        setSites(asList(siteRows, '/network/sites/'));
+        setVendors(asList(vendorRows, '/supply/vendors/'));
+      } catch (e) {
+        setCreateError(describeError(e));
+      }
+    }
+  };
+
+  const addLineToNewAsn = () => {
+    const sku = skuForCode(lineDraft.code);
+    const qty = Number(lineDraft.qty);
+    if (!sku) { setCreateError(`No product matches "${lineDraft.code}".`); return; }
+    if (!Number.isFinite(qty) || qty <= 0) { setCreateError('Quantity must be a positive number.'); return; }
+    setCreateError('');
+    setNewLines((prev) => {
+      const existing = prev.find((l) => l.sku === String(sku.sku_id));
+      if (existing) {
+        return prev.map((l) => (l.sku === String(sku.sku_id) ? { ...l, ordered_qty: l.ordered_qty + qty } : l));
+      }
+      return [...prev, { sku: String(sku.sku_id), ean: sku.ean || '', name: sku.name, sku_code: sku.sku_code, ordered_qty: qty }];
+    });
+    setLineDraft({ code: '', qty: '' });
+  };
+
+  const submitNewAsn = async () => {
+    if (!newAsn.dest_site) { setCreateError('Destination site is required.'); return; }
+    if (newAsn.type === 'VENDOR_PO' && !newAsn.source_vendor) { setCreateError('Vendor is required for a vendor PO consignment.'); return; }
+    if (newLines.length === 0) { setCreateError('Add at least one product line.'); return; }
+    setCreating(true);
+    setCreateError('');
+    try {
+      // asn_no / created_by / line_no are assigned server-side.
+      const created = await postApi('/supply/asns/', {
+        type: newAsn.type,
+        dest_site: newAsn.dest_site,
+        ...(newAsn.type === 'VENDOR_PO' ? { source_vendor: newAsn.source_vendor } : {}),
+        ...(newAsn.po_ref.trim() ? { po_ref: newAsn.po_ref.trim() } : {}),
+        // Land directly in the receivable queue: a consignment raised from
+        // the dock screen is confirmed stock the moment the worker books it.
+        status: 'CONFIRMED',
+      });
+      await Promise.all(
+        newLines.map((l) => postApi('/supply/asn-lines/', {
+          asn: created.asn_id, sku: l.sku, ean: l.ean, ordered_qty: l.ordered_qty,
+        }))
+      );
+      setShowCreate(false);
+      setNewAsn({ type: 'VENDOR_PO', dest_site: '', source_vendor: '', po_ref: '' });
+      setNewLines([]);
+      toast.success('Consignment created', `${created.asn_no} · ${newLines.length} line${newLines.length === 1 ? '' : 's'} · ready to receive.`);
+      await load();
+    } catch (e) {
+      setCreateError(describeError(e));
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -445,6 +523,9 @@ export default function InboundReceivingView() {
               <button className="btn-secondary" onClick={load} disabled={loading} data-testid="rcv-refresh">
                 <RefreshCw size={14} /> Refresh
               </button>
+              <button className="btn-primary" onClick={openCreate} data-testid="rcv-create-asn">
+                <FilePlus2 size={14} /> New Consignment
+              </button>
             </div>
           </div>
 
@@ -476,27 +557,175 @@ export default function InboundReceivingView() {
           )}
 
           {asns.length > 0 && (
-            <div className="item-list" data-testid="rcv-queue">
-              {asns.map((a) => (
-                <ProductCard
-                  key={a.asn_id}
-                  dataTestId={`rcv-queue-${a.asn_id}`}
-                  product={{ name: `Consignment ${a.asn_no}`, sku_code: a.po_ref || a.asn_no }}
-                  picked={0}
-                  expected={Number(a.total_qty) || 0}
-                  state="pending"
-                  action={<StatusBadge status={a.status} />}
-                  onSelect={() => {
-                    setAsn(a);
-                    setScanText('');
-                    setFeedback(null);
-                    setStep(1);
-                  }}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Consignment</th>
+                    <th>PO reference</th>
+                    <th>Expected qty</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="rcv-queue">
+                  {asns.map((a) => (
+                    <tr
+                      key={a.asn_id}
+                      data-testid={`rcv-queue-${a.asn_id}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => {
+                        setAsn(a);
+                        setScanText('');
+                        setFeedback(null);
+                        setStep(1);
+                      }}
+                    >
+                      <td data-testid={`rcv-queue-${a.asn_id}-name`}>Consignment {a.asn_no}</td>
+                      <td className="code-cell">{a.po_ref || a.asn_no}</td>
+                      <td className="mono-num" data-testid={`rcv-queue-${a.asn_id}-qty`}>
+                        {Number(a.total_qty) || 0}
+                      </td>
+                      <td><StatusBadge status={a.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
+
+        {showCreate && (
+          <div className="modal-overlay" onClick={() => setShowCreate(false)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640, width: '94vw' }}>
+              <div className="modal-header">
+                <div>
+                  <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }} data-testid="asn-create-title">
+                    New Consignment
+                  </h2>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    ASN number and line numbers are assigned automatically
+                  </div>
+                </div>
+                <button className="modal-close" data-testid="asn-create-close" onClick={() => setShowCreate(false)}>
+                  <X size={18} />
+                </button>
+              </div>
+
+              {createError && (
+                <div className="scan-feedback scan-feedback--error" data-testid="asn-create-error">
+                  <AlertTriangle size={14} /> {createError}
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: 11, fontWeight: 700 }}>Consignment type</label>
+                  <select className="form-input" data-testid="asn-create-type"
+                    value={newAsn.type}
+                    onChange={(e) => setNewAsn((p) => ({ ...p, type: e.target.value }))}>
+                    <option value="VENDOR_PO">Vendor PO — inbound from supplier</option>
+                    <option value="MH_TRANSFER">MH Transfer — from Mother Hub</option>
+                    <option value="STORE_RETURN">Store Return — returns from a store</option>
+                    <option value="RTV_IN">RTV In — return to vendor</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: 11, fontWeight: 700 }}>Destination site</label>
+                  <select className="form-input" data-testid="asn-create-dest"
+                    value={newAsn.dest_site}
+                    onChange={(e) => setNewAsn((p) => ({ ...p, dest_site: e.target.value }))}>
+                    <option value="">Select destination…</option>
+                    {sites.map((s) => (
+                      <option key={s.site_id} value={s.site_id}>{s.code} — {s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                {newAsn.type === 'VENDOR_PO' && (
+                  <div>
+                    <label className="form-label" style={{ fontSize: 11, fontWeight: 700 }}>Vendor</label>
+                    <select className="form-input" data-testid="asn-create-vendor"
+                      value={newAsn.source_vendor}
+                      onChange={(e) => setNewAsn((p) => ({ ...p, source_vendor: e.target.value }))}>
+                      <option value="">Select vendor…</option>
+                      {vendors.map((v) => (
+                        <option key={v.vendor_id} value={v.vendor_id}>{v.code} — {v.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className="form-label" style={{ fontSize: 11, fontWeight: 700 }}>
+                    PO reference <span style={{ fontWeight: 500, color: '#94a3b8' }}>(optional)</span>
+                  </label>
+                  <input className="form-input" placeholder="PO-2026-0001"
+                    data-testid="asn-create-po"
+                    value={newAsn.po_ref}
+                    onChange={(e) => setNewAsn((p) => ({ ...p, po_ref: e.target.value }))} />
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid #e4e4e7', paddingTop: 12 }}>
+                <label className="form-label" style={{ fontSize: 11, fontWeight: 700 }}>Product lines</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px auto', gap: 8, marginBottom: 8 }}>
+                  <input className="form-input" placeholder="Scan or type SKU code / EAN"
+                    data-testid="asn-line-code"
+                    value={lineDraft.code}
+                    onChange={(e) => setLineDraft((p) => ({ ...p, code: e.target.value }))}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addLineToNewAsn(); } }} />
+                  <input className="form-input" type="number" min="1" placeholder="Qty"
+                    data-testid="asn-line-qty"
+                    value={lineDraft.qty}
+                    onChange={(e) => setLineDraft((p) => ({ ...p, qty: e.target.value }))}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addLineToNewAsn(); } }} />
+                  <button type="button" className="btn-secondary" data-testid="asn-line-add"
+                    onClick={addLineToNewAsn} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <Plus size={14} /> Add
+                  </button>
+                </div>
+
+                {newLines.length === 0 ? (
+                  <div style={{ fontSize: 12, color: '#94a3b8', padding: '8px 0' }} data-testid="asn-lines-empty">
+                    No lines yet — scan a product and enter the expected quantity.
+                  </div>
+                ) : (
+                  <div className="table-container" style={{ maxHeight: 180, overflowY: 'auto' }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr><th>Product</th><th>SKU</th><th>Qty</th><th></th></tr>
+                      </thead>
+                      <tbody data-testid="asn-lines">
+                        {newLines.map((l, i) => (
+                          <tr key={l.sku}>
+                            <td>{l.name}</td>
+                            <td className="code-cell">{l.sku_code}</td>
+                            <td className="mono-num">× {l.ordered_qty}</td>
+                            <td>
+                              <button className="modal-close" title="Remove line"
+                                onClick={() => setNewLines((prev) => prev.filter((_, idx) => idx !== i))}>
+                                <X size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+                <button type="button" className="btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
+                <button type="button" className="btn-primary" data-testid="asn-create-submit"
+                  disabled={creating} onClick={submitNewAsn}>
+                  {creating ? 'Creating…' : `Create Consignment (${newLines.length} line${newLines.length === 1 ? '' : 's'})`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -642,19 +871,49 @@ export default function InboundReceivingView() {
           )}
 
           {step >= 2 && (
-            <div className="item-list" data-testid="rcv-lines">
-              {lines.map((l) => (
-                <ProductCard
-                  key={l.key}
-                  dataTestId={`rcv-line-${l.key}`}
-                  product={{ name: l.name, sku_code: l.skuCode, ean: l.ean, batch_no: batchCode }}
-                  picked={l.received}
-                  expected={l.expected}
-                  state={l.received === 0 ? 'pending' : l.received < l.expected ? 'active' : 'done'}
-                  action={l.asnLine?.line_status ? <StatusBadge status={l.asnLine.line_status} /> : null}
-                  onScan={() => document.getElementById('rcv-unit-scan-text')?.focus()}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Batch</th>
+                    <th>Received</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody data-testid="rcv-lines">
+                  {lines.map((l) => (
+                    <tr key={l.key} data-testid={`rcv-line-${l.key}`}>
+                      <td data-testid={`rcv-line-${l.key}-name`}>{l.name}</td>
+                      <td className="code-cell">
+                        {l.skuCode}
+                        {l.ean ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>EAN {l.ean}</div> : null}
+                      </td>
+                      <td className="code-cell">{batchCode}</td>
+                      <td className="mono-num" data-testid={`rcv-line-${l.key}-qty`}>
+                        {l.received}
+                        {l.expected > 0 && (
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}> / {l.expected}</span>
+                        )}
+                      </td>
+                      <td>{l.asnLine?.line_status ? <StatusBadge status={l.asnLine.line_status} /> : null}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="scan-btn"
+                          style={{ minHeight: 30, padding: '0 10px', fontSize: 12 }}
+                          data-testid={`rcv-line-${l.key}-scan`}
+                          onClick={() => document.getElementById('rcv-unit-scan-text')?.focus()}
+                        >
+                          Scan
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 

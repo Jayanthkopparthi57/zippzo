@@ -328,9 +328,15 @@ class CheckoutRefusalTests(CheckoutBase):
         self.assertEqual(0, CustomerOrder.objects.count())
 
     def test_prepaid_is_refused_rather_than_faked(self):
+        """PREPAID is not a method this build can honestly settle.
+
+        The enum no longer offers it at all, so a request naming it is turned
+        away at the door with the methods that do exist - and, as ever, no
+        order is left behind against money that was never taken.
+        """
         response = self.checkout(payment_method='PREPAID')
 
-        self.assertEqual(503, response.status_code)
+        self.assertEqual(400, response.status_code)
         self.assertIn('payment', response.data['error'].lower())
         self.assertEqual(0, CustomerOrder.objects.count(),
                          'an order was placed against money never taken')

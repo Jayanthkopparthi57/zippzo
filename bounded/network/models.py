@@ -156,3 +156,85 @@ class VehicleType(models.Model):
 
     def __str__(self):
         return self.code
+
+
+class StaffShift(models.Model):
+    """Clock-in/clock-out for warehouse and dark-store staff.
+
+    Rider shifts live in delivery.RiderShift because they carry rider-only
+    fields (distance, orders delivered). Warehouse staff need the same
+    open/close lifecycle to bucket pick/pack/putaway work and compute
+    per-shift productivity — without it the "Shift Roster" tab was just a
+    user list with no attendance behind it.
+
+    One open shift per (user, site): opening a second is refused, matching
+    the rider rule.
+    """
+    STATUS_CHOICES = [('OPEN', 'Open'), ('CLOSED', 'Closed')]
+    END_REASON_CHOICES = [
+        ('MANUAL', 'Manual'), ('AUTO_IDLE', 'Auto Idle'),
+        ('TIMEOUT', 'Timeout'), ('FORCED', 'Forced'),
+    ]
+    shift_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        'iam.User', on_delete=models.CASCADE, related_name='staff_shifts',
+    )
+    site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name='staff_shifts')
+    role_at_site = models.CharField(max_length=30, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    end_reason = models.CharField(max_length=20, choices=END_REASON_CHOICES, null=True, blank=True)
+    notes = models.CharField(max_length=200, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='OPEN')
+
+    class Meta:
+        db_table = 'staff_shifts'
+        ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['user', 'status'], name='ix_staffshift_user_status'),
+            models.Index(fields=['site', 'status'], name='ix_staffshift_site_status'),
+        ]
+
+    def __str__(self):
+        return f'{self.user.email} @ {self.site.code} ({self.status})'
+
+
+class EmployeeCompensation(models.Model):
+    """Agreed pay rate for a staff member at a site.
+
+    Admin-managed reference data behind the Admin Settings -> Compensation
+    tab. The platform already records who worked where and for how long
+    (EmployeeSiteAssignment + StaffShift); this table supplies the rate that
+    turns those hours into cost. Nothing in the order path reads it — it is
+    payroll reference data, kept beside the roster it belongs to.
+    """
+    BASIS_CHOICES = [
+        ('HOURLY', 'Hourly'), ('DAILY', 'Daily'), ('WEEKLY', 'Weekly'),
+        ('MONTHLY', 'Monthly'), ('PER_TASK', 'Per task'),
+    ]
+    comp_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        'iam.User', on_delete=models.CASCADE, related_name='compensations')
+    site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name='compensations')
+    employee = models.CharField(max_length=20, blank=True)
+    basis = models.CharField(max_length=10, choices=BASIS_CHOICES, default='MONTHLY')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=8, default='INR')
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.CharField(max_length=200, blank=True)
+    created_by = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_compensation'
+        ordering = ['-effective_from', 'site__code']
+        indexes = [
+            models.Index(fields=['site', 'is_active'], name='ix_comp_site_active'),
+            models.Index(fields=['user', 'is_active'], name='ix_comp_user_active'),
+        ]
+
+    def __str__(self):
+        return f'{self.user.email} {self.basis} {self.amount} @ {self.site.code}'

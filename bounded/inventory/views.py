@@ -23,7 +23,17 @@ def _ledger_scope(user):
 class LpnMasterViewSet(viewsets.ModelViewSet):
     queryset = LpnMaster.objects.all()
     serializer_class = LpnMasterSerializer
-    filterset_fields = ['status', 'lpn_type', 'current_site']
+    # The pack screen asks for `?status__in=EMPTY,CREATED` and the rider
+    # handoff asks for `?status__in=<a few task states>`. Declaring
+    # `filterset_fields = ['status']` only ever builds an *exact* match, so
+    # `status__in` was not a known parameter: django-filter dropped it and the
+    # query came back with every row for the site. The packer was therefore
+    # offered totes that were already sealed onto another order.
+    filterset_fields = {
+        'status': ['exact', 'in'],
+        'lpn_type': ['exact', 'in'],
+        'current_site': ['exact'],
+    }
     search_fields = ['barcode', 'lpn_id']
 
 class LpnContentViewSet(viewsets.ModelViewSet):

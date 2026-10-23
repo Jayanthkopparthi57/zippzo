@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, loginRider, APP_ENTRIES, TEST_USERS } from './utils';
+import { login, loginRider, loginShopper, APP_ENTRIES, TEST_USERS } from './utils';
 
 test.describe('Authentication & Navigation', () => {
   test.beforeEach(async ({ page }) => {
@@ -16,12 +16,15 @@ test.describe('Authentication & Navigation', () => {
   });
 
   test('admin login succeeds and lands on dashboard', async ({ page }) => {
+    // Cold remote Neon: login() may need its full 60s JWT wait.
+    test.setTimeout(120_000);
     await login(page, TEST_USERS.admin);
     await expect(page.getByText('Operations Control Tower')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('Zippzo')).toBeVisible({ timeout: 10000 });
   });
 
   test('warehouse staff login shows WMS tabs', async ({ page }) => {
+    test.setTimeout(120_000);
     await login(page, TEST_USERS.warehouseStaff);
     await expect(page.getByText('Stock Positions')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('Movement Ledger')).toBeVisible({ timeout: 10000 });
@@ -39,7 +42,7 @@ test.describe('Authentication & Navigation', () => {
     // rider who already has one lands on the Zippzo Rider dashboard.
     await expect(
       page.locator('[data-testid="rider-setup"], [data-testid="rider-shell"]').first()
-    ).toBeVisible({ timeout: 60000 });
+    ).toBeVisible({ timeout: 90000 });
     await expect(page.locator('[data-testid="nav-skus"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="nav-ds-dashboard"]')).toHaveCount(0);
   });
@@ -72,7 +75,29 @@ test.describe('Authentication & Navigation', () => {
     await expect(page.getByText('Invalid credentials')).toBeVisible({ timeout: 30000 });
   });
 
+  test('a shopper session survives a page reload', async ({ page }) => {
+    test.setTimeout(180_000);
+    await loginShopper(page, TEST_USERS.customer);
+    await page.reload();
+    // Restore must not call the admin-only user list; the storefront stays.
+    await expect(page.getByTestId('nav-shop-storefront')).toBeVisible({ timeout: 90_000 });
+    await expect(page.locator('input[type="email"]')).toHaveCount(0);
+  });
+
+  test('a rider session survives a page reload', async ({ page }) => {
+    test.setTimeout(180_000);
+    await loginRider(page);
+    await page.reload();
+    await expect(
+      page.locator('[data-testid="rider-setup"], [data-testid="rider-shell"]').first()
+    ).toBeVisible({ timeout: 90_000 });
+    await expect(page.locator('input[type="email"]')).toHaveCount(0);
+  });
+
   test('logout works', async ({ page }) => {
+    // login() allows itself two 60s JWT waits against a cold remote backend;
+    // the 30s default kills the retry mid-fill.
+    test.setTimeout(120_000);
     await login(page, TEST_USERS.admin);
     // The logout button is in the header
     await page.getByRole('button', { name: /logout/i }).click();

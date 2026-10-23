@@ -38,21 +38,18 @@ services:
       # served same-origin and does not need an entry.
       - key: CORS_ALLOWED_ORIGINS
         value: capacitor://localhost,https://localhost,http://localhost
-      # Database. Must match the instance actually provisioned below (or the
-      # Neon credentials in .env, if that is what this environment uses) —
-      # Render does not validate this at build time, only at first query.
-      - key: DB_ENGINE
-        value: django.db.backends.postgresql
-      - key: DB_NAME
-        value: zippzo
-      - key: DB_USER
-        value: postgres
-      - key: DB_PASSWORD
-        value: postgres
-      - key: DB_HOST
-        value: internal-zippzo-postgres
-      - key: DB_PORT
-        value: "5432"
+      # Database. Render injects DATABASE_URL for the Postgres instance
+      # declared at the bottom of this blueprint - host, user and password
+      # included - and settings.py reads it when it is there, so nothing here
+      # has to repeat credentials that only exist on Render's side. What used
+      # to be here was a hostname and password of our own invention, matching
+      # no instance this file creates, which left the deploy working only if
+      # somebody had separately edited the env group.
+      #
+      # The DB_* keys remain the override for a database that is not on
+      # Render (the Neon development database, a CI Postgres). To use one,
+      # set DB_HOST/DB_NAME/DB_USER/DB_PASSWORD in the zippzo-production env
+      # group and unset DATABASE_URL there.
       - key: DB_SSLMODE
         value: require
       - key: REDIS_URL

@@ -171,24 +171,35 @@ function Overview({ storeCode }) {
             <div className="wf-panel__hint">Open the matching screen from the sidebar to work the queue</div>
           </div>
         </div>
-        <div className="tally-grid">
-          {[
-            { label: 'Totes waiting to be received', value: data.incoming_lpns, screen: 'ds-lpn-receipt' },
-            { label: 'Putaways not yet confirmed', value: data.pending_putaways, screen: 'ds-shelf-putaway' },
-            { label: 'Orders waiting to be picked', value: data.active_orders, screen: 'ds-order-picking' },
-            { label: 'Orders waiting on a rider', value: data.out_for_delivery, screen: 'ds-rider-handoff' },
-          ].map((row) => (
-            <div className="tally-tile" key={row.screen} data-testid={`ds-queue-${row.screen}`}>
-              <div className="tally-tile__label">{row.label}</div>
-              <div className="tally-tile__value">{num(row.value)}</div>
-              <div style={{ marginTop: 6 }}>
-                <StatusBadge
-                  status={num(row.value) > 0 ? 'PENDING' : 'CLEAR'}
-                  dataTestId={`ds-queue-badge-${row.screen}`}
-                />
-              </div>
-            </div>
-          ))}
+        <div className="table-container">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Queue</th>
+                <th>Waiting</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody data-testid="ds-overview-queues">
+              {[
+                { label: 'Totes waiting to be received', value: data.incoming_lpns, screen: 'ds-lpn-receipt' },
+                { label: 'Putaways not yet confirmed', value: data.pending_putaways, screen: 'ds-shelf-putaway' },
+                { label: 'Orders waiting to be picked', value: data.active_orders, screen: 'ds-order-picking' },
+                { label: 'Orders waiting on a rider', value: data.out_for_delivery, screen: 'ds-rider-handoff' },
+              ].map((row) => (
+                <tr key={row.screen} data-testid={`ds-queue-${row.screen}`}>
+                  <td>{row.label}</td>
+                  <td className="mono-num">{num(row.value)}</td>
+                  <td>
+                    <StatusBadge
+                      status={num(row.value) > 0 ? 'PENDING' : 'CLEAR'}
+                      dataTestId={`ds-queue-badge-${row.screen}`}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </>

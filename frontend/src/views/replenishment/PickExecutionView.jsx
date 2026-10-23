@@ -257,20 +257,42 @@ export default function PickExecutionView() {
             </div>
           )}
 
-          <div  style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {active.map(t => (
-              <ProductCard
-                key={t.id}
-                dataTestId={`pick-queue-${t.id}`}
-                product={{ name: t.product_name || t.description || skuFor(t)?.name, sku_code: skuFor(t)?.sku_code || t.sku }}
-                picked={Number(t.picked_qty) || 0}
-                expected={Number(t.qty) || 0}
-                state={Number(t.picked_qty) > 0 ? 'active' : 'pending'}
-                action={<StatusBadge status={t.status} />}
-                onSelect={() => begin(t)}
-              />
-            ))}
-          </div>
+          {active.length > 0 && (
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Picked / Qty</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="pick-queue">
+                  {active.map(t => (
+                    <tr
+                      key={t.id}
+                      data-testid={`pick-queue-${t.id}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => begin(t)}
+                    >
+                      <td data-testid={`pick-queue-${t.id}-name`}>
+                        {t.product_name || t.description || skuFor(t)?.name}
+                      </td>
+                      <td className="code-cell">{skuFor(t)?.sku_code || t.sku}</td>
+                      <td className="mono-num" data-testid={`pick-queue-${t.id}-qty`}>
+                        {Number(t.picked_qty) || 0}
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                          {' '}/ {Number(t.qty) || 0}
+                        </span>
+                      </td>
+                      <td><StatusBadge status={t.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     );

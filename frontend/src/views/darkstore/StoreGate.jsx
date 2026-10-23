@@ -37,26 +37,36 @@ export default function StoreGate({ children }) {
 
       {canPick && (
         <div className="form-group">
-          <div className="item-list" data-testid="ds-store-options">
-            {darkStores.map((s) => (
-              <button
-                key={s.site_id}
-                type="button"
-                className="entity-card"
-                style={{ width: '100%', textAlign: 'left', cursor: 'pointer' }}
-                data-testid={`ds-store-option-${s.code}`}
-                onClick={() => pick(s)}
-              >
-                <div className="entity-card__thumb"><Store size={22} /></div>
-                <div className="entity-card__body">
-                  <div className="entity-card__title">{s.name || s.code}</div>
-                  <div className="entity-card__meta">
-                    <span>Code <strong>{s.code}</strong></span>
-                    <span>Status <strong>{s.status || 'UNKNOWN'}</strong></span>
-                  </div>
-                </div>
-              </button>
-            ))}
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Store</th>
+                  <th>Code</th>
+                  <th>Status</th>
+                  <th style={{ width: 120 }}>Action</th>
+                </tr>
+              </thead>
+              <tbody data-testid="ds-store-options">
+                {darkStores.map((s) => (
+                  <tr key={s.site_id}>
+                    <td>{s.name || s.code}</td>
+                    <td className="mono-num">{s.code}</td>
+                    <td>{s.status || 'UNKNOWN'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        data-testid={`ds-store-option-${s.code}`}
+                        onClick={() => pick(s)}
+                      >
+                        <Store size={14} /> Select
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

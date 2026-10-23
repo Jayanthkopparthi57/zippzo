@@ -1,4 +1,6 @@
 import uuid
+from decimal import Decimal
+
 from django.db import models
 
 class Payment(models.Model):
@@ -110,3 +112,64 @@ class RiderEarnings(models.Model):
         db_table = 'rider_earnings'
         ordering = ['-created_at']
         unique_together = [('order', 'rider')]
+
+
+# What checkout charges for delivery when the store has no rule of its own.
+# Keeping the flat number here rather than in checkout means the fallback and
+# the modelled path are decided in one place.
+DEFAULT_DELIVERY_FEE = Decimal('20.00')
+
+
+class DeliveryPricingRule(models.Model):
+    """One store's delivery fee, so checkout stops charging everybody the
+    same flat number.
+
+    One row per site (OneToOne) rather than a versioned history: the admin
+    screen edits the fee a store is charging right now, and a shopper's
+    checkout reads exactly one number. Orders already placed keep the fee
+    they were charged on their own row - this only decides the next one.
+    """
+    rule_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    site = models.OneToOneField('network.Site', on_delete=models.CASCADE,
+                                related_name='delivery_pricing_rule')
+    base_fee = models.DecimalField(max_digits=10, decimal_places=2,
+                                   default=DEFAULT_DELIVERY_FEE)
+    # A quick-commerce lever every store runs: free delivery above a basket
+    # value. 0 means "never free", which keeps existing rows and the flat
+    # default behaving exactly as before.
+    free_above = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    updated_by = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'delivery_pricing_rules'
+        ordering = ['site__code']
+
+    def __str__(self):
+        return f'{self.site.code}: ₹{self.base_fee}'
+
+
+def resolve_delivery_fee(site, subtotal=None):
+    """The fee this store charges right now.
+
+    An inactive rule, a store nobody has priced, and no site at all all land
+    on the flat default - checkout must never fail to open because pricing
+    was never configured.
+
+    Passing the basket subtotal applies the store's free-delivery threshold:
+    a rule with `free_above` set waives the fee once the basket reaches it.
+    Callers that only need the headline fee (storefront, coverage) omit it and
+    get the base fee.
+    """
+    if site is None:
+        return DEFAULT_DELIVERY_FEE
+    rule = DeliveryPricingRule.objects.filter(
+        site_id=getattr(site, 'site_id', None), is_active=True).first()
+    if rule is None:
+        return DEFAULT_DELIVERY_FEE
+    if (subtotal is not None and rule.free_above
+            and rule.free_above > 0 and subtotal >= rule.free_above):
+        return Decimal('0.00')
+    return rule.base_fee

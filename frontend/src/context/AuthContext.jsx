@@ -153,8 +153,19 @@ export function AuthProvider({ appKey = APP.key, children }) {
       return;
     }
     setLoading(true);
-    fetchApi('/iam/users/')
-      .then(() => { if (!cancelled) loadFacilities(); })
+    // `/iam/auth/me` answers for the token's own account. The old check called
+    // /iam/users/ (admin-only), so every shopper, rider and warehouse operator
+    // was logged out by a 403 on reload.
+    fetchApi('/iam/auth/me')
+      .then((me) => {
+        if (cancelled) return;
+        if (me?.user) {
+          const fresh = normaliseUser(me.user);
+          setUser(fresh);
+          localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(fresh));
+        }
+        loadFacilities();
+      })
       .catch(() => {
         if (cancelled) return;
         // Token rejected by the backend: drop the stale session.

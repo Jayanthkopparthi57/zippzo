@@ -28,9 +28,17 @@ import { useAuth } from '../../context/AuthContext';
  * store endpoint just because they can see the same app.
  */
 
-/** What this store has on its shelves, at this store's prices. */
-export const storefront = (siteCode) =>
-  fetchApi(`/orders/storefront?site=${encodeURIComponent(siteCode)}`);
+/** What this store has on its shelves, at this store's prices.
+ *
+ * Passing the shopper's pincode makes the shelf answer the serviceability
+ * question too: a store with published delivery areas says whether this
+ * address is one of them, so a basket is never filled for a door that cannot
+ * be reached.
+ */
+export const storefront = (siteCode, q = '', pincode = '') =>
+  fetchApi(`/orders/storefront?site=${encodeURIComponent(siteCode)}`
+    + (q ? `&q=${encodeURIComponent(q)}` : '')
+    + (pincode ? `&pincode=${encodeURIComponent(pincode)}` : ''));
 
 /**
  * Place an order. Prices are decided by the server from `Listing`; anything
@@ -40,6 +48,16 @@ export const placeOrder = (payload) => postApi('/orders/checkout', payload);
 
 /** The signed-in shopper's own orders, newest first. */
 export const myOrders = () => fetchApi('/orders/orders/');
+
+/**
+ * Where the parcel is right now, for one of the shopper's own orders.
+ *
+ * The server answers `{live: false, rider: null, ...}` once the order is no
+ * longer moving, so the screen can ask on every open without having to know
+ * the state machine itself.
+ */
+export const orderTracking = (orderId) =>
+  fetchApi(`/orders/orders/${encodeURIComponent(orderId)}/tracking/`);
 
 /** The signed-in shopper's own addresses. */
 export const myAddresses = () => fetchApi('/orders/addresses/');
@@ -68,6 +86,27 @@ export const removeAddress = (id) =>
  */
 export const deliveryCode = (orderId) =>
   fetchApi(`/orders/orders/${encodeURIComponent(orderId)}/delivery-code/`);
+
+/** Active coupons a shopper can apply at checkout. */
+export const activeCoupons = () => fetchApi('/catalog/coupons/');
+
+/** Cancel one of the shopper's own orders, while it is still before picking. */
+export const cancelOrder = (orderId, reason = '') =>
+  postApi(`/orders/orders/${encodeURIComponent(orderId)}/cancel/`, { reason });
+
+/** Reviews for one SKU. */
+export const skuReviews = (skuId) =>
+  fetchApi(`/catalog/reviews/?sku=${encodeURIComponent(skuId)}`);
+
+/** Leave a review for a SKU the shopper has received. */
+export const postReview = (skuId, rating, comment = '') =>
+  postApi('/catalog/reviews/', { sku: skuId, rating, comment });
+
+/** The shopper's wishlist. */
+export const myWishlist = () => fetchApi('/catalog/wishlist/');
+
+/** Add a SKU to the wishlist. */
+export const addWishlist = (skuId) => postApi('/catalog/wishlist/', { sku: skuId });
 
 export function asList(payload, what) {
   // `unwrapList` returns an array for list responses, including empty ones.
@@ -454,6 +493,21 @@ export const deliveryPod = (taskId, { otp, codAmount } = {}) =>
     task_id: taskId,
     otp,
     cod_amount: codAmount,
+  });
+
+/**
+ * Hand a staged, unassigned job to a rider by scanning their personal QR.
+ *
+ * The scan at the counter is the rider's consent: the server moves the task
+ * straight to ACCEPTED, the same state the rider's own Accept reaches. It does
+ * not require the rider to be online — being physically present at the counter
+ * is stronger than a flag — and it refuses anyone who already has a rider
+ * profile (their path is the console) and any task not at the caller's store.
+ */
+export const assignRiderQr = (taskId, qrCode) =>
+  postApi('/delivery/delivery-tasks/assign-by-rider/', {
+    task_id: taskId,
+    qr_code: qrCode,
   });
 
 /**

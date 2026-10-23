@@ -3,7 +3,7 @@ import {
   LayoutDashboard, PackageCheck, ShieldCheck, Boxes, ArrowRightLeft,
   Layers, Barcode, ClipboardList, MapPin, Truck, Tag, Users, Building2,
   ListChecks, Send, Receipt, Package, PackagePlus, RefreshCw, Grid, Bike,
-  Undo2, Search, ShoppingBasket, Bell, History
+  Undo2, Search, ShoppingBasket, Bell, History, IndianRupee
 } from 'lucide-react';
 import { useTabs } from '../../context/TabContext';
 import { useAuth } from '../../context/AuthContext';
@@ -50,9 +50,17 @@ export default function Sidebar({ collapsed }) {
     {
       group: 'FULFILLMENT',
       items: [
-{ id: 'ds-order-picking', label: 'Order Picking', icon: ClipboardList },
+        { id: 'ds-order-picking', label: 'Order Picking', icon: ClipboardList },
   { id: 'ds-order-packing', label: 'Packing', icon: PackageCheck },
   { id: 'ds-rider-handoff', label: 'Rider Handoff', icon: Bike },
+  { id: 'orders', label: 'Orders', icon: ClipboardList },
+  { id: 'riders', label: 'Rider Fleet', icon: Bike },
+      ]
+    },
+    {
+      group: 'CASH',
+      items: [
+        { id: 'cash-register', label: 'Cash Register', icon: IndianRupee },
       ]
     },
     {
@@ -77,6 +85,7 @@ export default function Sidebar({ collapsed }) {
         { id: 'asns', label: 'Consignments', icon: PackageCheck },
         { id: 'qc-testing', label: 'QC Testing', icon: ShieldCheck },
         { id: 'putaway-tasks', label: 'Putaway Tasks', icon: Boxes },
+        { id: 'inbound-ledger', label: 'Inbound Ledger', icon: History },
       ]
     },
     {
@@ -111,6 +120,7 @@ export default function Sidebar({ collapsed }) {
         { id: 'batches', label: 'Batches & Waves', icon: ArrowRightLeft },
         { id: 'picklists', label: 'Picklists', icon: ListChecks },
         { id: 'dispatch-trips', label: 'Dispatch', icon: Truck },
+        { id: 'outbound-ledger', label: 'Outbound Ledger', icon: History },
       ]
     },
     {

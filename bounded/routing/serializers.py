@@ -1,5 +1,26 @@
+import re
+
 from rest_framework import serializers
-from .models import Serviceability, RoutingDecision
+
+from .models import DeliveryArea, Serviceability, RoutingDecision
+
+
+class DeliveryAreaSerializer(serializers.ModelSerializer):
+    site_code = serializers.CharField(source='site.code', read_only=True)
+    site_name = serializers.CharField(source='site.name', read_only=True)
+
+    class Meta:
+        model = DeliveryArea
+        fields = ['area_id', 'site', 'site_code', 'site_name', 'pincode',
+                  'band', 'is_active', 'created_at']
+        read_only_fields = ['area_id', 'created_at']
+
+    def validate_pincode(self, value):
+        pincode = (value or '').strip()
+        if not re.fullmatch(r'\d{6}', pincode):
+            raise serializers.ValidationError('A pincode is exactly 6 digits.')
+        return pincode
+
 
 class ServiceabilitySerializer(serializers.ModelSerializer):
     class Meta:

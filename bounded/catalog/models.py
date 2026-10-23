@@ -40,6 +40,7 @@ class Sku(models.Model):
     mrp = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     hsn_code = models.CharField(max_length=10, blank=True)
     weight_g = models.PositiveIntegerField(null=True, blank=True)
+    image_url = models.CharField(max_length=300, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -107,3 +108,77 @@ class InventoryLot(models.Model):
 
     def __str__(self):
         return f"{self.batch_number} ({self.sku.sku_code})"
+
+
+class Coupon(models.Model):
+    TYPE_CHOICES = [('FLAT', 'Flat'), ('PERCENT', 'Percent')]
+    coupon_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(max_length=30, unique=True)
+    title = models.CharField(max_length=120)
+    description = models.CharField(max_length=300, blank=True)
+    discount_type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    discount_value = models.DecimalField(max_digits=10, decimal_places=2)
+    min_order = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    max_discount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    valid_from = models.DateTimeField()
+    valid_until = models.DateTimeField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'coupons'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.code
+
+    def is_valid_now(self):
+        from django.utils import timezone
+        now = timezone.now()
+        return self.is_active and self.valid_from <= now <= self.valid_until
+
+    def compute_discount(self, subtotal):
+        from decimal import Decimal
+        if not self.is_valid_now() or subtotal < self.min_order:
+            return Decimal('0.00')
+        if self.discount_type == 'FLAT':
+            d = self.discount_value
+        else:
+            d = (subtotal * self.discount_value / Decimal('100')).quantize(Decimal('0.01'))
+        if self.max_discount is not None and d > self.max_discount:
+            d = self.max_discount
+        if d > subtotal:
+            d = subtotal
+        return d.quantize(Decimal('0.01'))
+
+
+class ProductReview(models.Model):
+    review_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name='reviews')
+    customer = models.ForeignKey('orders.Customer', on_delete=models.CASCADE, related_name='reviews')
+    rating = models.PositiveSmallIntegerField()
+    comment = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'product_reviews'
+        unique_together = [('sku', 'customer')]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.sku.sku_code} {self.rating}★"
+
+
+class WishlistItem(models.Model):
+    wishlist_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    customer = models.ForeignKey('orders.Customer', on_delete=models.CASCADE, related_name='wishlist')
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name='wishlisted_by')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'wishlist_items'
+        unique_together = [('customer', 'sku')]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.customer.name} wants {self.sku.sku_code}"

@@ -5,7 +5,6 @@ import {
 import StoreGate, { StoreBadge } from './StoreGate';
 import ScanInput from '../../components/ui/ScanInput';
 import WorkflowStepper from '../../components/ui/WorkflowStepper';
-import ProductCard from '../../components/ui/ProductCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../context/AuthContext';
@@ -290,29 +289,41 @@ function Putaway({ siteId, storeCode, operatorId }) {
         ) : (
           toteRows.length > 0 && (
             <div className="form-group">
-              <div className="item-list" data-testid="ds-putaway-totes">
-                {toteRows.map((t) => (
-                  <button
-                    key={t.lpn_id}
-                    type="button"
-                    className="entity-card"
-                    style={{ width: '100%', textAlign: 'left', cursor: 'pointer' }}
-                    data-testid={`ds-putaway-tote-${t.barcode}`}
-                    onClick={() => openTote(t)}
-                  >
-                    <div className="entity-card__thumb"><MapPin size={22} /></div>
-                    <div className="entity-card__body">
-                      <div className="entity-card__title mono-num">{t.barcode}</div>
-                      <div className="entity-card__meta">
-                        <span>Type <strong>{t.lpn_type}</strong></span>
-                        <span>Insulated <strong>{t.is_insulated ? 'yes' : 'no'}</strong></span>
-                      </div>
-                    </div>
-                    <div className="entity-card__actions">
-                      <StatusBadge status={t.status} dataTestId={`ds-putaway-status-${t.barcode}`} />
-                    </div>
-                  </button>
-                ))}
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Tote</th>
+                      <th>Type</th>
+                      <th>Insulated</th>
+                      <th>Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody data-testid="ds-putaway-totes">
+                    {toteRows.map((t) => (
+                      <tr key={t.lpn_id}>
+                        <td className="mono-num">{t.barcode}</td>
+                        <td>{t.lpn_type}</td>
+                        <td>{t.is_insulated ? 'yes' : 'no'}</td>
+                        <td>
+                          <StatusBadge status={t.status} dataTestId={`ds-putaway-status-${t.barcode}`} />
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="scan-btn"
+                            style={{ minHeight: 34, fontSize: 12 }}
+                            data-testid={`ds-putaway-tote-${t.barcode}`}
+                            onClick={() => openTote(t)}
+                          >
+                            Shelve
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )
@@ -380,70 +391,81 @@ function Putaway({ siteId, storeCode, operatorId }) {
             </div>
           ) : (
             <div className="form-group">
-              <div className="item-list" data-testid="ds-putaway-lines">
-                {lines.map((l, i) => {
-                  const sku = skuIndex?.byId.get(String(l.sku));
-                  return (
-                    <div key={l.key} style={{ marginBottom: 10 }}>
-                      <ProductCard
-                        dataTestId={`ds-putaway-line-${i}`}
-                        product={{
-                          name: sku?.name,
-                          sku_code: sku?.sku_code,
-                          batch_no: l.lot,
-                        }}
-                        picked={l.placedQty}
-                        expected={l.qty}
-                        state={l.bin ? 'done' : focused === l.key ? 'active' : 'pending'}
-                        onSelect={() => setFocused(focused === l.key ? null : l.key)}
-                        action={
-                          l.bin ? (
-                            <div data-testid={`ds-putaway-bin-${i}`}>
-                              <StatusBadge status="SHELVED" />
-                            </div>
-                          ) : (
-                            <StatusBadge status="PENDING" />
-                          )
-                        }
-                      />
-                      <div
-                        style={{
-                          display: 'flex',
-                          gap: 8,
-                          alignItems: 'center',
-                          marginTop: 6,
-                          paddingLeft: 62,
-                          flexWrap: 'wrap',
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: 11,
-                            fontFamily: 'var(--font-mono)',
-                            color: l.bin ? 'var(--success)' : 'var(--text-muted)',
-                            fontWeight: 600,
-                          }}
-                          data-testid={`ds-putaway-target-${i}`}
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Product</th>
+                      <th>SKU / Batch</th>
+                      <th>Qty</th>
+                      <th>Bin</th>
+                      <th>Status</th>
+                      <th>Units to shelve</th>
+                    </tr>
+                  </thead>
+                  <tbody data-testid="ds-putaway-lines">
+                    {lines.map((l, i) => {
+                      const sku = skuIndex?.byId.get(String(l.sku));
+                      const state = l.bin ? 'done' : focused === l.key ? 'active' : 'pending';
+                      return (
+                        <tr
+                          key={l.key}
+                          data-testid={`ds-putaway-line-${i}`}
+                          data-state={state}
+                          onClick={() => setFocused(focused === l.key ? null : l.key)}
+                          style={{ cursor: 'pointer' }}
                         >
-                          {l.bin ? `→ ${l.binLabel || l.bin}` : 'no bin assigned'}
-                        </span>
-                        {l.bin && (
-                          <input
-                            className="scan-input"
-                            data-testid={`ds-putaway-qty-${i}`}
-                            type="number"
-                            min="0"
-                            max={l.qty}
-                            value={l.placedQty}
-                            onChange={(e) => setQty(l.key, e.target.value)}
-                            style={{ minHeight: 34, fontSize: 14, width: 90, padding: '0 10px' }}
-                            aria-label={`Units to shelve for line ${i + 1}`}
-                          />
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                          <td data-testid={`ds-putaway-line-${i}-name`}>
+                            {sku?.name || 'Unknown product'}
+                          </td>
+                          <td className="mono-num">
+                            {sku?.sku_code || '—'}
+                            {l.lot ? (
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                Batch {l.lot}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="mono-num" data-testid={`ds-putaway-line-${i}-qty`}>
+                            {l.placedQty} / {l.qty}
+                          </td>
+                          <td
+                            className="mono-num"
+                            data-testid={`ds-putaway-target-${i}`}
+                            style={{ color: l.bin ? 'var(--success)' : 'var(--text-muted)' }}
+                          >
+                            {l.bin ? `→ ${l.binLabel || l.bin}` : 'no bin assigned'}
+                          </td>
+                          <td>
+                            {l.bin ? (
+                              <div data-testid={`ds-putaway-bin-${i}`}>
+                                <StatusBadge status="SHELVED" />
+                              </div>
+                            ) : (
+                              <StatusBadge status="PENDING" />
+                            )}
+                          </td>
+                          <td>
+                            {l.bin && (
+                              <input
+                                className="scan-input"
+                                data-testid={`ds-putaway-qty-${i}`}
+                                type="number"
+                                min="0"
+                                max={l.qty}
+                                value={l.placedQty}
+                                onChange={(e) => setQty(l.key, e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ minHeight: 34, fontSize: 14, width: 90, padding: '0 10px' }}
+                                aria-label={`Units to shelve for line ${i + 1}`}
+                              />
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

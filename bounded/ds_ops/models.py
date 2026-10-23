@@ -27,6 +27,8 @@ class PickTask(models.Model):
     pick_seq = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NOT_STARTED')
     assigned_to = models.UUIDField(null=True, blank=True)
+    started_by = models.UUIDField(null=True, blank=True)
+    completed_by = models.UUIDField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -121,6 +123,9 @@ class PackTask(models.Model):
     staging_bin = models.CharField(max_length=50, null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NOT_STARTED')
     assigned_to = models.UUIDField(null=True, blank=True)
+    completed_by = models.UUIDField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -168,6 +173,9 @@ class TransferOrder(models.Model):
     dest_site = models.ForeignKey('network.Site', on_delete=models.CASCADE, related_name='transfer_dest')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
     total_qty = models.PositiveIntegerField(default=0)
+    # Who raised the transfer and who put it on the road — both server-side.
+    created_by = models.UUIDField(null=True, blank=True)
+    dispatched_by = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -181,6 +189,9 @@ class BinTransfer(models.Model):
     source_bin = models.CharField(max_length=50)
     dest_bin = models.CharField(max_length=50)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='CREATED')
+    # Who requested the bin move and who executed it.
+    created_by = models.UUIDField(null=True, blank=True)
+    completed_by = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

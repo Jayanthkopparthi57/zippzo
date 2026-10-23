@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from django.db.models import Count, Sum
+from bounded.iam.names import AttributionContextMixin, acting_user_id
 from .models import PickTask, PackTask, SortingWave, StagedAging, TransferOrder, BinTransfer
 from .serializers import PickTaskSerializer, PackTaskSerializer, SortingWaveSerializer, StagedAgingSerializer, TransferOrderSerializer, BinTransferSerializer
 
@@ -14,15 +15,28 @@ from .serializers import PickTaskSerializer, PackTaskSerializer, SortingWaveSeri
 # and says so rather than inventing a threshold from an unrelated field.
 DS_LOW_STOCK_THRESHOLD = 10
 
-class PickTaskViewSet(viewsets.ModelViewSet):
+class PickTaskViewSet(AttributionContextMixin, viewsets.ModelViewSet):
     queryset = PickTask.objects.all()
     serializer_class = PickTaskSerializer
+    attribution_fields = ('assigned_to', 'started_by', 'completed_by')
     # `batch` is the transfer this pick belongs to. Packing reads a transfer's
     # lines through ?batch=, and without it here the param was silently ignored:
     # a lookup for one transfer returned every pick task in the system, and
     # PickTask ordering is -created_at, so the packer adopted another batch's
     # lines and "verified" a tote against stock that was never on it.
-    filterset_fields = ['status', 'sku', 'batch', 'picklist_id']
+    # Actor + window lookups feed the outbound ledger's "who picked, when".
+    filterset_fields = {
+        'status': ['exact'],
+        'sku': ['exact'],
+        'batch': ['exact'],
+        'picklist_id': ['exact'],
+        'order': ['exact'],
+        'assigned_to': ['exact'],
+        'started_by': ['exact'],
+        'completed_by': ['exact'],
+        'created_at': ['gte', 'lte'],
+        'completed_at': ['gte', 'lte'],
+    }
 
     def _apply_pick_to_ledger(self, task, actor_id=''):
         """Decrement source stock exactly once when a pick completes."""
@@ -72,30 +86,125 @@ class PickTaskViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         task = serializer.instance
         was_completed = task.status == 'COMPLETED'
+        was_started = task.started_at is not None
         serializer.save()
+        stamp = []
         if task.status == 'COMPLETED' and not was_completed:
+            # The PATCH path never stamped completion, so avg-pick reporting
+            # silently dropped every task closed from the queue screen.
+            if task.completed_at is None:
+                from django.utils import timezone as _tz
+                task.completed_at = _tz.now()
+                stamp.append('completed_at')
+            task.completed_by = acting_user_id(self.request)
+            stamp.append('completed_by')
             self._apply_pick_to_ledger(task)
+        # Claiming a task (assigned_to set or status flips to IN_PROGRESS)
+        # stamps started_at so avg pick time is real, not null forever.
+        if task.status == 'IN_PROGRESS' and not was_started:
+            from django.utils import timezone as _tz
+            task.started_at = _tz.now()
+            stamp.append('started_at')
+            task.started_by = acting_user_id(self.request)
+            stamp.append('started_by')
+        if stamp:
+            task.save(update_fields=stamp)
+
+    @action(detail=True, methods=['post'])
+    def assign(self, request, pk=None):
+        """Hand this pick to one worker. Unassign by sending user=null."""
+        task = self.get_object()
+        if task.status in ('COMPLETED', 'CANCELLED'):
+            return Response({'error': f'Task is {task.status} and cannot be reassigned.'}, status=400)
+        user = request.data.get('user')
+        if user in (None, '', 'null'):
+            task.assigned_to = None
+            task.save(update_fields=['assigned_to'])
+            return Response({'success': True, 'assigned_to': None, 'status': task.status})
+        task.assigned_to = user
+        if task.status == 'NOT_STARTED':
+            from django.utils import timezone as _tz
+            task.status = 'IN_PROGRESS'
+            task.started_at = task.started_at or _tz.now()
+            # Work attribution: the assignee is who will do the picking, so
+            # they are who the start is recorded against, not the manager
+            # handing the task over.
+            task.started_by = user
+        task.save()
+        return Response({'success': True, 'assigned_to': str(task.assigned_to), 'status': task.status})
+
+    @action(detail=True, methods=['post'])
+    def unassign(self, request, pk=None):
+        task = self.get_object()
+        if task.status in ('COMPLETED', 'CANCELLED'):
+            return Response({'error': f'Task is {task.status}.'}, status=400)
+        task.assigned_to = None
+        task.save(update_fields=['assigned_to'])
+        return Response({'success': True, 'assigned_to': None})
 
     @action(detail=True, methods=['post'])
     @transaction.atomic
     def complete(self, request, pk=None):
+        from django.utils import timezone as _tz
         task = self.get_object()
         if task.status == 'COMPLETED':
             return Response({'success': True, 'already_completed': True, 'picked_qty': task.picked_qty})
         if not task.picked_qty:
             task.picked_qty = task.qty
         task.status = 'COMPLETED'
-        task.completed_at = task.completed_at or __import__('django.utils.timezone', fromlist=['timezone']).now()
+        task.completed_at = task.completed_at or _tz.now()
+        # Stamped from the token; a body-supplied actor_id can never claim
+        # someone else's completion (same rule as the pick-scan endpoint).
+        task.completed_by = acting_user_id(request)
+        if task.started_at is None:
+            task.started_at = task.completed_at
+            if task.started_by is None:
+                task.started_by = task.completed_by
         task.save()
-        site = self._apply_pick_to_ledger(task, request.data.get('actor_id', ''))
+        site = self._apply_pick_to_ledger(task, str(acting_user_id(request) or ''))
         return Response({'success': True, 'picklist_id': str(task.picklist_id),
                          'picked_qty': task.picked_qty, 'status': task.status,
                          'site': site.code if site else None})
 
-class PackTaskViewSet(viewsets.ModelViewSet):
+class PackTaskViewSet(AttributionContextMixin, viewsets.ModelViewSet):
     queryset = PackTask.objects.all()
     serializer_class = PackTaskSerializer
-    filterset_fields = ['status']
+    attribution_fields = ('assigned_to', 'completed_by')
+    filterset_fields = {
+        'status': ['exact'],
+        'assigned_to': ['exact'],
+        'completed_by': ['exact'],
+        'order': ['exact'],
+        'created_at': ['gte', 'lte'],
+        'completed_at': ['gte', 'lte'],
+    }
+
+    @action(detail=True, methods=['post'])
+    def assign(self, request, pk=None):
+        task = self.get_object()
+        if task.status in ('COMPLETED', 'CANCELLED'):
+            return Response({'error': f'Task is {task.status} and cannot be reassigned.'}, status=400)
+        user = request.data.get('user')
+        if user in (None, '', 'null'):
+            task.assigned_to = None
+            task.save(update_fields=['assigned_to'])
+            return Response({'success': True, 'assigned_to': None, 'status': task.status})
+        task.assigned_to = user
+        if task.status == 'NOT_STARTED':
+            task.status = 'IN_PROGRESS'
+            from django.utils import timezone as _tz
+            task.started_at = task.started_at or _tz.now()
+        task.save()
+        return Response({'success': True, 'assigned_to': str(task.assigned_to), 'status': task.status})
+
+    @action(detail=True, methods=['post'])
+    def unassign(self, request, pk=None):
+        task = self.get_object()
+        if task.status in ('COMPLETED', 'CANCELLED'):
+            return Response({'error': f'Task is {task.status}.'}, status=400)
+        task.assigned_to = None
+        task.save(update_fields=['assigned_to'])
+        return Response({'success': True, 'assigned_to': None})
 
 class SortingWaveViewSet(viewsets.ModelViewSet):
     queryset = SortingWave.objects.all()
@@ -123,10 +232,21 @@ class StagedAgingViewSet(viewsets.ReadOnlyModelViewSet):
             return self.queryset
         return self.queryset.filter(site__in=operator_site_codes(user))
 
-class TransferOrderViewSet(viewsets.ModelViewSet):
+class TransferOrderViewSet(AttributionContextMixin, viewsets.ModelViewSet):
     queryset = TransferOrder.objects.all()
     serializer_class = TransferOrderSerializer
-    filterset_fields = ['status', 'source_site', 'dest_site']
+    attribution_fields = ('created_by', 'dispatched_by')
+    filterset_fields = {
+        'status': ['exact'],
+        'source_site': ['exact'],
+        'dest_site': ['exact'],
+        'created_by': ['exact'],
+        'dispatched_by': ['exact'],
+        'created_at': ['gte', 'lte'],
+    }
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=acting_user_id(self.request))
 
     def _lpns_for(self, to):
         """LPNs explicitly packed against this transfer.
@@ -159,6 +279,10 @@ class TransferOrderViewSet(viewsets.ModelViewSet):
         was = to.status
         serializer.save()
         if to.status == 'IN_TRANSIT' and was != 'IN_TRANSIT':
+            # The PUT path to dispatch must record who put it on the road,
+            # exactly like the dedicated dispatch action below.
+            to.dispatched_by = acting_user_id(self.request)
+            to.save(update_fields=['dispatched_by'])
             self._mark_in_transit(to)
 
     @action(detail=True, methods=['post'], url_path='dispatch')
@@ -166,15 +290,35 @@ class TransferOrderViewSet(viewsets.ModelViewSet):
     def mark_dispatch(self, request, pk=None):
         to = self.get_object()
         to.status = 'IN_TRANSIT'
+        to.dispatched_by = acting_user_id(request)
         to.save()
         moved = self._mark_in_transit(to)
         return Response({'success': True, 'transfer_id': str(to.transfer_id),
                          'status': to.status, 'lpns_dispatched': moved})
 
-class BinTransferViewSet(viewsets.ModelViewSet):
+class BinTransferViewSet(AttributionContextMixin, viewsets.ModelViewSet):
     queryset = BinTransfer.objects.all()
     serializer_class = BinTransferSerializer
-    filterset_fields = ['status']
+    attribution_fields = ('created_by', 'completed_by')
+    filterset_fields = {
+        'status': ['exact'],
+        'source_bin': ['exact'],
+        'dest_bin': ['exact'],
+        'created_by': ['exact'],
+        'completed_by': ['exact'],
+        'created_at': ['gte', 'lte'],
+    }
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=acting_user_id(self.request))
+
+    def perform_update(self, serializer):
+        task = serializer.instance
+        was_completed = task.status == 'COMPLETED'
+        serializer.save()
+        if task.status == 'COMPLETED' and not was_completed:
+            serializer.instance.completed_by = acting_user_id(self.request)
+            serializer.instance.save(update_fields=['completed_by'])
 
 
 # Dark Store Standalone Views (local imports to avoid circular dependencies)
@@ -432,7 +576,21 @@ class DSInventoryView(APIView):
                 if ref:
                     bin_by_lot.setdefault(lot_id, ref)
 
-        lots = InventoryLot.objects.filter(site=site).select_related('sku')
+        # The store holds stock through `StockBalance`, and the lots those
+        # balances point at are raised at the warehouse that owns the product
+        # (WH-02A599 for DS-02A599), never at the dark store. Selecting
+        # `InventoryLot` by this site therefore matched nothing at all: every
+        # dark store rendered "no stock" here while the command centre beside
+        # it reported units, because that tile sums `StockBalance`. Pick the
+        # lots this store actually holds instead.
+        #
+        # With no store selected there is no shelf to describe, so the answer
+        # is an empty list rather than every lot in the network wearing a
+        # zero balance.
+        held = (StockBalance.objects.filter(site=site)
+                if site else StockBalance.objects.none())
+        lots = (InventoryLot.objects.filter(lot_id__in=held.values('lot_id'))
+                .select_related('sku').distinct())
         data = []
         for lot in lots:
             on_hand = qty_by_lot.get(lot.lot_id, 0)
@@ -669,6 +827,7 @@ class DSOrderActionView(APIView):
                     assigned_to=picker_user.user_id,
                 ).exclude(status='COMPLETED').update(
                     status='COMPLETED', completed_at=timezone.now(),
+                    completed_by=picker_user.user_id,
                 )
 
         OrderStatusHistory.objects.create(

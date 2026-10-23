@@ -40,12 +40,33 @@ function asList(payload, what) {
 
 const dt = (v) => (v ? new Date(v).toLocaleString() : '—');
 
-export default function PickQueuesView() {
+/**
+ * The sidebar exposes three separate destinations that all open this screen:
+ *   batches      "Batches & Waves"  -> both queues
+ *   picklists    "Picklists"        -> the pick queue only
+ *   sorting-list "Sorting"          -> the sorting waves only
+ * Before this mapping the prop was ignored and all three rendered an identical
+ * page. The panel a tab owns is the only thing hidden; both reads still run so
+ * switching tabs is instant and a failed read stays visible on its own panel.
+ */
+const panelFor = (tab) => {
+  if (tab === 'picklists') return 'picks';
+  if (tab === 'sorting-list') return 'waves';
+  return 'both';
+};
+
+export default function PickQueuesView({ initialTab = 'batches' }) {
   const toast = useToast();
+
+  const [panel, setPanel] = useState(panelFor(initialTab));
+
+  useEffect(() => { setPanel(panelFor(initialTab)); }, [initialTab]);
 
   const [picks, setPicks] = useState([]);
   const [waves, setWaves] = useState([]);
   const [skus, setSkus] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [assignBusy, setAssignBusy] = useState('');
 
   const [loading, setLoading] = useState(true);
   // One error slot per section: a failing read never blanks the other table.
@@ -75,7 +96,7 @@ export default function PickQueuesView() {
     setLoading(true);
     setErrs({ picks: '', waves: '', skus: '' });
 
-    const [statusLists, waveRes, skuRes] = await Promise.all([
+    const [statusLists, waveRes, skuRes, staffRes] = await Promise.all([
       Promise.all(
         OPEN_PICK.map((s) =>
           fetchApi(`/ds-ops/pick-tasks/?status=${s}&page_size=200`).then(
@@ -89,6 +110,11 @@ export default function PickQueuesView() {
         (e) => ({ payload: null, err: `${describeError(e)}` })
       ),
       fetchApi('/catalog/skus/?page_size=500').then(
+        (payload) => ({ payload, err: '' }),
+        (e) => ({ payload: null, err: `${describeError(e)}` })
+      ),
+      // The assignee dropdown's staff list — independent of the pick data.
+      fetchApi('/iam/users/?page_size=500').then(
         (payload) => ({ payload, err: '' }),
         (e) => ({ payload: null, err: `${describeError(e)}` })
       ),
@@ -131,12 +157,30 @@ export default function PickQueuesView() {
         next.skus = describeError(e);
       }
     }
+    if (!staffRes.err) {
+      try {
+        setStaff(asList(staffRes.payload, '/iam/users/').filter((u) => u.role !== 'CUSTOMER'));
+      } catch (e) { /* an unavailable staff list degrades to unassignable rows */ }
+    }
 
     setErrs(next);
     setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  /* Hand a pick line to one worker (or clear it) — the board's assign action. */
+  const assignPick = async (p, userId) => {
+    setAssignBusy(String(p.id));
+    try {
+      await postApi(`/ds-ops/pick-tasks/${p.id}/assign/`, { user: userId || null });
+      await load();
+    } catch (e) {
+      toast.error('Could not assign pick', describeError(e));
+    } finally {
+      setAssignBusy('');
+    }
+  };
 
   const skuById = useMemo(() => {
     const map = {};
@@ -255,7 +299,30 @@ export default function PickQueuesView() {
 
   return (
     <div data-testid="pq-root" data-loading={loading ? 'true' : 'false'}>
+      {/* ── Which queue this destination opens with ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div className="subtabs-bar" style={{ marginBottom: 0 }} data-testid="pq-tabs">
+          <button type="button" className={`subtab-btn ${panel === 'picks' ? 'active' : ''}`}
+            data-testid="pq-tab-picks" onClick={() => setPanel('picks')}>
+            Pick queue
+          </button>
+          <button type="button" className={`subtab-btn ${panel === 'waves' ? 'active' : ''}`}
+            data-testid="pq-tab-waves" onClick={() => setPanel('waves')}>
+            Sorting waves
+          </button>
+          <button type="button" className={`subtab-btn ${panel === 'both' ? 'active' : ''}`}
+            data-testid="pq-tab-both" onClick={() => setPanel('both')}>
+            All queues
+          </button>
+        </div>
+        <button className="btn-secondary" onClick={load} disabled={loading} data-testid="pq-refresh-tabs"
+          title="Reload both queues">
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+
       {/* ── Scan: a pointer at the queues below, not a gate in front of them ── */}
+      {panel !== 'waves' && (
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div>
@@ -292,8 +359,10 @@ export default function PickQueuesView() {
           </div>
         )}
       </div>
+      )}
 
       {/* ── 1. Open picks ── */}
+      {panel !== 'waves' && (
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div >
@@ -341,6 +410,7 @@ export default function PickQueuesView() {
                   <th>Picked</th>
                   <th>Status</th>
                   <th>Started</th>
+                  <th>Assignee</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -380,6 +450,20 @@ export default function PickQueuesView() {
                       <td><StatusBadge status={p.status} dataTestId={`pq-status-${id}`} /></td>
                       <td className="mono-num">{dt(p.started_at)}</td>
                       <td>
+                        <select
+                          className="form-input"
+                          data-testid={`pq-assign-${id}`}
+                          disabled={assignBusy === id}
+                          value={p.assigned_to ? String(p.assigned_to) : ''}
+                          onChange={(e) => assignPick(p, e.target.value)}
+                          style={{ height: 26, fontSize: 11, padding: '0 6px', minWidth: 130 }}>
+                          <option value="">— Unassigned —</option>
+                          {staff.map((u) => (
+                            <option key={u.user_id} value={String(u.user_id)}>{u.full_name || u.email}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
                         <button
                           className="btn-secondary"
                           onClick={() => completePick(p)}
@@ -402,8 +486,10 @@ export default function PickQueuesView() {
           </div>
         )}
       </div>
+      )}
 
       {/* ── 2. Sorting waves ── */}
+      {panel !== 'picks' && (
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div >
@@ -472,6 +558,7 @@ export default function PickQueuesView() {
           </div>
         )}
       </div>
+      )}
 
       {/* ── last persisted result, read back from the API after the write ── */}
       {result && (

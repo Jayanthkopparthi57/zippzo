@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Truck, RefreshCw, AlertTriangle, Search, Trash2, Send, Building2, Package, CheckCircle2, Boxes, ScanLine, ArrowRight } from 'lucide-react';
 import ScanInput from '../../components/ui/ScanInput';
 import WorkflowStepper from '../../components/ui/WorkflowStepper';
-import ProductCard from '../../components/ui/ProductCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../api/client';
@@ -407,50 +406,55 @@ export default function CreateOrderView() {
               </div>
             </div>
           ) : (
-            <div className="item-list" data-testid="co-lines">
-              {lines.map((l) => (
-                <div key={lineKey(l)} className="entity-card" data-testid={`co-line-${lineKey(l)}`}>
-                  <div className="entity-card__thumb"><Package size={22} /></div>
-                  <div className="entity-card__body">
-                    <div className="entity-card__title" data-testid={`co-line-name-${lineKey(l)}`}>
-                      {l.sku_name}
-                    </div>
-                    <div className="entity-card__meta">
-                      <span>SKU <strong>{l.sku_code}</strong></span>
-                      {l.batch_number && <span>Batch <strong>{l.batch_number}</strong></span>}
-                      {l.location?.barcode && <span>Bin <strong>{l.location.barcode}</strong></span>}
-                      <span>
-                        Available <strong>{availableByKey[lineKey(l)] ?? 0}</strong>
-                      </span>
-                    </div>
-                  </div>
-                  <div className="entity-card__actions">
-                    <div className="scan-field">
-                      <label className="form-label" htmlFor={`co-qty-${lineKey(l)}`}>Qty</label>
-                      <input
-                        id={`co-qty-${lineKey(l)}`}
-                        className="form-input mono-num"
-                        type="number"
-                        min="1"
-                        max={availableByKey[lineKey(l)] ?? 0}
-                        value={l.qty}
-                        onChange={(e) => setLineQty(l, e.target.value)}
-                        data-testid={`co-line-qty-${lineKey(l)}`}
-                        aria-label={`Quantity for ${l.sku_code}`}
-                      />
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => removeLine(l)}
-                        data-testid={`co-line-remove-${lineKey(l)}`}
-                        aria-label={`Remove ${l.sku_code}`}
-                      >
-                        <Trash2 size={14} /> Remove
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Batch</th>
+                    <th>Bin</th>
+                    <th>Available</th>
+                    <th>Qty</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody data-testid="co-lines">
+                  {lines.map((l) => (
+                    <tr key={lineKey(l)} data-testid={`co-line-${lineKey(l)}`}>
+                      <td data-testid={`co-line-name-${lineKey(l)}`}>{l.sku_name}</td>
+                      <td className="code-cell">{l.sku_code}</td>
+                      <td className="code-cell">{l.batch_number || '—'}</td>
+                      <td className="code-cell">{l.location?.barcode || '—'}</td>
+                      <td className="mono-num">{availableByKey[lineKey(l)] ?? 0}</td>
+                      <td>
+                        <input
+                          id={`co-qty-${lineKey(l)}`}
+                          className="form-input mono-num"
+                          type="number"
+                          min="1"
+                          max={availableByKey[lineKey(l)] ?? 0}
+                          value={l.qty}
+                          onChange={(e) => setLineQty(l, e.target.value)}
+                          data-testid={`co-line-qty-${lineKey(l)}`}
+                          aria-label={`Quantity for ${l.sku_code}`}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => removeLine(l)}
+                          data-testid={`co-line-remove-${lineKey(l)}`}
+                          aria-label={`Remove ${l.sku_code}`}
+                        >
+                          <Trash2 size={14} /> Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 
@@ -544,36 +548,50 @@ export default function CreateOrderView() {
 
           {stock.length > 0 && (
             <div className="form-group">
-              <div className="item-list" data-testid="co-stock">
-                {visibleStock.map((r) => {
-                  const key = lineKey(r);
-                  const added = requestedByKey[key] || 0;
-                  const available = availableByKey[key] ?? 0;
-                  return (
-                    <ProductCard
-                      key={key}
-                      dataTestId={`co-stock-${key}`}
-                      product={{
-                        name: r.sku_name,
-                        sku_code: r.sku_code,
-                        batch_no: r.batch_number,
-                        expiry_date: r.expiry_date,
-                      }}
-                      picked={added}
-                      expected={available}
-                      state={added >= available ? 'done' : added > 0 ? 'active' : 'pending'}
-                      action={<StatusBadge status={r.sellable ? 'SELLABLE' : 'HOLD'} />}
-                      onSelect={added >= available ? undefined : () => addLine(r)}
-                    />
-                  );
-                })}
-                {visibleStock.length === 0 && (
-                  <div className="wf-empty" data-testid="co-stock-nomatch">
-                    <ScanLine size={32} className="wf-empty__icon" />
-                    <div className="wf-empty__text">No stock row matches “{query}”.</div>
-                  </div>
-                )}
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Product</th>
+                      <th>SKU</th>
+                      <th>Batch</th>
+                      <th>Expiry</th>
+                      <th>Added / Available</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody data-testid="co-stock">
+                    {visibleStock.map((r) => {
+                      const key = lineKey(r);
+                      const added = requestedByKey[key] || 0;
+                      const available = availableByKey[key] ?? 0;
+                      return (
+                        <tr
+                          key={key}
+                          data-testid={`co-stock-${key}`}
+                          onClick={added >= available ? undefined : () => addLine(r)}
+                          style={added >= available ? undefined : { cursor: 'pointer' }}
+                        >
+                          <td data-testid={`co-stock-${key}-name`}>{r.sku_name}</td>
+                          <td className="code-cell">{r.sku_code}</td>
+                          <td className="code-cell">{r.batch_number || '—'}</td>
+                          <td className="code-cell">{r.expiry_date || '—'}</td>
+                          <td className="mono-num" data-testid={`co-stock-${key}-qty`}>
+                            {added} / {available}
+                          </td>
+                          <td><StatusBadge status={r.sellable ? 'SELLABLE' : 'HOLD'} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
+              {visibleStock.length === 0 && (
+                <div className="wf-empty" data-testid="co-stock-nomatch">
+                  <ScanLine size={32} className="wf-empty__icon" />
+                  <div className="wf-empty__text">No stock row matches “{query}”.</div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -615,21 +633,34 @@ export default function CreateOrderView() {
           </div>
 
           <div className="form-group">
-            <div className="item-list" data-testid="co-result-tasks">
-              {result.persistedTasks.map((t) => (
-                <ProductCard
-                  key={t.id}
-                  dataTestId={`co-result-task-${t.id}`}
-                  product={{
-                    name: stock.find((r) => String(r.sku) === String(t.sku))?.sku_name || String(t.sku),
-                    sku_code: stock.find((r) => String(r.sku) === String(t.sku))?.sku_code || String(t.sku),
-                  }}
-                  picked={Number(t.picked_qty) || 0}
-                  expected={Number(t.qty) || 0}
-                  state="pending"
-                  action={<StatusBadge status={t.status} />}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Picked / Qty</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="co-result-tasks">
+                  {result.persistedTasks.map((t) => (
+                    <tr key={t.id} data-testid={`co-result-task-${t.id}`}>
+                      <td data-testid={`co-result-task-${t.id}-name`}>
+                        {stock.find((r) => String(r.sku) === String(t.sku))?.sku_name || String(t.sku)}
+                      </td>
+                      <td className="code-cell">
+                        {stock.find((r) => String(r.sku) === String(t.sku))?.sku_code || String(t.sku)}
+                      </td>
+                      <td className="mono-num" data-testid={`co-result-task-${t.id}-qty`}>
+                        {Number(t.picked_qty) || 0}
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}> / {Number(t.qty) || 0}</span>
+                      </td>
+                      <td><StatusBadge status={t.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

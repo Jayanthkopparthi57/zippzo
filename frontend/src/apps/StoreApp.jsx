@@ -21,6 +21,8 @@ import CreateOrderView from '../views/replenishment/CreateOrderView';
 import BinLookupView from '../views/storage/BinLookupView';
 import DispatchView from '../views/outbound/DispatchView';
 import PickQueuesView from '../views/outbound/PickQueuesView';
+import InboundLedgerView from '../views/inbound/InboundLedgerView';
+import OutboundLedgerView from '../views/outbound/OutboundLedgerView';
 import FleetView from '../views/FleetView';
 import EmployeeAssignmentView from '../views/EmployeeAssignmentView';
 import AdminSettingsView from '../views/AdminSettingsView';
@@ -32,6 +34,9 @@ import StockLedgerView from '../views/darkstore/StockLedgerView';
 import OrderPickingView from '../views/darkstore/OrderPickingView';
 import OrderPackingView from '../views/darkstore/OrderPackingView';
 import RiderHandoffView from '../views/darkstore/RiderHandoffView';
+import CashRegisterView from '../views/darkstore/CashRegisterView';
+import OrdersView from '../views/darkstore/OrdersView';
+import RiderFleetView from '../views/darkstore/RiderFleetView';
 import ReturnsView from '../views/darkstore/ReturnsView';
 
 function StoreContent() {
@@ -46,6 +51,8 @@ function StoreContent() {
         return <QcInspectionView />;
       case 'putaway-tasks':
         return <PutawayView />;
+      case 'inbound-ledger':
+        return <InboundLedgerView />;
 
       // STORAGE & INVENTORY
       // InventoryView's subtab ids are positions/feed/bins, so map the nav id
@@ -100,6 +107,9 @@ function StoreContent() {
       case 'sorting-list':
         return <PickQueuesView initialTab={activeTabId} />;
 
+      case 'outbound-ledger':
+        return <OutboundLedgerView />;
+
       case 'dispatch-trips':
       case 'manifests':
         return <DispatchView initialTab={activeTabId} />;
@@ -125,7 +135,6 @@ function StoreContent() {
       case 'skus':
       case 'vendors':
       case 'categories':
-      case 'transporters':
         return <MasterCatalogView initialTab={activeTabId} />;
 
       // EMPLOYEE ASSIGNMENTS
@@ -156,6 +165,12 @@ function StoreContent() {
         return <OrderPackingView />;
       case 'ds-rider-handoff':
         return <RiderHandoffView />;
+      case 'cash-register':
+        return <CashRegisterView />;
+      case 'orders':
+        return <OrdersView />;
+      case 'riders':
+        return <RiderFleetView />;
       case 'ds-returns':
         return <ReturnsView />;
 

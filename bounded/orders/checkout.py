@@ -41,9 +41,38 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
-# Flat dark-store delivery fee. Not modelled per distance yet; the column
-# exists for it and the arithmetic below does not care where the number came from.
+# Default dark-store delivery fee, for a store with no pricing rule of its
+# own. The live number comes from money.DeliveryPricingRule (see
+# resolve_delivery_fee); this is what a fresh, unconfigured estate charges.
 DELIVERY_FEE = Decimal('20.00')
+
+# Site types an order may be fulfilled from.
+#
+# `Site.SITE_TYPE_CHOICES` spells a dark store 'DS', and that is the only value
+# the live estate ever holds - every row in the database reads DS. Checkout,
+# however, compared against the literal 'DARK_STORE', a string that appears in
+# no model enum and no production row. The result was that a shopper who picked
+# any real store was refused with "DS-... is not a dark store", so the shopper
+# app could not place a single order against real data even though the entire
+# backend suite stayed green - every test fabricated its own site with the
+# 'DARK_STORE' spelling the guard happened to expect.
+#
+# Both spellings are therefore treated as the same thing. Accepting the legacy
+# spelling keeps the existing fixtures working; accepting 'DS' is what lets the
+# application work at all.
+ORDERABLE_SITE_TYPES = ('DS', 'DARK_STORE')
+
+
+def is_orderable_site(site):
+    """Whether orders may be placed against this site.
+
+    A dark store is the only site type that holds shelf stock a picker can walk
+    to. Warehouses and cross-docks are replenishment nodes, not a place a
+    customer's order can be picked from, so they are refused here rather than
+    being accepted and then stalling in a pick queue forever.
+    """
+    return getattr(site, 'site_type', '') in ORDERABLE_SITE_TYPES
+
 
 # An order number has to be short, unique, and legible over the phone to a
 # rider who is reading it off a tote label.
@@ -106,14 +135,14 @@ def _normalise_items(raw_items):
 
 @transaction.atomic
 def place_order(*, customer, site, address, items=None, cart=None,
-                payment_method='COD', actor=None):
+                payment_method='COD', actor=None, coupon_code='', delivery_slot=''):
     """
     Convert a basket into a CONFIRMED order with its stock already reserved.
 
     Raises CheckoutError with a shopper-readable message on anything that would
     leave a half-built order behind. Nothing is committed unless it all works.
     """
-    from bounded.catalog.models import InventoryLot, Listing, Sku
+    from bounded.catalog.models import InventoryLot, Listing, Sku, Coupon
     from bounded.inventory.models import StockBalance
     from bounded.orders.models import (
         CustomerOrder, CustomerOrderLine, OrderStatusHistory,
@@ -123,9 +152,29 @@ def place_order(*, customer, site, address, items=None, cart=None,
     AllocationError, allocate_order, reserved_qty,
 )
 
-    if getattr(site, 'site_type', '') != 'DARK_STORE':
+    if not is_orderable_site(site):
         raise CheckoutError(
             f'{site.code} is not a dark store, so it cannot fulfil orders.')
+
+    # -- can this store even reach the address? -----------------------------
+    # A store that has published delivery areas only serves those pincodes,
+    # so an unreachable address is refused before stock is locked. Stores with
+    # no areas configured keep working exactly as before.
+    from bounded.routing.models import DeliveryArea
+    if not DeliveryArea.covers(site, getattr(address, 'pincode', '')):
+        raise CheckoutError(
+            f'{site.code} does not deliver to {getattr(address, "pincode", "") or "that address"}. '
+            'Pick a store closer to you.',
+            detail={'reason': 'OUT_OF_DELIVERY_AREA',
+                    'pincode': getattr(address, 'pincode', '')})
+
+    # One number decides this order's delivery charge: the store's own pricing
+    # rule if it has one, the flat default if it does not. Resolved once and
+    # used for the order row, the grand total and the summary below, so the
+    # three can never disagree. The store's free-delivery threshold is applied
+    # once the basket subtotal is known, below.
+    from bounded.money.models import resolve_delivery_fee
+    delivery_fee = resolve_delivery_fee(site)
 
     if address.customer_id != customer.customer_id:
         raise CheckoutError(
@@ -135,16 +184,7 @@ def place_order(*, customer, site, address, items=None, cart=None,
     if payment_method not in dict(CustomerOrder.PAYMENT_METHODS):
         raise CheckoutError(
             f'Unknown payment method {payment_method!r}.',
-            detail={'allowed': sorted(CustomerOrder.PAYMENT_METHODS)})
-
-    if payment_method == 'PREPAID':
-        # Refusing beats inventing. Marking this CAPTURED would tell the dark
-        # store to pick against money that was never taken.
-        raise CheckoutError(
-            'Card payment is not available yet: this build has no payment '
-            'gateway wired up, so a prepaid order cannot be captured and the '
-            'store cannot safely pick against it. Pay cash on delivery.',
-            status=503)
+            detail={'allowed': sorted(dict(CustomerOrder.PAYMENT_METHODS))})
 
     if cart is not None:
         if cart.customer_id != customer.customer_id:
@@ -247,15 +287,30 @@ def place_order(*, customer, site, address, items=None, cart=None,
             status=409, detail={'short_lines': short})
 
     # -- build it ----------------------------------------------------------
+    # Coupon: resolve it now that we know the subtotal, before the order row
+    # exists, so an invalid code is a clean 400 instead of a rolled-back insert.
+    coupon = None
+    discount = Decimal('0.00')
+    if coupon_code:
+        coupon = Coupon.objects.filter(code=coupon_code.strip().upper()).first()
+        if coupon is None or not coupon.is_valid_now():
+            raise CheckoutError(
+                'That coupon code is not valid right now.', status=400)
+        # min-order is checked against the subtotal we are about to compute;
+        # done after lines are built below.
+
     order = CustomerOrder(
         order_no=_next_order_no(),
         customer=customer, site=site, address=address,
         status='CONFIRMED', payment_method=payment_method,
-        # COD is collected by the rider against the OTP at handover, so nothing
-        # is captured now. PREPAID is refused above rather than half-handled.
+        # COD/UPI/Card are all settled outside this build's payment layer, so
+        # nothing is captured now. The store may still pick, because the order
+        # itself is real.
         payment_status='PENDING',
-        subtotal=Decimal('0.00'), delivery_fee=DELIVERY_FEE,
+        subtotal=Decimal('0.00'), delivery_fee=delivery_fee,
         grand_total=Decimal('0.00'),
+        coupon_code=(coupon.code if coupon else ''),
+        delivery_slot=delivery_slot or '',
     )
     order.save()
 
@@ -274,8 +329,23 @@ def place_order(*, customer, site, address, items=None, cart=None,
 
     subtotal = subtotal.quantize(Decimal('0.01'))
     order.subtotal = subtotal
-    order.grand_total = (subtotal + DELIVERY_FEE).quantize(Decimal('0.01'))
-    order.save(update_fields=['subtotal', 'grand_total'])
+
+    # The basket is now known, so the store's free-delivery threshold can be
+    # applied. This must happen before the grand total is computed: waiving the
+    # fee afterwards would leave a total that charges for delivery.
+    delivery_fee = resolve_delivery_fee(site, subtotal)
+    order.delivery_fee = delivery_fee
+
+    if coupon is not None:
+        if subtotal < coupon.min_order:
+            raise CheckoutError(
+                f'{coupon.code} needs a minimum order of '
+                f'₹{coupon.min_order}.', status=400)
+        discount = coupon.compute_discount(subtotal)
+        order.discount = discount
+
+    order.grand_total = (subtotal - discount + delivery_fee).quantize(Decimal('0.01'))
+    order.save(update_fields=['subtotal', 'delivery_fee', 'discount', 'grand_total'])
     for line in lines:
         line.save()
 
@@ -326,8 +396,11 @@ def place_order(*, customer, site, address, items=None, cart=None,
             'site': site.code,
             'payment_method': payment_method,
             'subtotal': str(subtotal),
-            'delivery_fee': str(DELIVERY_FEE),
+            'discount': str(order.discount),
+            'delivery_fee': str(delivery_fee),
             'grand_total': str(order.grand_total),
+            'coupon_code': order.coupon_code,
+            'delivery_slot': order.delivery_slot,
             'lines': [
                 {
                     'line_no': line.line_no,

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Layers, RefreshCw, AlertTriangle, Search, Package, TrendingDown, Check,
+  Layers, RefreshCw, AlertTriangle, Search, Package,
 } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
@@ -189,34 +189,50 @@ function Shelf({ storeCode }) {
             </div>
           </div>
         ) : (
-          <div className="form-group">
-            <div className="item-list" data-testid="ds-shelf-rows">
-              {filtered.map((r, i) => {
-                const s = statusFor(r);
-                return (
-                  <div
-                    key={r.id || `${r.sku}-${r.batch_code}-${i}`}
-                    className="entity-card"
-                    data-testid={`ds-shelf-row-${i}`}
-                    data-status={s}
-                  >
-                    <div className="entity-card__thumb">
-                      {s === 'OPTIMAL' ? <Check size={22} /> : <TrendingDown size={22} />}
-                    </div>
-                    <div className="entity-card__body">
-                      <div className="entity-card__title">{r.product_name || 'Unnamed product'}</div>
-                      <div className="entity-card__meta">
-                        <span>SKU <strong>{r.sku_code}</strong></span>
-                        {r.batch_code && <span>Batch <strong>{r.batch_code}</strong></span>}
-                        {r.expiry_date && <span>Exp <strong>{r.expiry_date}</strong></span>}
-                        {r.shelf_bin && <span>Bin <strong>{r.shelf_bin}</strong></span>}
-                        {r.lot_bucket && <span>Condition <strong>{r.lot_bucket}</strong></span>}
-                        {r.storage_zone && <span>Zone <strong>{r.storage_zone}</strong></span>}
-                        {r.category && <span>Category <strong>{r.category}</strong></span>}
-                      </div>
-                    </div>
-                    <div className="entity-card__actions">
-                      <div style={{ textAlign: 'right' }}>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>SKU</th>
+                  <th>Batch</th>
+                  <th>Expiry</th>
+                  <th>Bin</th>
+                  <th>Condition</th>
+                  <th>Zone</th>
+                  <th>Category</th>
+                  <th>Qty</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody data-testid="ds-shelf-rows">
+                {filtered.map((r, i) => {
+                  const s = statusFor(r);
+                  return (
+                    <tr
+                      key={r.id || `${r.sku}-${r.batch_code}-${i}`}
+                      data-testid={`ds-shelf-row-${i}`}
+                      data-status={s}
+                    >
+                      <td>
+                        <div className="entity-card__title">
+                          {r.product_name || 'Unnamed product'}
+                        </div>
+                      </td>
+                      <td className="mono-num"><strong>{r.sku_code}</strong></td>
+                      <td className="mono-num">
+                        {r.batch_code ? <strong>{r.batch_code}</strong> : '—'}
+                      </td>
+                      <td className="mono-num">
+                        {r.expiry_date ? <strong>{r.expiry_date}</strong> : '—'}
+                      </td>
+                      <td className="mono-num">
+                        {r.shelf_bin ? <strong>{r.shelf_bin}</strong> : '—'}
+                      </td>
+                      <td>{r.lot_bucket ? <strong>{r.lot_bucket}</strong> : '—'}</td>
+                      <td>{r.storage_zone ? <strong>{r.storage_zone}</strong> : '—'}</td>
+                      <td>{r.category ? <strong>{r.category}</strong> : '—'}</td>
+                      <td>
                         <div
                           data-testid={`ds-shelf-qty-${i}`}
                           style={{
@@ -226,13 +242,15 @@ function Shelf({ storeCode }) {
                         >
                           {num(r.stock_qty)}
                         </div>
+                      </td>
+                      <td>
                         <StatusBadge status={s} tone={TONES[s]} dataTestId={`ds-shelf-status-${i}`} />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

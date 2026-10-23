@@ -6,6 +6,46 @@ from rest_framework.views import APIView
 from .models import Customer, CustomerAddress, Cart, CartLine, CustomerOrder, CustomerOrderLine, OrderStatusHistory
 from .serializers import CustomerSerializer, CustomerAddressSerializer, CartSerializer, CartLineSerializer, CustomerOrderSerializer, CustomerOrderLineSerializer, OrderStatusHistorySerializer
 
+# ── live delivery tracking ────────────────────────────────────────────────
+#
+# The shopper is told where the rider is, but only while the parcel is on its
+# way - a position is not history worth keeping once the door has closed.
+# Coordinates come from the rider app's own `me/location` beacon, which it
+# sends while online; a rider who has never shared simply has no pin, and the
+# endpoint says so instead of inventing one.
+
+# Order states in which somebody is actually carrying the parcel.
+TRACKING_ORDER_STATUSES = frozenset({
+    'RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'ARRIVED',
+})
+
+# A pin older than this is shown, but labelled as the last known position.
+TRACKING_STALE_AFTER = 120  # seconds
+
+# City speed assumed when only a distance is known: a scooter in traffic.
+CITY_SPEED_KMH = 20.0
+
+def _km_between(lat1, lng1, lat2, lng2):
+    """Great-circle distance in kilometres. Flat-earth is fine at city scale."""
+    from math import asin, cos, radians, sin, sqrt
+    d_lat = radians(float(lat2) - float(lat1))
+    d_lng = radians(float(lng2) - float(lng1))
+    a = (sin(d_lat / 2) ** 2
+         + cos(radians(float(lat1))) * cos(radians(float(lat2)))
+         * sin(d_lng / 2) ** 2)
+    return 2 * 6371.0 * asin(sqrt(a))
+
+
+def _mask_phone(phone):
+    """Enough to recognise a callback number, not enough to harvest it."""
+    digits = ''.join(ch for ch in (phone or '') if ch.isdigit())
+    return f'•••••{digits[-4:]}' if len(digits) >= 4 else ''
+
+
+def _first_name(name):
+    cleaned = (name or '').strip()
+    return cleaned.split()[0] if cleaned else 'Your rider'
+
 def _is_admin(user):
     """Whether this login keeps the full list instead of its own rows."""
     if user is None or not getattr(user, 'is_authenticated', False):
@@ -71,6 +111,14 @@ def _pin_customer(serializer, request):
     return serializer.save()
 
 
+def _own_login(request):
+    """The authenticated login, or None when there is no real one."""
+    user = getattr(request, 'user', None)
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return None
+    return user
+
+
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.select_related('user').all()
     serializer_class = CustomerSerializer
@@ -85,6 +133,35 @@ class CustomerViewSet(viewsets.ModelViewSet):
         if customer is None:
             return self.queryset.none()
         return self.queryset.filter(pk=customer.pk)
+
+    def perform_create(self, serializer):
+        """A shopper creates their own customer profile, and only their own.
+
+        `user` is read-only on the serializer, so nothing else would ever set
+        it and the NOT NULL on `customers.user_id` surfaced as a 500. The
+        owner is the login, exactly as `_pin_customer` does for addresses: the
+        shopper is not asked to name themselves, and cannot name somebody else.
+        This is the one missing step between a fresh CUSTOMER login and a
+        first order - `CheckoutView` refuses an account with no customer row,
+        so without this there is no way to reach checkout at all.
+        """
+        from rest_framework.exceptions import ValidationError
+
+        if _is_admin(self.request.user):
+            raise ValidationError({
+                'customer': 'Staff accounts do not have a shopper profile. '
+                            'Create the order from the customer app instead.'})
+
+        user = _own_login(self.request)
+        if user is None:
+            raise ValidationError({'customer': 'Sign in before setting up your account.'})
+
+        if Customer.objects.filter(user_id=user.user_id).exists():
+            raise ValidationError({
+                'customer': 'This login already has a shopper profile.'})
+
+        serializer.save(user=user)
+
 
 class CustomerAddressViewSet(viewsets.ModelViewSet):
     queryset = CustomerAddress.objects.all()
@@ -281,22 +358,39 @@ class CustomerOrderViewSet(viewsets.ModelViewSet):
             return qs.none()
         return qs.filter(customer=customer)
 
+    def create(self, request, *args, **kwargs):
+        """Orders are opened by checkout, not by posting to the collection.
+
+        Leaving `create` routable meant a duplicate order_no - or a customer
+        row someone else owns - surfaced as IntegrityError out of the model,
+        i.e. a 500 with a stack trace, rather than a considered answer.
+        """
+        from rest_framework.exceptions import MethodNotAllowed
+        raise MethodNotAllowed('POST')
+
     def perform_update(self, serializer):
         """Refuse a write that would touch the read-only lifecycle fields.
 
         DRF silently ignores read-only fields, which turns a caller's
         PATCH {"status": "DELIVERED"} into a silent no-op returning 200. Better
-        to say so.
+        to say so. The same holds for the money and ownership columns: they are
+        read-only in the serializer for the same reason `status` is, and a
+        shopper who PATCHes payment_status or grand_total deserves to be told
+        what actually writes those, not to be handed a 200 for a no-op.
         """
         blocked = {'status', 'picked_up_at', 'delivered_at', 'returned_at',
-                   'cancelled_at', 'cancel_actor', 'cancel_reason'}
+                   'cancelled_at', 'cancel_actor', 'cancel_reason',
+                   'customer', 'site', 'address', 'payment_method',
+                   'payment_status', 'subtotal', 'delivery_fee', 'discount',
+                   'tax_amount', 'grand_total', 'short_amount'}
         attempted = blocked.intersection(self.request.data or {})
         if attempted:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({
                 field: 'Order lifecycle fields are written by the transition '
                        'endpoints (ds-ops/order-action, ds-ops/pack-order, '
-                       'delivery handoff), not by editing the order.'
+                       'delivery handoff) and totals by checkout, not by '
+                       'editing the order.'
                 for field in sorted(attempted)
             })
         return super().perform_update(serializer)
@@ -361,6 +455,99 @@ class CustomerOrderViewSet(viewsets.ModelViewSet):
             'state': 'ready' if code else 'issued',
             'issued_at': order.pod_issued_at,
         })
+
+    @action(detail=True, methods=['get'], url_path='tracking')
+    def tracking(self, request, pk=None):
+        """GET /api/orders/orders/{id}/tracking - where the parcel is right now.
+
+        Ownership is checked against the customer, not trusted from
+        `get_queryset`: a rider may read the orders they carry (their console
+        needs them) and an admin reads everything, but neither is the shopper
+        this screen belongs to. Everyone else gets 404 for the same reason the
+        delivery code does - "no such order" must not differ from "not yours".
+
+        The rider is named only while the order is moving. Once it is
+        delivered the answer quietly drops back to `live: false`, so a saved
+        link cannot replay somebody's last position out of context.
+        """
+        from django.utils import timezone
+        from rest_framework.exceptions import NotFound
+
+        order = self.get_object()
+        user = request.user
+        # Staff may look at any order (support does this on the phone); the
+        # rider carrying it may not, and another shopper learns nothing.
+        if not _is_admin(user) and (
+                order.customer_id is None
+                or order.customer.user_id != user.user_id):
+            raise NotFound('No such order.')
+
+        task = (order.delivery_tasks
+                .select_related('rider', 'rider__user', 'site')
+                .exclude(status__in=('WITHDRAWN', 'RECALLED'))
+                .order_by('-created_at')
+                .first())
+        live = order.status in TRACKING_ORDER_STATUSES and task is not None and task.rider_id
+
+        payload = {
+            'order_id': str(order.order_id),
+            'order_no': order.order_no,
+            'status': order.status,
+            'live': bool(live),
+            'rider': None,
+            'location': None,
+            'destination': None,
+            'distance_km': None,
+            'eta_minutes': None,
+            'stale': False,
+            'updated_at': None,
+        }
+        if not live:
+            return Response(payload)
+
+        profile = task.rider
+        payload['rider'] = {
+            'name': _first_name(profile.name),
+            'phone_masked': _mask_phone(profile.phone),
+            'vehicle_type': profile.vehicle_type,
+            'rating': float(profile.rating) if profile.rating is not None else None,
+        }
+
+        now = timezone.now()
+        seen = profile.last_seen_at
+        payload['stale'] = bool(
+            seen is None or (now - seen).total_seconds() > TRACKING_STALE_AFTER)
+        if profile.last_lat is not None and profile.last_lng is not None:
+            payload['location'] = {
+                'lat': float(profile.last_lat),
+                'lng': float(profile.last_lng),
+            }
+            payload['updated_at'] = seen.isoformat() if seen else None
+
+        # Where the parcel is headed: the address the shopper chose. Without
+        # coordinates on the address there is nothing to measure against, so
+        # the ETA stays null rather than being guessed.
+        dest = order.address
+        if dest is not None and dest.geo_lat is not None and dest.geo_lng is not None:
+            payload['destination'] = {
+                'lat': float(dest.geo_lat), 'lng': float(dest.geo_lng),
+            }
+            origin = None
+            if payload['location']:
+                origin = (payload['location']['lat'], payload['location']['lng'])
+            elif task.site is not None and task.site.geo_lat is not None:
+                origin = (float(task.site.geo_lat), float(task.site.geo_lng))
+            if origin is not None:
+                km = _km_between(origin[0], origin[1],
+                                 payload['destination']['lat'],
+                                 payload['destination']['lng'])
+                payload['distance_km'] = round(km, 1)
+                # Round up: telling somebody "0 min" while the rider is still
+                # two streets away reads as broken, not early.
+                from math import ceil
+                payload['eta_minutes'] = max(
+                    1, min(60, ceil(km / CITY_SPEED_KMH * 60)))
+        return Response(payload)
 
 class CheckoutView(APIView):
     """POST /api/orders/checkout - the shopper's leg.
@@ -454,6 +641,8 @@ class CheckoutView(APIView):
                 items=data.get('items'), cart=cart,
                 payment_method=data.get('payment_method') or 'COD',
                 actor=user,
+                coupon_code=data.get('coupon_code') or '',
+                delivery_slot=data.get('delivery_slot') or '',
             )
         except CheckoutError as exc:
             return Response({'error': exc.message, **exc.detail}, status=exc.status)
@@ -515,7 +704,20 @@ class StorefrontView(APIView):
         }
         listings = Listing.objects.filter(
             site=site, price__gt=0, is_listed=True,
-            is_available=True).select_related('sku')
+            is_available=True).select_related('sku', 'sku__category')
+
+        query = (request.query_params.get('q') or '').strip().lower()
+
+        def matches(l):
+            if not query:
+                return True
+            sku = l.sku
+            hay = ' '.join(filter(None, [
+                sku.name, sku.brand, sku.pack_size, sku.sku_code,
+                sku.sub_category,
+                sku.category.name if sku.category else '',
+            ])).lower()
+            return query in hay
 
         items = [
             {
@@ -525,7 +727,12 @@ class StorefrontView(APIView):
                 'brand': l.sku.brand,
                 'pack_size': l.sku.pack_size,
                 'weight_g': l.sku.weight_g,
-                'image': getattr(l.sku, 'image_url', '') or '',
+                'image': l.sku.image_url or '',
+                # The shelf groups itself by this. `sub_category` is what the
+                # cataloguer typed against the SKU; the category row is the
+                # fallback when they left it blank.
+                'category': l.sku.sub_category
+                or (l.sku.category.name if l.sku.category else ''),
                 'price': str(l.price),
                 'mrp': str(l.sku.mrp),
                 'on_offer': l.mrp > l.price,
@@ -534,15 +741,70 @@ class StorefrontView(APIView):
             for l in listings
             if available.get(l.sku_id, 0) > 0
             and l.sku.status == 'ACTIVE'
+            and matches(l)
         ]
         items.sort(key=lambda i: i['name'])
+
+        # Delivery is priced by the store's own rule, and the same rule can
+        # waive the fee above a basket threshold. The shelf also answers the
+        # address question when a pincode is supplied, so a shopper is told
+        # "not here" before they fill a basket.
+        from bounded.money.models import DeliveryPricingRule, resolve_delivery_fee
+        from bounded.routing.models import DeliveryArea
+
+        rule = DeliveryPricingRule.objects.filter(site=site, is_active=True).first()
+        pincode = (request.query_params.get('pincode') or '').strip()
+        serviceable = True
+        if pincode:
+            serviceable = DeliveryArea.covers(site, pincode)
 
         return Response({
             'site': site.code,
             'name': site.name,
-            'delivery_fee': '20.00',
+            'delivery_fee': str(resolve_delivery_fee(site)),
+            'free_above': str(rule.free_above) if rule else '0.00',
+            'delivery_configured': DeliveryArea.configured(site),
+            'pincode': pincode,
+            'serviceable': serviceable,
             'items': items,
         })
+
+
+class OrderCancelView(APIView):
+    """POST /api/orders/orders/{id}/cancel/ - the shopper cancels their own order.
+
+    Only allowed while the order is still before picking (PLACED/CONFIRMED):
+    once a picker has touched it, cancellation has to go through the return
+    flow instead, because goods are already being pulled off the shelf.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, order_id):
+        from django.utils import timezone
+        order = CustomerOrder.objects.filter(
+            order_id=order_id,
+            customer__user_id=request.user.user_id).first()
+        if order is None:
+            return Response({'error': 'No such order on your account.'}, status=404)
+        if order.status not in ('PLACED', 'CONFIRMED', 'PAYMENT_PENDING'):
+            return Response(
+                {'error': 'This order is already being prepared and can no '
+                          'longer be cancelled here. Report a problem after '
+                          'delivery instead.'},
+                status=409)
+        order.status = 'CANCELLED'
+        order.cancel_actor = 'CUSTOMER'
+        order.cancel_reason = (request.data.get('reason') or 'Cancelled by customer.')[:500]
+        order.cancelled_at = timezone.now()
+        order.save(update_fields=['status', 'cancel_actor', 'cancel_reason',
+                                  'cancelled_at'])
+        OrderStatusHistory.objects.create(
+            order=order, from_status='CONFIRMED', to_status='CANCELLED',
+            actor_type='CUSTOMER', actor_id=request.user.user_id,
+            remark=order.cancel_reason,
+        )
+        return Response({'success': True, 'order_no': order.order_no,
+                         'status': order.status})
 
 
 class CustomerOrderLineViewSet(viewsets.ReadOnlyModelViewSet):

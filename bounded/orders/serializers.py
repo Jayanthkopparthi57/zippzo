@@ -49,7 +49,7 @@ class CartLineSerializer(serializers.ModelSerializer):
 class CustomerOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerOrder
-        fields = ['order_id','order_no','customer','site','address','status','payment_method','payment_status','subtotal','delivery_fee','discount','tax_amount','grand_total','short_amount','cancel_reason','cancel_actor','cancelled_at','picked_up_at','returned_at','delivered_at','placed_at']
+        fields = ['order_id','order_no','customer','site','address','status','payment_method','payment_status','subtotal','delivery_fee','discount','tax_amount','grand_total','short_amount','cancel_reason','cancel_actor','cancelled_at','picked_up_at','returned_at','delivered_at','delivery_slot','coupon_code','placed_at']
         # `status` is read-only here. It used to be writable, which meant
         # PATCH /api/orders/orders/<id>/ with {"status": "DELIVERED"} was a
         # complete state transition: no guard on where it came from, no
@@ -64,7 +64,19 @@ class CustomerOrderSerializer(serializers.ModelSerializer):
         # delivery that never occurred.
         read_only_fields = ['order_id','order_no','status','placed_at',
                             'picked_up_at','delivered_at','returned_at',
-                            'cancelled_at','cancel_actor','cancel_reason']
+                            'cancelled_at','cancel_actor','cancel_reason',
+                            # Money, ownership and provenance are not editable
+                            # either. `status` was locked first and left the
+                            # rest open: a shopper could PATCH their own order
+                            # to payment_status=PAID, zero the grand_total, or
+                            # point it at somebody else's customer row. A wrong
+                            # order number also collided inside `create` as a
+                            # 500 out of IntegrityError rather than a 409.
+                            # Checkout is the only thing that writes these.
+                            'customer','site','address','payment_method',
+                            'payment_status','subtotal','delivery_fee',
+                            'discount','tax_amount','grand_total',
+                            'short_amount']
 
 class CustomerOrderLineSerializer(serializers.ModelSerializer):
     class Meta:

@@ -25,24 +25,20 @@ export async function login(
   entry: string = APP_ENTRIES.store,
 ) {
   await page.goto(entry);
-  await page.waitForLoadState('networkidle');
+  await page.locator('input[type="email"]').waitFor({ state: 'visible', timeout: 60_000 });
   await page.fill('input[type="email"]', user.email);
   await page.fill('input[type="password"]', user.password);
 
-  // The token is the load-bearing landmark: every downstream helper (tokenOf,
-  // apiGet) reads it from localStorage, and the login form can disappear
-  // before AuthContext has stored the response. A nav testid cannot be used
-  // either — three shells render after login (WMS, shopper, rider) and only
-  // the WMS one has nav-skus.
-  //
-  // One bounded retry, because the shared dev backend sits in front of a cold
-  // remote Neon instance that has been known to answer login with a 500 and
-  // then fail every following test in the file. Wrong credentials fail both
-  // attempts, so this cannot hide an auth regression.
   let failure: unknown = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    await page.click('button[type="submit"]');
     try {
+      await Promise.all([
+        page.waitForResponse(
+          r => r.url().includes('/api/iam/auth/login') && r.status() === 200,
+          { timeout: 60_000 },
+        ).catch(() => null),
+        page.click('button[type="submit"]'),
+      ]);
       await page.waitForFunction(
         () => !!window.localStorage.getItem('zippzo_jwt'),
         undefined,
@@ -60,7 +56,6 @@ export async function login(
   if (failure) throw failure;
 
   await page.locator('input[type="email"]').waitFor({ state: 'hidden', timeout: 90_000 });
-  await page.waitForLoadState('networkidle');
 }
 
 /**

@@ -1,8 +1,10 @@
+from django.conf import settings
 from django.contrib import admin
 from django.db import connection
 from django.http import JsonResponse
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.views.generic import TemplateView
+from django.views.static import serve as static_serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.permissions import IsAuthenticated
 
@@ -23,6 +25,15 @@ def health(request):
     except Exception:
         return JsonResponse({'status': 'degraded', 'db': 'error'}, status=503)
     return JsonResponse({'status': 'ok', 'db': 'ok'})
+
+
+def serve_media(request, path):
+    """Stream an uploaded file from the media root.
+
+    The document root is read per request (not captured when the URLconf is
+    imported) so tests and deployments that override MEDIA_ROOT are honoured.
+    """
+    return static_serve(request, path, document_root=settings.MEDIA_ROOT)
 
 
 class AuthenticatedSchemaView(SpectacularAPIView):
@@ -69,6 +80,11 @@ urlpatterns = [
     # Money
     path('api/money/', include('bounded.money.urls')),
     path('api/reverse/', include('bounded.reverse.urls')),
+    # Uploaded media (product photos) is public because an <img> tag cannot send
+    # an Authorization header. served unconditionally rather than through
+    # django.conf.urls.static.static(), which returns nothing when DEBUG is off,
+    # so the same URL works in development, in E2E and behind the app server.
+    re_path(r'^media/(?P<path>.*)$', serve_media),
     # Frontend SPA.
     #
     # WhiteNoise serves `frontend/dist` (index.html and /assets/*) from

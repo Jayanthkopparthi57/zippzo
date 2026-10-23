@@ -77,7 +77,7 @@ test.describe('Guided scan-first picking', () => {
     const settled = page.locator('[data-testid="pick-empty"]').or(firstTask).first();
     await expect(settled).toBeVisible({ timeout: 60000 });
     test.skip(!(await firstTask.isVisible()), 'no open pick tasks in the database');
-    await firstTask.click();
+    await firstTask.locator('td').first().click();
 
     // Step 1 demands a bin scan, not a dropdown.
     await expect(page.locator('[data-testid="pick-bin-scan-text"]')).toBeVisible();
@@ -102,7 +102,7 @@ test.describe('Guided scan-first picking', () => {
     const settled = page.locator('[data-testid="pick-empty"]').or(firstTask).first();
     await expect(settled).toBeVisible({ timeout: 60000 });
     test.skip(!(await firstTask.isVisible()), 'no open pick tasks in the database');
-    await firstTask.click();
+    await firstTask.locator('td').first().click();
 
     const bin = await page.evaluate(async () => {
       const token = localStorage.getItem('zippzo_jwt');
@@ -129,3 +129,4 @@ test.describe('Guided scan-first picking', () => {
     expect(consoleErrors).toEqual([]);
   });
 });
+

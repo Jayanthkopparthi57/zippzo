@@ -154,7 +154,7 @@ test.describe('replenishment + storage views — real flows', () => {
     // ---------- 1. the queue offers this transfer ----------
     const row = page.locator(`[data-testid="pack-queue-${transfer.transfer_id}"]`);
     await expect(row, 'the packable transfer is listed').toBeVisible(LONG);
-    await row.click();
+    await row.locator('td').first().click();
 
     // ---------- 2. create the tote ----------
     await expect(page.locator('[data-testid="pack-await-tote"]')).toBeVisible(LONG);
@@ -186,21 +186,66 @@ test.describe('replenishment + storage views — real flows', () => {
     const afterReject = (await apiGet(page, `/inventory/lpn-contents/?lpn=${encodeURIComponent(lpnId)}&page_size=50`, token)).results as Json[];
     expect(afterReject.length, 'a rejected scan writes no LPN content').toBe(0);
 
-    // ---------- 4. scan real units in ----------
-    let packedSoFar = 0;
-    for (const [skuId, want] of expectedBySku.entries()) {
-      const s = skuOf(skuId);
-      expect(s, `catalog row for ${skuId}`).toBeTruthy();
-      for (let i = 0; i < want; i += 1) {
-        packedSoFar += 1;
-        await page.fill('[data-testid="pack-unit-scan-text"]', s.sku_code);
+      // ---------- 4. scan real units in ----------
+      // Waiting on the number alone turned one refused scan into a silent
+      // four-minute timeout that said nothing about why. The tally and the
+      // view's own refusal are watched together, and a bounce is retried once:
+      // the loop only fails when the unit genuinely did not land, and it fails
+      // with the message the operator would have seen.
+      const tally = page.locator('[data-testid="pack-packed"]');
+      // The refusal message only exists while a scan is refused, so a locator
+      // read of it waits out the whole 30s action timeout before reporting
+      // "nothing" - one such wait per poll turned every unit into minutes of
+      // silence and made a working pack screen look wedged. Read the DOM
+      // directly instead: absent, hidden or empty means no refusal is shown.
+      const feedbackNow = async (): Promise<string> => {
+        const text = await page
+          .evaluate(() => {
+            const el = document.querySelector('[data-testid="pack-unit-scan-feedback"]');
+            if (!el || !el.classList.contains('scan-feedback--error')) return '';
+            if (el.offsetParent === null) return '';
+            return (el.textContent || '').trim();
+          })
+          .catch(() => '');
+        return String(text || '').trim();
+      };
+
+      const scanUnit = async (code: string, want: number, baseline: string): Promise<string | null> => {
+        await page.fill('[data-testid="pack-unit-scan-text"]', code);
         await page.press('[data-testid="pack-unit-scan-text"]', 'Enter');
-        await expect
-          .poll(async () => Number(await page.locator('[data-testid="pack-packed"]').innerText()), LONG)
-          .toBe(packedSoFar);
+        const deadline = Date.now() + LONG.timeout;
+        let seen = 'no counter read';
+        while (Date.now() < deadline) {
+          const packed = Number(await tally.innerText().catch(() => '0'));
+          if (packed === want) return null;
+          const text = await feedbackNow();
+          // A message left over from an earlier scan says nothing about this
+          // one; only a message that was not already there before the press is
+          // a refusal of *this* scan. The baseline is read once per unit so a
+          // refusal that reads the same on the retry is still reported.
+          if (text && text !== baseline) return text;
+          seen = `counter at ${packed}, wanted ${want}`;
+          await page.waitForTimeout(200);
+        }
+        return `timed out with ${seen}`;
+      };
+
+      let packedSoFar = 0;
+      for (const [skuId, want] of expectedBySku.entries()) {
+        const s = skuOf(skuId);
+        expect(s, `catalog row for ${skuId}`).toBeTruthy();
+        for (let i = 0; i < want; i += 1) {
+          packedSoFar += 1;
+          const baseline = await feedbackNow();
+          let reason = await scanUnit(s.sku_code, packedSoFar, baseline);
+          if (reason) reason = await scanUnit(s.sku_code, packedSoFar, baseline);
+          expect(
+            reason,
+            `unit ${packedSoFar} of ${expectedTotal} (${s.sku_code}) never landed: ${reason}`,
+          ).toBeNull();
+        }
       }
-    }
-    await expect(page.locator('[data-testid="pack-packed"]')).toHaveText(String(expectedTotal), LONG);
+      await expect(page.locator('[data-testid="pack-packed"]')).toHaveText(String(expectedTotal), LONG);
     await expect(page.locator('[data-testid="pack-short"]')).toHaveText('0', LONG);
     await expect(page.locator('[data-testid="pack-over"]')).toHaveText('0', LONG);
 
@@ -373,7 +418,7 @@ test.describe('replenishment + storage views — real flows', () => {
     const pick = stocked!.rows[0];
     const card = page.locator(`[data-testid="co-stock-${pick.sku}::${pick.lot}::${pick.container_ref}"]`);
     await expect(card, 'the real stock row is offered').toBeVisible(LONG);
-    await card.click();
+    await card.locator('td').first().click();
     await expect(page.locator('[data-testid="co-lines"] > [data-testid^="co-line-"]')).toHaveCount(1, LONG);
     await expect(page.locator('[data-testid="co-lines"]')).toContainText(pick.sku_code, LONG);
 
@@ -438,7 +483,7 @@ test.describe('replenishment + storage views — real flows', () => {
     await expect(queueRow, 'a PICKED order reaches the pack queue').toBeVisible(LONG);
     // The lane is shown from the row's own sites, not a placeholder.
     await expect(queueRow).toContainText(stocked!.site.code, LONG);
-    await queueRow.click();
+    await queueRow.locator('td').first().click();
     await expect(page.locator('[data-testid="pack-order-scan-feedback"]'))
       .toContainText(/no completed pick lines/i, LONG);
     await expect(page.locator('[data-testid="pack-create-tote"]'), 'no tote may be created for an unpicked order')

@@ -1,8 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { ScanLine, RefreshCw, AlertTriangle, Package, Boxes, MapPin, Layers, X } from 'lucide-react';
 import ScanInput from '../../components/ui/ScanInput';
-import BinCard from '../../components/ui/BinCard';
-import ProductCard from '../../components/ui/ProductCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { fetchApi, unwrapList, describeError } from '../../api/client';
 import { resolveBin, binLabel } from '../../utils/bins';
@@ -168,17 +166,36 @@ export default function BinLookupView() {
 
         {candidates.length > 0 && (
           <div className="form-group">
-            <div className="item-list" data-testid="bin-lookup-candidates">
-              {candidates.map((c) => (
-                <BinCard
-                  key={c.location_id}
-                  dataTestId={`bin-lookup-candidate-${c.location_id}`}
-                  bin={{ barcode: binLabel(c), zone: null }}
-                  lineCount={0}
-                  totalQty={0}
-                  onOpen={() => chooseCandidate(c)}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr><th>Bin</th><th>Zone</th><th></th></tr>
+                </thead>
+                <tbody data-testid="bin-lookup-candidates">
+                  {candidates.map((c) => (
+                    <tr
+                      key={c.location_id}
+                      data-testid={`bin-lookup-candidate-${c.location_id}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => chooseCandidate(c)}
+                    >
+                      <td className="mono-num">{binLabel(c)}</td>
+                      <td>{c.zone || '—'}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{ fontSize: 12, padding: '6px 12px' }}
+                          data-testid={`bin-lookup-candidate-${c.location_id}-open`}
+                          onClick={(e) => { e.stopPropagation(); chooseCandidate(c); }}
+                        >
+                          <Package size={13} /> Contents
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -238,23 +255,33 @@ export default function BinLookupView() {
             </div>
           ) : (
             <div className="form-group">
-              <div className="item-list" data-testid="bin-lookup-rows">
-                {rows.map((r, i) => (
-                  <ProductCard
-                    key={`${r.sku}-${r.lot}-${i}`}
-                    dataTestId={`bin-lookup-row-${i}`}
-                    product={{
-                      name: r.sku_name,
-                      sku_code: r.sku_code,
-                      batch_no: r.batch_number,
-                      expiry_date: r.expiry_date,
-                    }}
-                    picked={Number(r.qty) || 0}
-                    expected={Number(r.qty) || 0}
-                    state={Number(r.qty) > 0 ? 'done' : 'pending'}
-                    action={<StatusBadge status={r.sellable ? 'SELLABLE' : 'HOLD'} />}
-                  />
-                ))}
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Product</th>
+                      <th>SKU</th>
+                      <th>Batch</th>
+                      <th>Expiry</th>
+                      <th>Qty</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody data-testid="bin-lookup-rows">
+                    {rows.map((r, i) => (
+                      <tr key={`${r.sku}-${r.lot}-${i}`} data-testid={`bin-lookup-row-${i}`}>
+                        <td data-testid={`bin-lookup-row-${i}-name`}>{r.sku_name}</td>
+                        <td className="code-cell">{r.sku_code}</td>
+                        <td className="code-cell">{r.batch_number || '—'}</td>
+                        <td className="code-cell">{r.expiry_date || '—'}</td>
+                        <td className="mono-num" data-testid={`bin-lookup-row-${i}-qty`}>
+                          {Number(r.qty) || 0}
+                        </td>
+                        <td><StatusBadge status={r.sellable ? 'SELLABLE' : 'HOLD'} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

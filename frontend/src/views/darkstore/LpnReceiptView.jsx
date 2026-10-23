@@ -163,36 +163,51 @@ function Receipt({ storeCode, storeName, operatorName }) {
         ) : (
           rows.length > 0 && (
             <div className="form-group">
-              <div className="item-list" data-testid="ds-receipt-queue">
-                {rows.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    className="entity-card"
-                    style={{ width: '100%', textAlign: 'left', cursor: 'pointer' }}
-                    data-testid={`ds-inbound-tote-${r.barcode}`}
-                    onClick={() => {
-                      setTote(r);
-                      setStep(2);
-                      setFeedback(null);
-                    }}
-                  >
-                    <div className="entity-card__thumb"><Package size={22} /></div>
-                    <div className="entity-card__body">
-                      <div className="entity-card__title mono-num">{r.barcode}</div>
-                      <div className="entity-card__meta">
-                        <span>From <strong>{r.mother_hub || 'UNKNOWN'}</strong></span>
-                        <span>Lines <strong>{num(r.item_count)}</strong></span>
-                        <span>Units <strong>{num(r.total_units)}</strong></span>
-                        <span>Type <strong>{r.lpn_type}</strong></span>
-                        {r.created_at && <span>Built <strong>{clockOf(r.created_at)}</strong></span>}
-                      </div>
-                    </div>
-                    <div className="entity-card__actions">
-                      <StatusBadge status={r.status} dataTestId={`ds-inbound-status-${r.barcode}`} />
-                    </div>
-                  </button>
-                ))}
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Tote</th>
+                      <th>From</th>
+                      <th>Lines</th>
+                      <th>Units</th>
+                      <th>Type</th>
+                      <th>Built</th>
+                      <th>Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody data-testid="ds-receipt-queue">
+                    {rows.map((r) => (
+                      <tr key={r.id}>
+                        <td className="mono-num">{r.barcode}</td>
+                        <td>{r.mother_hub || 'UNKNOWN'}</td>
+                        <td className="mono-num">{num(r.item_count)}</td>
+                        <td className="mono-num">{num(r.total_units)}</td>
+                        <td>{r.lpn_type}</td>
+                        <td>{r.created_at ? clockOf(r.created_at) : '—'}</td>
+                        <td>
+                          <StatusBadge status={r.status} dataTestId={`ds-inbound-status-${r.barcode}`} />
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="scan-btn"
+                            style={{ minHeight: 34, fontSize: 12 }}
+                            data-testid={`ds-inbound-tote-${r.barcode}`}
+                            onClick={() => {
+                              setTote(r);
+                              setStep(2);
+                              setFeedback(null);
+                            }}
+                          >
+                            Select
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )

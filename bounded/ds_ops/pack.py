@@ -121,6 +121,25 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
             f'goods; it cannot be filled for {order.site.code}.',
             status=409, lpn_status=lpn.status)
 
+    # Only a tote with nothing in it can be filled. The check above only
+    # catches a busy tote belonging to *another* store, so a STAGED or
+    # IN_TRANSIT tote sitting at this one - sealed onto a different order by
+    # this store, or still out with a rider - walked straight through and a
+    # second order's units were added to a tote that already carried somebody
+    # else's goods under a different delivery task.
+    #
+    # Packing the *same* order again stays allowed: that is a retry after a
+    # dropped response, the goods are already in there, and `already_applied`
+    # below is what stops them being credited twice.
+    carrying_this_order = (
+        lpn.current_ref_id is not None
+        and str(lpn.current_ref_id) == str(order.order_id))
+    if lpn.status not in {'EMPTY', 'CREATED'} and not carrying_this_order:
+        raise PackError(
+            f'Tote {lpn.barcode} is {lpn.status} and is not empty, so it '
+            f'cannot be filled for {order.site.code}.',
+            status=409, lpn_status=lpn.status)
+
     staging_bin = str(staging_bin or '').strip()
     if not staging_bin:
         raise PackError(
@@ -171,6 +190,7 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
                 'packed_qty': line.packed_qty, 'staging_bin': staging_bin,
                 'status': 'COMPLETED',
                 'assigned_to': str(actor.user_id),
+                'completed_by': actor.user_id,
             },
         )
         packed.append({'line_id': str(line.line_id),

@@ -67,6 +67,32 @@ class LoginAPIView(APIView):
         })
 
 
+class MeAPIView(APIView):
+    """The signed-in account, for any role.
+
+    The three web apps restore a saved token on boot. They used to validate it
+    against /iam/users/, which is admin-only: a shopper, rider or warehouse
+    operator was therefore logged out on every page reload by a 403 on a list
+    they were never allowed to read. This endpoint answers only for the bearer
+    of the token and leaks nothing about other accounts.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response({
+            'user': {
+                'user_id': str(user.user_id),
+                'email': user.email,
+                'full_name': user.full_name,
+                'role': user.role,
+                'status': user.status,
+            },
+            'target_app': target_app_for(user.role),
+        })
+
+
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer

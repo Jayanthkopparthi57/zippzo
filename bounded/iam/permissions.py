@@ -1,4 +1,27 @@
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import BasePermission, SAFE_METHODS
+
+
+class IsAdminUserOrReadOnly(BasePermission):
+    """Any signed-in operator may read master data; only admins may change it.
+
+    The catalog and supplier screens are working tools - a picker needs the SKU
+    list and a receiving clerk needs to see vendors - but creating or editing
+    that master data is a back-office job. Writes are therefore limited to the
+    same roles as IsAdminUser, while anonymous callers get nothing at all.
+    """
+
+    message = "Admin access required to change master data."
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        return getattr(user, "role", None) in IsAdminUser.ADMIN_ROLES
+
+    def has_object_permission(self, request, view, obj):
+        return self.has_permission(request, view)
 
 
 class IsAdminUser(BasePermission):

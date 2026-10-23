@@ -5,8 +5,9 @@ import {
 } from '../api/client';
 import {
   Truck, Bell, Package, MapPin, CheckCircle, Clock, Bike,
-  LogOut, Wifi, WifiOff, Inbox, Wallet, Banknote
+  LogOut, Wifi, WifiOff, Inbox, Wallet, Banknote, QrCode
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 
 const TASKS = '/delivery/delivery-tasks/';
 const RIDERS = '/delivery/rider-profiles/';
@@ -16,6 +17,22 @@ const POD = '/delivery/handoff/pod';
 const NOTIFICATIONS = '/notifications/notifications/';
 const EARNINGS = '/money/rider-earnings/';
 const CUSTODY = '/money/rider-custody/';
+
+/**
+ * The remote Neon pooler plus the browser's HTTP/1.1 connection cap can leave
+ * one fetch in a Promise.all hanging for minutes under StrictMode's double
+ * mount. Bound every load so the console always settles into setup/shell/error
+ * instead of sitting on the spinner.
+ */
+function withTimeout(p, ms = 45000) {
+  return Promise.race([
+    p,
+    new Promise((_, reject) => {
+      const t = setTimeout(() => reject(new Error('Timed out talking to the server.')), ms);
+      if (t.unref) t.unref();
+    }),
+  ]);
+}
 
 // One job is in focus at a time; the rest wait in history.
 const ACTIVE_STATES = ['ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING'];
@@ -36,31 +53,12 @@ const STEPS = [
   { status: 'POD_PENDING', label: 'Hand it over', action: 'pod', button: 'Enter pickup code' },
 ];
 
-const bannerStyle = (bg, border, color) => ({
-  background: bg, border: `1px solid ${border}`, color,
-  padding: '12px 14px', borderRadius: 10, marginBottom: 14,
-  display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13,
-});
-
-const btn = (background, color) => ({
-  background, color, border: 'none', borderRadius: 10, padding: '13px 16px',
-  fontWeight: 700, fontSize: 14, cursor: 'pointer',
-});
-
-function WalletStat({ label, value, sub, warn }) {
+function StatTile({ label, value, sub, warn }) {
   return (
-    <div style={{
-      flex: '1 1 160px', background: '#fff', borderRadius: 12,
-      border: `1px solid ${warn ? '#fcd34d' : '#e2e8f0'}`,
-      padding: '14px 16px',
-    }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 24, fontWeight: 800, color: warn ? '#b45309' : '#1e293b', marginTop: 4 }}>
-        {value}
-      </div>
-      {sub && <div style={{ fontSize: 11, color: warn ? '#92400e' : '#94a3b8', marginTop: 3 }}>{sub}</div>}
+    <div className={`rd-stat${warn ? ' rd-stat--warn' : ''}`}>
+      <div className="rd-stat__label">{label}</div>
+      <div className="rd-stat__value">{value}</div>
+      {sub && <div className="rd-stat__sub">{sub}</div>}
     </div>
   );
 }
@@ -77,6 +75,14 @@ export default function RiderDashboardView() {
   const [earnings, setEarnings] = useState([]);
   const [custody, setCustody] = useState(null);
   const [tab, setTab] = useState('jobs');
+
+  // Personal scan code, fetched only when the rider asks for it: the code
+  // doubles as the rider's acceptance at the store counter, so it is not
+  // sitting on screen from the moment the console opens.
+  const [qrInfo, setQrInfo] = useState(null);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState('');
 
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -99,18 +105,18 @@ export default function RiderDashboardView() {
   const load = useCallback(async () => {
     setError('');
     try {
-      const me = await fetchApi(`${RIDERS}me/`);
+      const me = await withTimeout(fetchApi(`${RIDERS}me/`));
       setProfile(me?.has_profile ? me : null);
 
       if (me?.has_profile) {
         const [taskRes, shiftRes, notifRes, countRes, earnRes, custRes] =
           await Promise.all([
-            fetchApi(TASKS),
-            fetchApi(`${SHIFTS}?status=OPEN`).catch(() => []),
-            fetchApi(NOTIFICATIONS).catch(() => []),
-            fetchApi(`${NOTIFICATIONS}unread_count/`).catch(() => ({ unread: 0 })),
-            fetchApi(EARNINGS).catch(() => []),
-            fetchApi(CUSTODY).catch(() => null),
+            withTimeout(fetchApi(TASKS), 45000).catch(() => []),
+            withTimeout(fetchApi(`${SHIFTS}?status=OPEN`)).catch(() => []),
+            withTimeout(fetchApi(NOTIFICATIONS)).catch(() => []),
+            withTimeout(fetchApi(`${NOTIFICATIONS}unread_count/`)).catch(() => ({ unread: 0 })),
+            withTimeout(fetchApi(EARNINGS)).catch(() => []),
+            withTimeout(fetchApi(CUSTODY)).catch(() => null),
           ]);
         const rows = unwrapList(taskRes) || [];
         setTasks(Array.isArray(rows) ? rows : []);
@@ -138,13 +144,41 @@ export default function RiderDashboardView() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Poll every 30 s so new job offers and package-ready notifications appear
-  // without the rider manually refreshing. 30 s is a reasonable tradeoff
-  // between freshness and battery/data usage for a quick-commerce rider.
+  // Poll every 10 s so new job offers and package-ready notifications appear
+  // without the rider manually refreshing.
   useEffect(() => {
-    const id = setInterval(() => load(), 30000);
+    const id = setInterval(() => load(), 10000);
     return () => clearInterval(id);
   }, [load]);
+
+  // While online, keep the store's fleet board fed with where this rider
+  // actually is. A browser that refuses the permission, or a device with no
+  // GPS, just leaves the board showing "no location" - the console itself
+  // keeps working either way, so the failure is never surfaced as an error.
+  const [locSharing, setLocSharing] = useState(false);
+  useEffect(() => {
+    if (!profile?.is_online || !navigator.geolocation) return undefined;
+    let cancelled = false;
+    let lastPush = 0;
+    const push = (pos) => {
+      if (cancelled) return;
+      const now = Date.now();
+      // One pin every 20 s is plenty for a board that only shows "last seen".
+      if (now - lastPush < 20000) return;
+      lastPush = now;
+      postApi(`${RIDERS}me/location/`, {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      }).then(() => { if (!cancelled) setLocSharing(true); }).catch(() => {});
+    };
+    const opts = { enableHighAccuracy: false, maximumAge: 15000, timeout: 15000 };
+    const watchId = navigator.geolocation.watchPosition(push, () => {}, opts);
+    return () => {
+      cancelled = true;
+      navigator.geolocation.clearWatch(watchId);
+      setLocSharing(false);
+    };
+  }, [profile?.is_online]);
 
   const run = async (fn) => {
     setBusy(true);
@@ -244,6 +278,21 @@ export default function RiderDashboardView() {
     }
   };
 
+  // ── my QR ──
+  const loadQr = async () => {
+    setQrLoading(true);
+    setQrError('');
+    try {
+      const info = await withTimeout(fetchApi(`${RIDERS}me/qr/`));
+      setQrInfo(info);
+      setQrOpen(true);
+    } catch (err) {
+      setQrError(describeError(err));
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
   const markAllRead = () => run(async () => {
     await postApi(`${NOTIFICATIONS}mark_all_read/`, {});
     await load();
@@ -259,7 +308,7 @@ export default function RiderDashboardView() {
 
   if (loading) {
     return (
-      <div data-testid="rider-loading" style={{ padding: 48, textAlign: 'center', color: '#64748b' }}>
+      <div data-testid="rider-loading" className="rd-loading">
         Loading the rider console...
       </div>
     );
@@ -268,48 +317,47 @@ export default function RiderDashboardView() {
   // ── no profile yet ──
   if (!profile?.has_profile) {
     const stores = (facilitiesList.all_facilities || []).filter(s => s.site_type === 'DS');
-    const field = { width: '100%', padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 14, boxSizing: 'border-box' };
     return (
-      <div data-testid="rider-setup" style={{ background: '#f8fafc', minHeight: '100vh', padding: 24 }}>
-        <div style={{ maxWidth: 460, margin: '40px auto', background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
-          <h1 style={{ margin: '0 0 6px', fontSize: 18, display: 'flex', gap: 8, alignItems: 'center', color: '#1e293b' }}>
-            <Bike size={20} color="#7c3aed" /> Set up your rider profile
+      <div data-testid="rider-setup" className="rd-setup">
+        <div className="rd-setup__card">
+          <h1 className="rd-setup__title">
+            <Bike size={19} color="#6d4aff" /> Set up your rider profile
           </h1>
-          <p style={{ margin: '0 0 18px', fontSize: 13, color: '#64748b' }}>
+          <p className="rd-setup__sub">
             Your account has no delivery profile yet. These details are what the
             store checks before handing you a tote.
           </p>
 
-          {error && <div role="alert" style={bannerStyle('#fef2f2', '#fecaca', '#991b1b')}>{error}</div>}
+          {error && (
+            <div role="alert" className="rd-banner rd-banner--error">
+              <span className="rd-banner__icon">{error}</span>
+            </div>
+          )}
 
-          <label style={labelStyle}>Full name</label>
-          <input style={field} value={form.name} placeholder={user?.full_name || ''}
+          <label className="rd-label">Full name</label>
+          <input className="rd-input" value={form.name} placeholder={user?.full_name || ''}
                  onChange={e => setForm({ ...form, name: e.target.value })} />
 
-          <label style={labelStyle}>Phone</label>
-          <input style={field} value={form.phone} inputMode="tel" placeholder="10-digit number"
+          <label className="rd-label">Phone</label>
+          <input className="rd-input" value={form.phone} inputMode="tel" placeholder="10-digit number"
                  onChange={e => setForm({ ...form, phone: e.target.value })} />
 
-          <label style={labelStyle}>Vehicle</label>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+          <label className="rd-label">Vehicle</label>
+          <div className="rd-vehicles">
             {VEHICLES.map(([value, text]) => (
               <button key={value} onClick={() => setForm({ ...form, vehicle_type: value })}
-                      style={{
-                        ...btn(form.vehicle_type === value ? '#7c3aed' : '#f1f5f9',
-                              form.vehicle_type === value ? '#fff' : '#475569'),
-                        padding: '9px 14px', fontSize: 13,
-                      }}>
+                      className={`rd-vehicle ${form.vehicle_type === value ? 'rd-vehicle--on' : 'rd-vehicle--off'}`}>
                 {text}
               </button>
             ))}
           </div>
 
-          <label style={labelStyle}>Vehicle number</label>
-          <input style={field} value={form.vehicle_number} placeholder="KA-01-AB-1234"
+          <label className="rd-label">Vehicle number</label>
+          <input className="rd-input" value={form.vehicle_number} placeholder="KA-01-AB-1234"
                  onChange={e => setForm({ ...form, vehicle_number: e.target.value })} />
 
-          <label style={labelStyle}>Home store</label>
-          <select style={field} value={form.site_code}
+          <label className="rd-label">Home store</label>
+          <select className="rd-input" value={form.site_code}
                   onChange={e => setForm({ ...form, site_code: e.target.value })}>
             <option value="">Select a dark store…</option>
             {stores.map(s => (
@@ -317,13 +365,13 @@ export default function RiderDashboardView() {
             ))}
           </select>
           {stores.length === 0 && (
-            <p style={{ fontSize: 12, color: '#94a3b8', margin: '6px 0 0' }}>
+            <p className="rd-setup__hint">
               No stores loaded. Refresh after logging in again.
             </p>
           )}
 
           <button onClick={bootstrap} disabled={busy}
-                  style={{ ...btn('#7c3aed', '#fff'), width: '100%', marginTop: 18 }}>
+                  className="rd-btn rd-btn--primary rd-btn--block rd-setup__submit">
             {busy ? 'Saving…' : 'Create profile'}
           </button>
         </div>
@@ -334,128 +382,104 @@ export default function RiderDashboardView() {
   const step = active[0] ? STEPS.find(s => s.status === active[0].status) : null;
 
   return (
-    <div data-testid="rider-shell" style={{ background: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div data-testid="rider-shell" className="rd-shell">
       {(error || notice) && (
-        <div role="alert" style={{
-          margin: '12px 20px 0', padding: '10px 14px', borderRadius: 8,
-          background: error ? '#fef2f2' : '#ecfdf5',
-          border: `1px solid ${error ? '#fecaca' : '#a7f3d0'}`,
-          color: error ? '#991b1b' : '#065f46',
-          fontSize: 13, fontWeight: 600,
-        }}>
-          {error || notice}
+        <div role="alert" className={`rd-banner ${error ? 'rd-banner--error' : 'rd-banner--ok'}`}>
+          <span className="rd-banner__icon">{error || notice}</span>
         </div>
       )}
 
       {/* Header */}
-      <div style={{
-        background: '#fff', padding: '14px 20px', borderBottom: '1px solid #e2e8f0',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        position: 'sticky', top: 0, zIndex: 10,
-      }}>
+      <div className="rd-header">
         <div>
-          <h1 style={{ margin: 0, fontSize: 17, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Truck size={19} color="#7c3aed" /> Zippzo Rider
+          <h1 className="rd-header__title">
+            <Truck size={17} color="#6d4aff" /> Zippzo Rider
           </h1>
-          <p style={{ margin: 0, fontSize: 13, color: '#64748b', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <p className="rd-header__sub">
             {profile.is_online
-              ? <Wifi size={13} color="#10b981" />
-              : <WifiOff size={13} color="#94a3b8" />}
+              ? <Wifi size={12} color="#16a34a" />
+              : <WifiOff size={12} color="#a1a1aa" />}
             {profile.is_online ? 'Online' : 'Offline'} · {profile.name}
+            {profile.is_online && (
+              <span data-testid="rd-loc" style={{ marginLeft: 6 }}>
+                {locSharing ? '· sharing location' : '· location off'}
+              </span>
+            )}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="rd-header__actions">
           <button onClick={() => setTab('alerts')} title="Notifications"
-                  style={{ ...btn('#f1f5f9', '#475569'), padding: '9px 11px', position: 'relative' }}>
-            <Bell size={17} />
-            {unread > 0 && (
-              <span style={{
-                position: 'absolute', top: -5, right: -5, background: '#dc2626',
-                color: '#fff', borderRadius: 999, fontSize: 10, minWidth: 17,
-                height: 17, display: 'flex', alignItems: 'center',
-                justifyContent: 'center', fontWeight: 800,
-              }}>{unread}</span>
-            )}
+                  className="rd-btn rd-btn--quiet rd-btn--icon">
+            <Bell size={16} />
+            {unread > 0 && <span className="rd-badge-dot">{unread}</span>}
           </button>
           <button onClick={toggleOnline}
-                  style={btn(profile.is_online ? '#f1f5f9' : '#10b981',
-                            profile.is_online ? '#475569' : '#fff')}>
+                  className={`rd-btn ${profile.is_online ? 'rd-btn--quiet' : 'rd-btn--go'}`}>
             {profile.is_online ? 'Go offline' : 'Go online'}
           </button>
-          <button onClick={logout} style={btn('#f1f5f9', '#475569')} title="Sign out">
-            <LogOut size={16} />
+          <button onClick={logout} className="rd-btn rd-btn--quiet rd-btn--icon" title="Sign out">
+            <LogOut size={15} />
           </button>
         </div>
       </div>
 
       {/* Shift bar */}
-      <div style={{
-        background: shift ? '#ecfdf5' : '#fffbeb', borderBottom: '1px solid #e2e8f0',
-        padding: '9px 20px', display: 'flex', justifyContent: 'space-between',
-        alignItems: 'center', fontSize: 13,
-      }}>
-        <span style={{ color: shift ? '#065f46' : '#92400e', fontWeight: 600 }}>
+      <div className={`rd-shift ${shift ? 'rd-shift--open' : 'rd-shift--closed'}`}>
+        <span className="rd-shift__text">
+          <Clock size={12} />
           {shift
             ? <>Shift started {new Date(shift.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</>
             : 'No open shift'}
           {profile.current_site_code && <> · {profile.current_site_code}</>}
         </span>
         <button onClick={toggleShift} disabled={busy}
-                style={{ ...btn(shift ? '#dc2626' : '#7c3aed', '#fff'), padding: '7px 14px', fontSize: 13 }}>
+                className={`rd-btn rd-btn--sm ${shift ? 'rd-btn--stop' : 'rd-btn--primary'}`}>
           {shift ? 'End shift' : 'Start shift'}
         </button>
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, padding: '12px 20px 0' }}>
-        {[['jobs', 'Jobs', Package], ['history', 'History', CheckCircle], ['money', 'Money', Wallet], ['alerts', `Alerts${unread ? ` (${unread})` : ''}`, Bell]].map(([id, label, Icon]) => (
-          <button key={id} onClick={() => setTab(id)} style={{
-            display: 'flex', gap: 6, alignItems: 'center', border: 'none',
-            background: tab === id ? '#7c3aed' : 'transparent',
-            color: tab === id ? '#fff' : '#64748b',
-            padding: '8px 14px', borderRadius: 8, fontWeight: 700, fontSize: 13,
-            cursor: 'pointer',
-          }}>
-            <Icon size={15} /> {label}
+      <div className="rd-tabs">
+        {[['jobs', 'Jobs', Package], ['history', 'History', CheckCircle], ['money', 'Money', Wallet], ['qr', 'My QR', QrCode], ['alerts', `Alerts${unread ? ` (${unread})` : ''}`, Bell]].map(([id, label, Icon]) => (
+          <button key={id} onClick={() => setTab(id)}
+                  className={`rd-tab ${tab === id ? 'rd-tab--active' : ''}`}>
+            <Icon size={14} /> {label}
           </button>
         ))}
       </div>
 
-      <div style={{ flex: 1, padding: 20, maxWidth: 640, margin: '0 auto', width: '100%' }}>
+      <div className="rd-main">
 
         {tab === 'jobs' && (
           <>
             {/* Offers */}
             {offers.length > 0 && (
-              <section style={{ marginBottom: 20 }}>
-                <h3 style={{ fontSize: 13, color: '#475569', margin: '0 0 10px' }}>
+              <section className="rd-section">
+                <h3 className="rd-section__head">
                   Waiting for a rider ({offers.length})
                 </h3>
                 {offers.map(t => (
-                  <div key={t.task_id} style={{
-                    background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12,
-                    padding: 14, marginBottom: 10,
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div key={t.task_id} className="rd-card" data-testid={`rd-offer-${t.order_no}`}>
+                    <div className="rd-offer__top">
                       <div>
-                        <div style={{ fontWeight: 700, color: '#1e293b' }}>{t.order_no}</div>
-                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>
+                        <div className="rd-offer__no">{t.order_no}</div>
+                        <div className="rd-offer__meta">
                           {t.order_weight_kg ? `${t.order_weight_kg} kg` : 'Weight pending'}
                           {t.requires_cold_chain && ' · cold chain'}
                           {t.staging_bin && ` · staged at ${t.staging_bin}`}
                         </div>
                       </div>
-                      <div style={{ fontWeight: 800, color: '#b45309' }}>
+                      <div className="rd-offer__cod">
                         {t.payment_method === 'COD' && t.grand_total ? `₹${t.grand_total}` : ''}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                    <div className="rd-offer__actions">
                       <button onClick={() => decline(t)} disabled={busy}
-                              style={{ ...btn('#f1f5f9', '#475569'), flex: 1, padding: '11px' }}>
+                              className="rd-btn rd-btn--quiet">
                         Not me
                       </button>
                       <button onClick={() => accept(t)} disabled={busy}
-                              style={{ ...btn('#7c3aed', '#fff'), flex: 2, padding: '11px' }}>
+                              className="rd-btn rd-btn--primary">
                         Accept job
                       </button>
                     </div>
@@ -466,24 +490,21 @@ export default function RiderDashboardView() {
 
             {/* Active job */}
             {active.length > 0 ? (
-              <div style={{ background: '#fff', borderRadius: 16, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-                <div style={{
-                  background: '#7c3aed', color: '#fff', padding: '12px 18px',
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                }}>
+              <div className="rd-job">
+                <div className="rd-job__head">
                   <div>
-                    <div style={{ fontWeight: 800, fontSize: 15 }}>{active[0].order_no}</div>
-                    <div style={{ fontSize: 12, opacity: 0.85 }}>
+                    <div className="rd-job__no">{active[0].order_no}</div>
+                    <div className="rd-job__status">
                       {active[0].status.replace(/_/g, ' ').toLowerCase()}
                       {active[0].staging_bin && ` · ${active[0].staging_bin}`}
                     </div>
                   </div>
-                  <Package size={22} />
+                  <Package size={20} />
                 </div>
 
-                <div style={{ padding: 18 }}>
+                <div className="rd-job__body">
                   {/* Progress */}
-                  <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
+                  <div className="rd-progress">
                     {['ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'DELIVERED'].map(s => {
                       const order = ['ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED'];
                       const current = active[0].status === 'POD_PENDING' ? 'ARRIVED' : active[0].status;
@@ -491,20 +512,17 @@ export default function RiderDashboardView() {
                       const thisIdx = order.indexOf(s === 'DELIVERED' ? 'ARRIVED' : s);
                       const reached = s === 'DELIVERED' ? false : thisIdx <= idx;
                       return (
-                        <div key={s} style={{
-                          flex: 1, height: 5, borderRadius: 3,
-                          background: reached ? '#7c3aed' : '#e2e8f0',
-                        }} />
+                        <div key={s} className={`rd-progress__seg${reached ? ' rd-progress__seg--on' : ''}`} />
                       );
                     })}
                   </div>
 
                   {step && (
-                    <div style={bannerStyle('#f5f3ff', '#ddd6fe', '#5b21b6')}>
-                      <Clock size={17} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <div className="rd-step rd-step--accent">
+                      <span className="rd-step__icon"><Clock size={15} /></span>
                       <div>
                         <strong>{step.label}</strong>
-                        <div style={{ marginTop: 2, fontSize: 12 }}>
+                        <div className="rd-step__hint">
                           {active[0].status === 'AT_DS' && 'Scan the tote barcode to take custody of the goods.'}
                           {active[0].status === 'PICKED_UP' && 'Goods are with you. Cash orders collect on handover.'}
                           {active[0].status === 'ARRIVED' && 'Ask the customer for their pickup code.'}
@@ -517,13 +535,13 @@ export default function RiderDashboardView() {
                   )}
 
                   {/* Address */}
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 14 }}>
-                    <MapPin size={16} color="#dc2626" style={{ flexShrink: 0, marginTop: 2 }} />
+                  <div className="rd-addr">
+                    <span className="rd-addr__icon"><MapPin size={15} /></span>
                     <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a' }}>
+                      <div className="rd-addr__name">
                         {active[0].customer_name || 'Customer'}
                       </div>
-                      <div style={{ fontSize: 13, color: '#64748b' }}>
+                      <div className="rd-addr__line">
                         {active[0].delivery_address ||
                           'The delivery address appears once you are assigned this job.'}
                       </div>
@@ -531,12 +549,9 @@ export default function RiderDashboardView() {
                   </div>
 
                   {active[0].payment_method === 'COD' && active[0].grand_total && (
-                    <div style={{
-                      display: 'flex', justifyContent: 'space-between', padding: '10px 14px',
-                      background: '#fef3c7', borderRadius: 10, marginBottom: 14, fontSize: 14,
-                    }}>
-                      <span style={{ color: '#92400e', fontWeight: 600 }}>Cash to collect</span>
-                      <span style={{ fontWeight: 800, fontSize: 17, color: '#b45309' }}>
+                    <div className="rd-cod">
+                      <span className="rd-cod__label">Cash to collect</span>
+                      <span className="rd-cod__value">
                         ₹{Number(active[0].grand_total).toFixed(2)}
                       </span>
                     </div>
@@ -550,25 +565,25 @@ export default function RiderDashboardView() {
                         else if (step.action === 'pod') { setPodOpen(true); setPodNote(''); setPodOtp(''); setPodCod(''); }
                         else advance(active[0], step.to);
                       }}
-                      style={{ ...btn('#10b981', '#fff'), width: '100%' }}>
+                      className="rd-btn rd-btn--go rd-btn--block">
                       {busy ? 'Working…' : step.button}
                     </button>
                   )}
 
                   {/* Pickup dialog */}
                   {toteOpen && (
-                    <div style={{ border: '1px solid #cbd5e1', borderRadius: 12, padding: 14, marginTop: 14 }}>
-                      <h4 style={{ margin: '0 0 8px', fontSize: 14, color: '#334155' }}>Collect tote</h4>
+                    <div className="rd-dialog">
+                      <h4 className="rd-dialog__title">Collect tote</h4>
                       <input
                         value={toteBarcode}
                         onChange={e => setToteBarcode(e.target.value)}
                         placeholder="Tote barcode (optional — confirms the right bag)"
-                        style={{ width: '100%', padding: 11, border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 14, boxSizing: 'border-box', marginBottom: 10 }} />
-                      <div style={{ display: 'flex', gap: 8 }}>
+                        className="rd-input" />
+                      <div className="rd-dialog__row">
                         <button onClick={() => { setToteOpen(false); setToteBarcode(''); }}
-                                style={{ ...btn('#f1f5f9', '#475569'), flex: 1 }}>Cancel</button>
+                                className="rd-btn rd-btn--quiet">Cancel</button>
                         <button onClick={() => collectTote(active[0])} disabled={busy}
-                                style={{ ...btn('#10b981', '#fff'), flex: 2 }}>
+                                className="rd-btn rd-btn--go">
                           {busy ? 'Checking…' : 'Confirm pickup'}
                         </button>
                       </div>
@@ -577,46 +592,44 @@ export default function RiderDashboardView() {
 
                   {/* POD dialog */}
                   {podOpen && (
-                    <div style={{ border: '1px solid #cbd5e1', borderRadius: 12, padding: 14, marginTop: 14 }}>
-                      <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#334155' }}>Proof of delivery</h4>
+                    <div className="rd-dialog">
+                      <h4 className="rd-dialog__title">Proof of delivery</h4>
 
-                      <label style={labelStyle}>Pickup code from the customer</label>
+                      <label className="rd-label">Pickup code from the customer</label>
                       <input
                         value={podOtp}
                         onChange={e => setPodOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                         placeholder="6-digit code" inputMode="numeric"
-                        style={{ width: '100%', padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 18, letterSpacing: 3, marginBottom: 10, boxSizing: 'border-box' }} />
+                        className="rd-input rd-input--code" />
 
                       {active[0].payment_method === 'COD' && (
                         <>
-                          <label style={labelStyle}>Cash collected</label>
+                          <label className="rd-label">Cash collected</label>
                           <input
                             value={podCod}
                             onChange={e => setPodCod(e.target.value)}
                             placeholder={`₹${active[0].grand_total || '0.00'} due`}
                             inputMode="decimal"
-                            style={{ width: '100%', padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 15, marginBottom: 10, boxSizing: 'border-box' }} />
+                            className="rd-input rd-input--money" />
                         </>
                       )}
 
-                      <label style={labelStyle}>Customer name / signature (optional)</label>
+                      <label className="rd-label">Customer name / signature (optional)</label>
                       <input
                         value={podSig}
                         onChange={e => setPodSig(e.target.value.slice(0, 120))}
                         placeholder="Who took the bag"
-                        style={{ width: '100%', padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 15, marginBottom: 10, boxSizing: 'border-box' }} />
+                        className="rd-input" />
 
                       {podNote && (
-                        <div style={{ fontSize: 12, color: '#92400e', background: '#fffbeb', padding: 10, borderRadius: 8, marginBottom: 10 }}>
-                          {podNote}
-                        </div>
+                        <div className="rd-note">{podNote}</div>
                       )}
 
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div className="rd-dialog__row">
                         <button onClick={() => { setPodOpen(false); setPodNote(''); }}
-                                style={{ ...btn('#f1f5f9', '#475569'), flex: 1 }}>Cancel</button>
+                                className="rd-btn rd-btn--quiet">Cancel</button>
                         <button onClick={() => closePod(active[0])} disabled={busy}
-                                style={{ ...btn('#10b981', '#fff'), flex: 2 }}>
+                                className="rd-btn rd-btn--go">
                           {busy ? 'Closing…' : 'Confirm delivery'}
                         </button>
                       </div>
@@ -625,19 +638,12 @@ export default function RiderDashboardView() {
                 </div>
               </div>
             ) : offers.length === 0 && (
-              <div style={{
-                background: '#fff', padding: 36, borderRadius: 16, textAlign: 'center',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-              }}>
-                <div style={{
-                  background: '#f1f5f9', width: 60, height: 60, borderRadius: '50%',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  margin: '0 auto 14px',
-                }}>
-                  <Inbox size={30} color="#94a3b8" />
+              <div className="rd-empty">
+                <div className="rd-empty__icon">
+                  <Inbox size={26} />
                 </div>
-                <h2 style={{ margin: '0 0 6px', color: '#1e293b', fontSize: 17 }}>Nothing waiting</h2>
-                <p style={{ margin: 0, color: '#64748b', fontSize: 13 }}>
+                <h2 className="rd-empty__title">Nothing waiting</h2>
+                <p className="rd-empty__text">
                   {profile.is_online
                     ? 'You are online. New jobs at this store show up here.'
                     : 'You are offline. Go online to receive jobs.'}
@@ -648,29 +654,21 @@ export default function RiderDashboardView() {
         )}
 
         {tab === 'history' && (
-          <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', border: '1px solid #e2e8f0' }}>
+          <div className="rd-list">
             {done.length === 0 && (
-              <div style={{ padding: 30, textAlign: 'center', color: '#94a3b8', fontSize: 14 }}>
-                No completed jobs yet.
-              </div>
+              <div className="rd-list__empty">No completed jobs yet.</div>
             )}
-            {done.map((d, i) => (
-              <div key={d.task_id} style={{
-                padding: '12px 16px',
-                borderBottom: i < done.length - 1 ? '1px solid #e2e8f0' : 'none',
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13,
-              }}>
-                <div>
-                  <div style={{ fontWeight: 600, color: '#1e293b' }}>{d.order_no}</div>
-                  <div style={{ color: '#64748b', marginTop: 2 }}>
+            {done.map((d) => (
+              <div key={d.task_id} className="rd-row">
+                <div className="rd-row__main">
+                  <div className="rd-row__title">{d.order_no}</div>
+                  <div className="rd-row__sub">
                     {d.delivered_at ? new Date(d.delivered_at).toLocaleString() : ''}
                   </div>
                 </div>
-                <span style={{
-                  background: d.status === 'DELIVERED' ? '#d1fae5' : '#fee2e2',
-                  color: d.status === 'DELIVERED' ? '#065f46' : '#991b1b',
-                  padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600,
-                }}>{d.status}</span>
+                <span className={`rd-pill ${d.status === 'DELIVERED' ? 'rd-pill--ok' : 'rd-pill--bad'}`}>
+                  {d.status}
+                </span>
               </div>
             ))}
           </div>
@@ -678,65 +676,52 @@ export default function RiderDashboardView() {
 
         {tab === 'money' && (
           <>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-              <WalletStat
+            <div className="rd-stats">
+              <StatTile
                 label="Cash in hand"
                 value={`₹${Number(custody?.current_cash || 0).toFixed(2)}`}
                 sub={custody
                   ? `ceiling ₹${Number(custody.ceiling_amount || 0).toFixed(2)}`
                   : 'nothing collected yet'}
                 warn={custody && Number(custody.current_cash) >= Number(custody.ceiling_amount)} />
-              <WalletStat
+              <StatTile
                 label="Float"
                 value={`₹${Number(custody?.current_float || 0).toFixed(2)}`} />
-              <WalletStat
+              <StatTile
                 label="Bags carried"
                 value={String(custody?.bags_in_custody ?? 0)} />
-              <WalletStat
+              <StatTile
                 label="Earned"
                 value={`₹${earnings.reduce((t, e) => t + Number(e.amount || 0), 0).toFixed(2)}`}
                 sub={`${earnings.length} delivery${earnings.length === 1 ? '' : 'ies'}`} />
             </div>
 
-            <div style={{
-              background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0',
-              overflow: 'hidden',
-            }}>
-              <div style={{
-                padding: '13px 16px', borderBottom: '1px solid #e2e8f0',
-                fontWeight: 800, fontSize: 14, color: '#1e293b',
-                display: 'flex', gap: 8, alignItems: 'center',
-              }}>
-                <Banknote size={17} color="#10b981" /> Delivery earnings
+            <div className="rd-list">
+              <div className="rd-list__head">
+                <Banknote size={15} color="#16a34a" /> Delivery earnings
               </div>
               {earnings.length === 0 && (
-                <div style={{ padding: 30, textAlign: 'center', color: '#94a3b8', fontSize: 14 }}>
+                <div className="rd-list__empty">
                   Earnings are credited when you close a delivery.
                 </div>
               )}
-              {earnings.map((e, i) => (
-                <div key={e.earning_id} style={{
-                  padding: '12px 16px',
-                  borderBottom: i < earnings.length - 1 ? '1px solid #f1f5f9' : 'none',
-                  display: 'flex', justifyContent: 'space-between',
-                  alignItems: 'center', fontSize: 13,
-                }}>
-                  <div>
-                    <div style={{ fontWeight: 700, color: '#1e293b' }}>
+              {earnings.map((e) => (
+                <div key={e.earning_id} className="rd-row">
+                  <div className="rd-row__main">
+                    <div className="rd-row__title">
                       Order {e.order_no || String(e.order).slice(0, 8)}
                     </div>
-                    <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                    <div className="rd-row__sub">
                       {e.created_at ? new Date(e.created_at).toLocaleString() : ''}
                     </div>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: 800, color: '#059669' }}>
+                  <div className="rd-row__end">
+                    <div className="rd-row__amount">
                       ₹{Number(e.amount || 0).toFixed(2)}
                     </div>
-                    <div style={{
-                      fontSize: 11, color: e.status === 'PAID' ? '#065f46' : '#92400e',
-                      fontWeight: 700,
-                    }}>{e.status}</div>
+                    <div className={`rd-row__state ${e.status === 'PAID' ? 'rd-row__state--paid' : 'rd-row__state--due'}`}>
+                      {e.status}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -744,38 +729,76 @@ export default function RiderDashboardView() {
           </>
         )}
 
+        {tab === 'qr' && (
+          <section className="rd-section" data-testid="rd-qr-section">
+            <h3 className="rd-section__head">My rider QR</h3>
+            <div className="rd-qr">
+              {qrError && (
+                <div className="rd-banner rd-banner--error" data-testid="rd-qr-error">
+                  <span className="rd-banner__icon">{qrError}</span>
+                </div>
+              )}
+              {!qrOpen && (
+                <button onClick={loadQr} disabled={qrLoading}
+                        className="rd-btn rd-btn--primary" data-testid="rd-qr-show">
+                  {qrLoading ? 'Loading…' : 'Show my QR code'}
+                </button>
+              )}
+              {qrOpen && qrInfo && (
+                <div className="rd-qr__card">
+                  <div className="rd-qr__svg" data-testid="rd-qr-svg">
+                    <QRCodeSVG value={qrInfo.payload || qrInfo.code} size={220} marginSize={2} />
+                  </div>
+                  <div className="rd-qr__code" data-testid="rd-qr-code">{qrInfo.code}</div>
+                  <div className="rd-qr__meta">
+                    {qrInfo.name}
+                    {qrInfo.site ? ` · ${qrInfo.site}` : ' · no store yet'}
+                    {' · scanned '}{qrInfo.scan_count ?? 0} time{(qrInfo.scan_count ?? 0) === 1 ? '' : 's'}
+                    {qrInfo.is_online ? ' · online' : ' · offline'}
+                  </div>
+                  <div className="rd-qr__hint">
+                    The store scans this at the handoff counter to give you a job —
+                    the scan itself is your acceptance, so there is nothing to tap here.
+                  </div>
+                  <button onClick={loadQr} disabled={qrLoading}
+                          className="rd-btn rd-btn--quiet rd-btn--sm" data-testid="rd-qr-refresh">
+                    {qrLoading ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
         {tab === 'alerts' && (
           <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <h3 style={{ fontSize: 13, color: '#475569', margin: 0 }}>Notifications</h3>
+            <div className="rd-section__bar">
+              <h3 className="rd-section__head">Notifications</h3>
               {unread > 0 && (
                 <button onClick={markAllRead} disabled={busy}
-                        style={{ ...btn('#f1f5f9', '#475569'), padding: '7px 12px', fontSize: 12 }}>
+                        className="rd-btn rd-btn--quiet rd-btn--sm">
                   Mark all read
                 </button>
               )}
             </div>
-            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+            <div className="rd-list">
               {notifications.length === 0 && (
-                <div style={{ padding: 30, textAlign: 'center', color: '#94a3b8', fontSize: 14 }}>
+                <div className="rd-list__empty">
                   Nothing yet. Job offers and order updates land here.
                 </div>
               )}
-              {notifications.map((n, i) => (
-                <div key={n.notification_id} style={{
-                  padding: '13px 16px',
-                  borderBottom: i < notifications.length - 1 ? '1px solid #e2e8f0' : 'none',
-                  background: n.read_at ? '#fff' : '#f5f3ff',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-                    <span style={{ fontWeight: 700, fontSize: 13, color: '#1e293b' }}>
+              {notifications.map((n) => (
+                <div key={n.notification_id}
+                     className={`rd-notif${n.read_at ? '' : ' rd-notif--unread'}`}>
+                  <div className="rd-notif__top">
+                    <span className="rd-notif__title">
                       {NOTIF_LABELS[n.type] || n.type}
                     </span>
-                    <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                    <span className="rd-notif__time">
                       {new Date(n.created_at).toLocaleString()}
                     </span>
                   </div>
-                  <div style={{ fontSize: 13, color: '#475569', marginTop: 4 }}>
+                  <div className="rd-notif__body">
                     {n.payload_json?.order_no && `Order ${n.payload_json.order_no}`}
                     {n.payload_json?.staging_bin && ` · collect from ${n.payload_json.staging_bin}`}
                     {!n.payload_json?.order_no && !n.payload_json?.staging_bin && '—'}
@@ -789,11 +812,6 @@ export default function RiderDashboardView() {
     </div>
   );
 }
-
-const labelStyle = {
-  display: 'block', fontSize: 12, fontWeight: 600, color: '#475569',
-  margin: '14px 0 5px',
-};
 
 const NOTIF_LABELS = {
   RIDER_JOB_OFFERED: 'New job at your store',

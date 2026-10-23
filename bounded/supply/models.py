@@ -143,6 +143,9 @@ class Grn(models.Model):
     mode = models.CharField(max_length=10, choices=MODE_CHOICES, default='LPN_SCAN')
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='DRAFT')
     has_discrepancy = models.BooleanField(default=False)
+    # Attribution: created_by is stamped when the GRN is raised, received_by
+    # when receiving is completed. Both server-side from the request token.
+    created_by = models.UUIDField(null=True, blank=True)
     received_by = models.UUIDField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -205,6 +208,8 @@ class PutawayTask(models.Model):
     confirmed_bin = models.ForeignKey('network.Location', null=True, on_delete=models.SET_NULL, related_name='putaway_confirmed')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='GENERATED')
     assigned_to = models.UUIDField(null=True, blank=True)
+    # Who physically shelved the stock — stamped by the complete action.
+    confirmed_by = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)

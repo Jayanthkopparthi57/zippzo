@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import CustomerViewSet, CustomerAddressViewSet, CartViewSet, CartLineViewSet, CustomerOrderViewSet, CustomerOrderLineViewSet, OrderStatusHistoryViewSet, CheckoutView, StorefrontView
+from .views import CustomerViewSet, CustomerAddressViewSet, CartViewSet, CartLineViewSet, CustomerOrderViewSet, CustomerOrderLineViewSet, OrderStatusHistoryViewSet, CheckoutView, StorefrontView, OrderCancelView
 router = DefaultRouter()
 router.register(r'customers', CustomerViewSet)
 router.register(r'addresses', CustomerAddressViewSet)
@@ -15,5 +15,6 @@ router.register(r'order-history', OrderStatusHistoryViewSet)
 urlpatterns = [
     path('checkout', CheckoutView.as_view(), name='orders-checkout'),
     path('storefront', StorefrontView.as_view(), name='orders-storefront'),
+    path('orders/<uuid:order_id>/cancel/', OrderCancelView.as_view(), name='order-cancel'),
     path('', include(router.urls)),
 ]

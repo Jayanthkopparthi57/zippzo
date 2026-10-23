@@ -94,23 +94,33 @@ export function describeError(err) {
  * handle the failure explicitly (or use fetchApiOr where a fallback is right).
  */
 export async function fetchApi(endpoint) {
-  const url = buildUrl(endpoint);
-  let res;
-  try {
-    res = await fetch(url, { headers: getHeaders(), redirect: 'follow' });
-  } catch (err) {
-    throw new ApiError(`Network error: ${err.message}`, { url, body: null });
-  }
-  if (!res.ok) {
-    const body = await readBody(res);
-    throw new ApiError(`GET ${endpoint} -> ${res.status} ${res.statusText}`, {
-      status: res.status, url, body,
-    });
-  }
-  const data = await readBody(res);
+  const data = await getJson(endpoint);
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.results)) return data.results;
   return data;
+}
+
+/**
+ * GET keeping the DRF page envelope: `{count, next, previous, results}`.
+ *
+ * fetchApi drops count/next, which is right for screens that render one page
+ * of everything, but a ledger needs "page 3 of 12" and a total. Bare-array
+ * endpoints are normalised to a single page so callers never branch on shape.
+ */
+export async function fetchApiPage(endpoint) {
+  const data = await getJson(endpoint);
+  if (Array.isArray(data)) {
+    return { count: data.length, next: null, previous: null, results: data };
+  }
+  if (data && Array.isArray(data.results)) {
+    return {
+      count: typeof data.count === 'number' ? data.count : data.results.length,
+      next: data.next || null,
+      previous: data.previous || null,
+      results: data.results,
+    };
+  }
+  return { count: 0, next: null, previous: null, results: [] };
 }
 
 /**
@@ -137,6 +147,24 @@ export async function fetchApiOr(endpoint, fallback) {
     console.error(`[API] ${endpoint} failed, using fallback:`, describeError(err));
     return fallback;
   }
+}
+
+/** One GET as raw JSON; the shared body of fetchApi / fetchApiPage. */
+async function getJson(endpoint) {
+  const url = buildUrl(endpoint);
+  let res;
+  try {
+    res = await fetch(url, { headers: getHeaders(), redirect: 'follow' });
+  } catch (err) {
+    throw new ApiError(`Network error: ${err.message}`, { url, body: null });
+  }
+  if (!res.ok) {
+    const body = await readBody(res);
+    throw new ApiError(`GET ${endpoint} -> ${res.status} ${res.statusText}`, {
+      status: res.status, url, body,
+    });
+  }
+  return readBody(res);
 }
 
 /**
@@ -181,6 +209,33 @@ export async function patchApi(endpoint, payload) {
   if (!res.ok) {
     const body = await readBody(res);
     throw new ApiError(`PATCH ${endpoint} -> ${res.status}`, { status: res.status, url, body });
+  }
+  return readBody(res);
+}
+
+/**
+ * POST a single file as multipart/form-data.
+ *
+ * The browser must set the multipart boundary itself, so no Content-Type
+ * header is sent here (unlike getHeaders()). Used for product photos, which
+ * the catalog screen uploads before saving the SKU payload.
+ */
+export async function uploadFile(endpoint, file, field = 'file') {
+  const url = buildUrl(endpoint);
+  const body = new FormData();
+  body.append(field, file);
+  const headers = { Accept: 'application/json' };
+  const token = getAuthToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST', headers, body, redirect: 'follow' });
+  } catch (err) {
+    throw new ApiError(`Network error: ${err.message}`, { url });
+  }
+  if (!res.ok) {
+    const errBody = await readBody(res);
+    throw new ApiError(`POST ${endpoint} -> ${res.status}`, { status: res.status, url, body: errBody });
   }
   return readBody(res);
 }

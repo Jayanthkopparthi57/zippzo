@@ -13,4 +13,5 @@ router.register(r'idempotency', views.IdempotencyKeyViewSet)
 urlpatterns = [
     path('', include(router.urls)),
     path('auth/login', views.LoginAPIView.as_view(), name='login'),
+    path('auth/me', views.MeAPIView.as_view(), name='me'),
 ]

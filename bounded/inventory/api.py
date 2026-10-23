@@ -179,7 +179,11 @@ class RelocateStockView(APIView):
         sku_id = d.get('sku')
         lot_id = d.get('lot')
         qty = int(d.get('qty') or 0)
-        actor_id = d.get('actor_id') or ''
+        # The ledger's actor comes from the token. Clients also send actor_id
+        # (they did, and still do), but a body value must never be able to
+        # pin a move on somebody else — same rule as pick scan.
+        from bounded.iam.names import acting_user_id
+        actor_id = str(acting_user_id(request) or '') or (d.get('actor_id') or '')
 
         if not from_bin or not to_bin:
             return Response({'detail': 'from_location_id and to_location_id are required'},

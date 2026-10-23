@@ -9,7 +9,8 @@ import WorkflowStepper from '../../components/ui/WorkflowStepper';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import {
-  useDarkStore, useAsyncData, deliveryTasks, riderPickup, deliveryPod, num,
+  useDarkStore, useAsyncData, deliveryTasks, riderPickup, deliveryPod,
+  assignRiderQr, num,
 } from './useDarkStore';
 
 /**
@@ -63,43 +64,47 @@ const POD_FROM = ['PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING'];
 /** DeliveryTask.status for orders that are closed out, shown as history only. */
 const CLOSED = ['DELIVERED', 'FAILED', 'RETURNED', 'WITHDRAWN', 'RECALLED'];
 
-function TaskRow({ task, onOpen, testId, actionLabel, disabled }) {
+function TaskRow({ task, onOpen, testId, actionLabel, disabled, onAssign }) {
   const orderNo = task.order_no || task.order || '';
   const staged = task.staging_bin || 'not recorded';
   return (
-    <div className="entity-card" data-testid={testId}>
-      <div className="entity-card__thumb"><PackageCheck size={22} /></div>
-      <div className="entity-card__body">
-        <div className="entity-card__title mono-num">
-          {orderNo || task.task_id}
-        </div>
-        <div className="entity-card__meta">
-          <span>Job <strong className="mono-num">{String(task.task_id).slice(0, 8)}</strong></span>
-          <span>Staging <strong>{staged}</strong></span>
-          {task.order_weight_kg != null && (
-            <span>Weight <strong>{num(task.order_weight_kg)} kg</strong></span>
-          )}
-          {task.shipped_qty > 0 && (
-            <span>Shipped <strong>{num(task.shipped_qty)} units</strong></span>
-          )}
-          {task.pickup_at && (
-            <span>Picked up <strong>{new Date(task.pickup_at).toLocaleString()}</strong></span>
-          )}
-        </div>
-      </div>
-      <div className="entity-card__actions">
+    <tr data-testid={testId}>
+      <td className="mono-num">{orderNo || task.task_id}</td>
+      <td className="mono-num">{String(task.task_id).slice(0, 8)}</td>
+      <td>{staged}</td>
+      <td>{task.order_weight_kg != null ? `${num(task.order_weight_kg)} kg` : '—'}</td>
+      <td className="mono-num">
+        {task.shipped_qty > 0 ? `${num(task.shipped_qty)} units` : '—'}
+      </td>
+      <td>{task.pickup_at ? new Date(task.pickup_at).toLocaleString() : '—'}</td>
+      <td>
         <StatusBadge status={task.status} dataTestId={`${testId}-status`} />
-        <button
-          className="scan-btn"
-          style={{ minHeight: 34, fontSize: 12, marginTop: 6 }}
-          onClick={() => onOpen(task)}
-          disabled={disabled}
-          data-testid={`${testId}-open`}
-        >
-          {actionLabel}
-        </button>
-      </div>
-    </div>
+      </td>
+      <td>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            className="scan-btn"
+            style={{ minHeight: 34, fontSize: 12 }}
+            onClick={() => onOpen(task)}
+            disabled={disabled}
+            data-testid={`${testId}-open`}
+          >
+            {actionLabel}
+          </button>
+          {onAssign && (
+            <button
+              className="btn-secondary"
+              style={{ minHeight: 34, fontSize: 12 }}
+              onClick={() => onAssign(task)}
+              disabled={disabled}
+              data-testid={`ds-handoff-assign-${orderNo || task.task_id}`}
+            >
+              Assign rider
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -124,6 +129,12 @@ function Counter({ siteId, storeCode, segment }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
 
+  // Hand a staged, unassigned job to a rider by scanning their personal QR.
+  const [assignFor, setAssignFor] = useState(null);
+  const [qrText, setQrText] = useState('');
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignError, setAssignError] = useState('');
+
   const all = useMemo(() => tasks || [], [tasks]);
   const actionable = useMemo(() => all.filter((t) => wanted.includes(t.status)), [all, wanted]);
   const closed = useMemo(() => all.filter((t) => CLOSED.includes(t.status)), [all]);
@@ -135,6 +146,9 @@ function Counter({ siteId, storeCode, segment }) {
     setCod('');
     setOtpSent(false);
     setFeedback(null);
+    setAssignFor(null);
+    setQrText('');
+    setAssignError('');
     setStep(0);
   }, []);
 
@@ -259,6 +273,34 @@ function Counter({ siteId, storeCode, segment }) {
     }
   };
 
+  const submitAssign = async () => {
+    if (!assignFor || !qrText.trim()) return;
+    setAssignBusy(true);
+    setAssignError('');
+    try {
+      const res = await assignRiderQr(assignFor.task_id, qrText.trim());
+      const name = res?.rider?.name || 'the rider';
+      const orderNo = assignFor.order_no || '';
+      setDone({ kind: 'assigned', res, task: assignFor });
+      setAssignFor(null);
+      setQrText('');
+      if (res?.already_assigned) {
+        toast.success(`${orderNo} is already with ${name}`, 'Scanned again — nothing changed.');
+      } else {
+        toast.success(`${orderNo} handed to ${name}`,
+          `The job is now accepted on ${name}'s console.`);
+      }
+      await reload({ quiet: true });
+    } catch (err) {
+      const body = err?.body;
+      const msg = body?.error || err?.message || 'The rider could not be assigned.';
+      setAssignError(msg);
+      toast.error('Not assigned', msg);
+    } finally {
+      setAssignBusy(false);
+    }
+  };
+
   const podReady = !!selected && otp.trim().length > 0;
   const pickupReady = !!selected && toteText.trim().length > 0;
 
@@ -305,7 +347,9 @@ function Counter({ siteId, storeCode, segment }) {
               <div>
                 {done.kind === 'pickup'
                   ? `${num(done.res.shipped_qty)} unit(s) collected from tote ${done.res.lpn_barcode || ''}. Order is ${done.res.status}.`
-                  : `${done.res.order_no} delivered. Payment ${done.res.payment_status}.`}
+                  : done.kind === 'assigned'
+                    ? `${done.task.order_no || 'The job'} ${done.res.already_assigned ? 'is already with' : 'is now with'} ${done.res.rider?.name || 'that rider'}${done.res.already_assigned ? '.' : ' — accepted on their console.'}`
+                    : `${done.res.order_no} delivered. Payment ${done.res.payment_status}.`}
               </div>
             </div>
           </div>
@@ -327,24 +371,97 @@ function Counter({ siteId, storeCode, segment }) {
           </div>
         ) : (
           <div className="form-group">
-            <div className="item-list" data-testid="ds-handoff-queue">
-              {actionable.map((t) => (
-<TaskRow
-                   key={t.task_id}
-                  task={t}
-                  onOpen={(task) => {
-                    setSelected(task);
-                    setDone(null);
-                    setToteText('');
-                    setOtp('');
-                    setOtpSent(false);
-                    setCod('');
-                    setStep(2);
-                  }}
-                  testId={`ds-handoff-task-${t.order_no || t.task_id}`}
-                  actionLabel={isRoad ? 'Close out' : 'Collect'}
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Order</th>
+                    <th>Job</th>
+                    <th>Staging</th>
+                    <th>Weight</th>
+                    <th>Shipped</th>
+                    <th>Picked up</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="ds-handoff-queue">
+                  {actionable.map((t) => (
+                    <TaskRow
+                      key={t.task_id}
+                      task={t}
+                      onOpen={(task) => {
+                        setSelected(task);
+                        setDone(null);
+                        setToteText('');
+                        setOtp('');
+                        setOtpSent(false);
+                        setCod('');
+                        setStep(2);
+                      }}
+                      testId={`ds-handoff-task-${t.order_no || t.task_id}`}
+                      actionLabel={isRoad ? 'Close out' : 'Collect'}
+                      onAssign={
+                        ['UNASSIGNED', 'OFFERED'].includes(t.status)
+                          ? (task) => {
+                            setAssignFor(task);
+                            setQrText('');
+                            setAssignError('');
+                            setDone(null);
+                          }
+                          : null
+                      }
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {assignFor && (
+          <div className="form-group" style={{ marginTop: 12 }} data-testid="ds-handoff-assign-panel">
+            <label className="form-label" htmlFor="ds-handoff-assign-qr">
+              <ScanLine size={14} /> Rider QR code
+            </label>
+            <input
+              id="ds-handoff-assign-qr"
+              className="form-input mono-num"
+              value={qrText}
+              onChange={(e) => setQrText(e.target.value)}
+              placeholder="Scan the rider's personal QR"
+              disabled={assignBusy}
+              data-testid="ds-handoff-assign-input"
+              autoFocus
+            />
+            <div className="scan-feedback scan-feedback--hint" style={{ marginTop: 6 }}>
+              Handing <strong className="mono-num">{assignFor.order_no || assignFor.task_id}</strong> to
+              the rider whose code you scan. The scan is the acceptance: the job moves to
+              accepted straight away, with no dropdown and no second tap.
+            </div>
+            {assignError && (
+              <div className="scan-feedback scan-feedback--error" style={{ marginTop: 6 }}
+                   data-testid="ds-handoff-assign-error">
+                <AlertTriangle size={14} /> {assignError}
+              </div>
+            )}
+            <div className="wf-panel__actions" style={{ marginTop: 8 }}>
+              <button
+                className="scan-btn"
+                onClick={submitAssign}
+                disabled={assignBusy || !qrText.trim()}
+                data-testid="ds-handoff-assign-confirm"
+              >
+                {assignBusy ? 'Assigning…' : 'Assign to rider'}
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => { setAssignFor(null); setQrText(''); setAssignError(''); }}
+                disabled={assignBusy}
+                data-testid="ds-handoff-assign-cancel"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         )}
@@ -354,17 +471,33 @@ function Counter({ siteId, storeCode, segment }) {
             <div className="scan-feedback scan-feedback--hint" style={{ marginBottom: 8 }}>
               {closed.length} closed job{closed.length === 1 ? '' : 's'} — read only
             </div>
-            <div className="item-list" data-testid="ds-handoff-closed">
-              {closed.map((t) => (
-                <TaskRow
-                  key={t.task_id}
-                  task={t}
-                  onOpen={() => {}}
-                  disabled
-                  testId={`ds-handoff-closed-${t.order_no || t.task_id}`}
-                  actionLabel="Closed"
-                />
-              ))}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Order</th>
+                    <th>Job</th>
+                    <th>Staging</th>
+                    <th>Weight</th>
+                    <th>Shipped</th>
+                    <th>Picked up</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody data-testid="ds-handoff-closed">
+                  {closed.map((t) => (
+                    <TaskRow
+                      key={t.task_id}
+                      task={t}
+                      onOpen={() => {}}
+                      disabled
+                      testId={`ds-handoff-closed-${t.order_no || t.task_id}`}
+                      actionLabel="Closed"
+                    />
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}

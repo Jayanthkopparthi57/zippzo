@@ -18,6 +18,12 @@ class RiderProfile(models.Model):
     is_online = models.BooleanField(default=False)
     current_site = models.ForeignKey('network.Site', null=True, on_delete=models.SET_NULL, related_name='rider_profiles')
     rating = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
+    # Where the rider was last seen, stamped by the rider app itself while it
+    # is online. Null until the first accepted location - a rider who has never
+    # shared, or whose browser refused the permission, simply has no pin.
+    last_lat = models.FloatField(null=True, blank=True)
+    last_lng = models.FloatField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'rider_profiles'

@@ -170,6 +170,49 @@ class AdminOnlyEndpointTests(TestCase):
                          'IsAdminUser now blocks SUPER_ADMIN as well')
 
 
+class CurrentUserEndpointTests(TestCase):
+    """`/iam/auth/me` lets every role validate its own session on boot.
+
+    Session restore used to call /iam/users/, which is admin-only, so a
+    shopper, rider or warehouse operator was logged out on reload.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from django.contrib.auth.hashers import make_password
+
+        from bounded.iam.models import User
+
+        cls.staff = User.objects.create(
+            email='me-staff@zippzo.in',
+            password_hash=make_password('MeTest123!'),
+            role='WAREHOUSE_STAFF',
+            status='ACTIVE',
+        )
+        cls.shopper = User.objects.create(
+            email='me-shopper@zippzo.in',
+            password_hash=make_password('MeTest123!'),
+            role='CUSTOMER',
+            status='ACTIVE',
+        )
+
+    def test_anonymous_is_rejected(self):
+        response = APIClient().get('/api/iam/auth/me')
+        self.assertIn(response.status_code, (401, 403))
+
+    def test_any_authenticated_role_gets_its_own_record(self):
+        for user in (self.staff, self.shopper):
+            with self.subTest(role=user.role):
+                api = APIClient()
+                api.force_authenticate(user=user)
+                response = api.get('/api/iam/auth/me')
+                self.assertEqual(200, response.status_code)
+                self.assertEqual(user.email, response.data['user']['email'])
+                self.assertEqual(user.role, response.data['user']['role'])
+                self.assertEqual('WMS' if user.role == 'WAREHOUSE_STAFF' else 'SHOPPER',
+                                 response.data['target_app'])
+
+
 class LoginEndpointPublicTests(TestCase):
     """Needs the DB: it proves the one deliberate public endpoint still works."""
 
