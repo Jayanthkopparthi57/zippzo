@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ShoppingBasket, ClipboardList, Bell, Users, MapPin,
+  ShoppingBasket, ClipboardList, Bell, Users, MapPin, ChevronDown, BellRing,
 } from 'lucide-react';
 import { useTabs } from '../context/TabContext';
 import { myAddresses, asList } from '../views/darkstore/useDarkStore';
@@ -71,10 +71,27 @@ export default function ShopShell({ children }) {
   return (
     <div className="shop-app">
       <header className="shop-topbar">
-        <div className="shop-brand">
+        <div className="shop-brand" title="Zippzo — groceries in minutes">
           <img className="shop-brand__mark" src="/zippzo-logo-192.png" alt="Zippzo" />
-          <span className="shop-brand__word">ZIPPZO</span>
+          <span className="shop-brand__stack">
+            <span className="shop-brand__word">ZIPPZO</span>
+            <span className="shop-brand__tag">GROCERIES IN MINUTES</span>
+          </span>
         </div>
+
+        <button
+          type="button"
+          className="shop-deliver"
+          onClick={goAccount}
+          title={home ? where : 'Add a delivery address'}
+        >
+          <MapPin size={18} className="shop-deliver__pin" />
+          <span className="shop-deliver__body">
+            <span className="shop-deliver__label">DELIVER TO</span>
+            <span className="shop-deliver__text">{home ? where : 'Add a delivery address'}</span>
+          </span>
+          <ChevronDown size={16} className="shop-deliver__chev" />
+        </button>
 
         <nav className="shop-nav" aria-label="Shopper">
           {NAV.map((item) => {
@@ -105,16 +122,17 @@ export default function ShopShell({ children }) {
 
         <button
           type="button"
-          className="shop-addr"
-          onClick={goAccount}
-          title={home ? where : 'Add a delivery address'}
+          className="shop-bell"
+          onClick={() => openTab('shop-notifications', 'Notifications', 'Bell')}
+          aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+          title="Notifications"
         >
-          <MapPin size={15} />
-          <span className="shop-addr__body">
-            <span className="shop-addr__label">Deliver to</span>
-            <span className="shop-addr__text">{where}</span>
-          </span>
-          <span className="shop-addr__cta">{home ? 'Change' : 'Add'}</span>
+          {unread > 0 ? <BellRing size={19} /> : <Bell size={19} />}
+          {unread > 0 && (
+            <span className="shop-bell__badge" aria-label={`${unread} unread`}>
+              {unread > 99 ? '99+' : unread}
+            </span>
+          )}
         </button>
       </header>
 

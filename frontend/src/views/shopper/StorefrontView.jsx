@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, X, Plus, Minus, Trash2, MapPin, Clock, ChevronRight, ChevronLeft,
-  ShoppingBasket, Package, Percent, Truck, Smartphone, Banknote,
-  Check, Star, Heart, AlertTriangle, RefreshCw, Store, Tag, ArrowRight,
+  ShoppingBasket, Package, Truck, Smartphone, Banknote,
+  Check, Star, AlertTriangle, RefreshCw, Store, Tag, ArrowRight,
   Apple, Milk, Cookie, CupSoda, Soup, SprayCan, Baby, Croissant, Pill, Wheat,
   LocateFixed,
 } from 'lucide-react';
@@ -10,9 +10,9 @@ import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../context/AuthContext';
 import { describeError } from '../../api/client';
 import {
-  storefront, placeOrder, myOrders, myAddresses, saveAddress,
+  storefront, placeOrder, myAddresses, saveAddress,
   setDefaultAddress, removeAddress, activeCoupons, skuReviews, postReview,
-  deliveryCoverage, cashfreePaymentStatus, asList, num,
+  deliveryCoverage, cashfreePaymentStatus, asList,
 } from '../darkstore/useDarkStore';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -151,9 +151,10 @@ function ProductCard({ item, qty, onAdd, onInc, onDec, onOpen }) {
   );
 }
 
-/* ── product detail sheet ────────────────────────────────────────────────── */
+/* ── product detail page ─────────────────────────────────────────────────── */
 
-function ProductSheet({ item, onClose, qty, onAdd, promiseMinutes = 15 }) {
+function ProductPage({ item, qty, onAdd, onInc, onDec, promiseMinutes = 15,
+                       onBack, siteName, onBuyNow, placing, refusal, clearRefusal }) {
   const [reviews, setReviews] = useState([]);
   const [imageIndex, setImageIndex] = useState(0);
   const [rating, setRating] = useState(5);
@@ -174,72 +175,149 @@ function ProductSheet({ item, onClose, qty, onAdd, promiseMinutes = 15 }) {
     setBusy(false);
   };
   const off = item.on_offer && Number(item.mrp) > Number(item.price);
+  const pct = off ? Math.round((1 - Number(item.price) / Number(item.mrp)) * 100) : 0;
+  const low = item.available > 0 && item.available <= 5;
+  const unitPrice = item.weight_g && Number(item.weight_g) > 0 ? Number(item.price) / (Number(item.weight_g) / 100) : null;
+  const images = item.images && item.images.length ? item.images : [item.image];
+  const ratingValue = Number(item.rating || 0);
+  const qtyInBasket = qty || 0;
+
   return (
-    <div className="shop-sheet-backdrop" onClick={onClose}>
-      <div className="shop-sheet" onClick={(e) => e.stopPropagation()}>
-        <button className="shop-sheet__close" onClick={onClose} aria-label="Close">
-          <X size={16} />
+    <div className="view-container shop-pdp">
+      <div className="shop-pdp__crumbs">
+        <button type="button" className="shop-pdp__back" onClick={onBack} aria-label="Back to storefront">
+          <ChevronLeft size={17} /> Back to shelf
         </button>
-        <ProductImg item={{ ...item, image: (item.images || [])[imageIndex] || item.image }} className="shop-sheet__img" />
-        {(item.images || []).length > 1 && (
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 6 }}>
-            {(item.images || []).map((url, index) => (
-              <button
-                  key={`${url}-${index}`}
-                  type="button"
-                  onClick={() => setImageIndex(index)}
-                  style={{ border: imageIndex === index ? '2px solid var(--shop-primary)' : '1px solid var(--shop-border)', borderRadius: 8, padding: 2, background: 'transparent' }}
-                  aria-label={`Show photo ${index + 1}`}
-                >
-                  <img src={url} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, display: 'block' }} />
+        <span className="shop-pdp__crumb">Groceries <ChevronRight size={12} /> {item.category || 'Others'} <ChevronRight size={12} /> <span>{item.name}</span></span>
+      </div>
+
+      <div className="shop-pdp__panel">
+        <div className="shop-pdp__gallery">
+          <div className="shop-pdp__imgwrap">
+            <ProductImg item={{ ...item, image: images[imageIndex] || item.image }} className="shop-pdp__img" />
+            {off && <span className="shop-pdp__off">{pct}% OFF</span>}
+            {low && <span className="shop-pdp__low">Only {item.available} left</span>}
+          </div>
+          {images.length > 1 && (
+            <div className="shop-pdp__thumbs">
+              {images.map((url, index) => (
+                <button key={`${url}-${index}`} type="button" onClick={() => setImageIndex(index)}
+                  className={`shop-pdp__thumb${index === imageIndex ? ' shop-pdp__thumb--on' : ''}`}
+                  aria-label={`Show photo ${index + 1}`}>
+                  <img src={url} alt="" />
                 </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="shop-pdp__info">
+          <div className="shop-pdp__brand">{(item.brand || item.category || 'Zippzo').toUpperCase()}</div>
+          <h1 className="shop-pdp__name">{item.name}</h1>
+          <div className="shop-pdp__meta">{[item.pack_size, item.category].filter(Boolean).join(' · ') || 'Each'}</div>
+
+          {ratingValue > 0 && (
+            <div className="shop-pdp__rating">
+              <Star size={14} fill="#f4b400" color="#f4b400" />
+              <strong>{ratingValue.toFixed(1)}</strong>
+              {Number(item.review_count) > 0 && <span>({item.review_count} reviews)</span>}
+            </div>
+          )}
+
+          <div className="shop-pdp__pricerow">
+            <span className="shop-pdp__price">{rupees(item.price)}</span>
+            {off && <span className="shop-pdp__mrp">{rupees(item.mrp)}</span>}
+            {off && <span className="shop-pdp__save">Save {rupees(Number(item.mrp) - Number(item.price))} ({pct}% off)</span>}
+          </div>
+          {unitPrice != null && <div className="shop-pdp__unit">{rupees(unitPrice)} / 100 g</div>}
+
+          <div className="shop-pdp__eta">
+            <Truck size={15} />
+            <span>Delivery in about <strong>{promiseMinutes || 10} minutes</strong> · from {siteName || 'this store'}</span>
+          </div>
+
+          <div className="shop-pdp__badges">
+            {[
+              { label: 'Quality checked', sub: 'picked and checked at the store' },
+              { label: 'Best price', sub: 'MRP or lower, always' },
+              { label: 'Easy returns', sub: 'not happy — we replace it' },
+            ].map((b) => (
+              <div key={b.label} className="shop-pdp__badge">
+                <strong>{b.label}</strong>
+                <span>{b.sub}</span>
+              </div>
             ))}
           </div>
-        )}
-        <div className="shop-sheet__brand">{item.brand || item.category}</div>
-        <h2 className="shop-sheet__name">{item.name}</h2>
-        <div className="shop-sheet__pack">{item.pack_size} · {item.category}</div>
-          <div className="shop-sheet__eta">
-          <Clock size={11} /> Delivery in {promiseMinutes || 10} minutes
-        </div>
-        <div className="shop-sheet__pricerow">
-          <span className="shop-sheet__price" data-testid="product-price">{rupees(item.price)}</span>
-          {off && <span className="shop-sheet__mrp">{rupees(item.mrp)}</span>}
-          {off && <span className="shop-sheet__save">SAVE {rupees(Number(item.mrp) - Number(item.price))}</span>}
-        </div>
-        {item.description && <p className="shop-sheet__desc">{item.description}</p>}
-        {(item.ingredients || item.allergens || item.storage_notes || (item.nutrition_facts && Object.keys(item.nutrition_facts).length)) && (
-          <div style={{ display: 'grid', gap: 8, marginTop: 8, fontSize: 13 }}>
-            {item.ingredients && <div><strong>Ingredients:</strong> {item.ingredients}</div>}
-            {item.allergens && <div><strong>Allergens:</strong> {item.allergens}</div>}
-            {item.storage_notes && <div><strong>Storage:</strong> {item.storage_notes}</div>}
-            {item.nutrition_facts && Object.keys(item.nutrition_facts).length > 0 && (
-              <div><strong>Nutrition:</strong> {Object.entries(item.nutrition_facts).map(([key, value]) => `${key}: ${value}`).join(' · ')}</div>
-            )}
-            {item.weight_g && <div><strong>Net weight:</strong> {Number(item.weight_g) / 1000} kg</div>}
-          </div>
-        )}
-        <button className="btn btn-primary btn-block" data-testid="product-add"
-          onClick={() => { onAdd(item); onClose(); }} disabled={item.available <= 0}>
-          {qty > 0 ? `In basket (${qty}) · Add more` : 'ADD TO BASKET'}
-        </button>
 
-        <div className="shop-reviews">
+          <div className="shop-pdp__buyrow">
+            {item.available > 0 ? (
+              <div className="shop-step shop-pdp__step">
+                <button onClick={() => (qtyInBasket > 0 ? onDec(item) : null)} aria-label="Remove one" disabled={qtyInBasket === 0}>
+                  {qtyInBasket <= 1 ? <Trash2 size={15} /> : <Minus size={15} />}
+                </button>
+                <span className="shop-step__qty">{qtyInBasket || 1}</span>
+                <button onClick={() => onInc(item)} disabled={qtyInBasket >= item.available} aria-label="Add one">
+                  <Plus size={15} />
+                </button>
+              </div>
+            ) : null}
+            <button className="shop-btn shop-btn--ghost shop-pdp__addcart" data-testid="product-add"
+              onClick={() => onAdd(item)} disabled={item.available <= 0}>
+              {qtyInBasket > 0 ? `In basket (${qtyInBasket}) · Add more` : 'Add to basket'}
+            </button>
+            <button className="shop-btn shop-btn--primary shop-pdp__buynow"
+              onClick={() => onBuyNow(item, Math.max(1, qtyInBasket))}
+              disabled={item.available <= 0 || placing}>
+              {placing ? 'Placing…' : 'Buy now'}
+            </button>
+          </div>
+          {item.available <= 0 && <div className="shop-pdp__oos">Out of stock at this store</div>}
+          {clearRefusal && refusal && (
+            <div className="shop-pdp__refusal" role="alert">
+              <AlertTriangle size={14} /> {refusal}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {item.description && <div className="shop-pdp__about">{item.description}</div>}
+
+      <div className="shop-pdp__details">
+        <div className="shop-pdp__block">
+          <div className="shop-pdp__blocktitle">Product details</div>
+          {[
+            ['Brand', item.brand || '—'],
+            ['Pack size', item.pack_size || 'Each'],
+            ['Category', item.category || 'Others'],
+            ['Availability', item.available > 0 ? `${item.available} in stock` : 'Out of stock'],
+            ['Sold by', siteName || 'This dark store'],
+          ].map(([label, value]) => (
+            <div key={label} className="shop-pdp__row">
+              <span>{label}</span>
+              <span>{value}</span>
+            </div>
+          ))}
+          {(item.ingredients || item.allergens || item.storage_notes) && (
+            <div className="shop-pdp__extras">
+              {item.ingredients && <div><strong>Ingredients</strong><p>{item.ingredients}</p></div>}
+              {item.allergens && <div><strong>Allergens</strong><p>{item.allergens}</p></div>}
+              {item.storage_notes && <div><strong>Storage</strong><p>{item.storage_notes}</p></div>}
+            </div>
+          )}
+        </div>
+
+        <div className="shop-pdp__block">
           <div className="shop-reviews__head">
-            <span className="shop-reviews__title">Ratings & Reviews</span>
+            <span className="shop-pdp__blocktitle">Ratings & reviews</span>
             <span className="shop-section__meta">{reviews.length} review{reviews.length === 1 ? '' : 's'}</span>
           </div>
           {reviews.length === 0 && (
-            <p style={{ fontSize: 13, color: 'var(--shop-ink-3)' }}>
-              No reviews yet. Be the first to review this product.
-            </p>
+            <p style={{ fontSize: 13, color: 'var(--shop-ink-3)' }}>No reviews yet. Be the first to review this product.</p>
           )}
           {reviews.map((rv) => (
             <div className="shop-review" key={rv.review_id}>
               <div className="shop-review__top">
-                <span className="shop-review__stars">
-                  {'★'.repeat(rv.rating)}{'☆'.repeat(5 - rv.rating)}
-                </span>
+                <span className="shop-review__stars">{'★'.repeat(rv.rating)}{'☆'.repeat(5 - rv.rating)}</span>
                 <span className="shop-review__name">{rv.customer_name}</span>
               </div>
               {rv.comment && <div className="shop-review__text">{rv.comment}</div>}
@@ -249,19 +327,15 @@ function ProductSheet({ item, onClose, qty, onAdd, promiseMinutes = 15 }) {
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Write a review</div>
             <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
               {[1, 2, 3, 4, 5].map((s) => (
-                <button key={s} onClick={() => setRating(s)}
-                  style={{ background: 'none', border: 0, cursor: 'pointer', padding: 0 }}>
-                  <Star size={20} fill={s <= rating ? '#f59e0b' : 'none'}
-                    color={s <= rating ? '#f59e0b' : '#d1d5db'} />
+                <button key={s} onClick={() => setRating(s)} style={{ background: 'none', border: 0, cursor: 'pointer', padding: 0 }}>
+                  <Star size={20} fill={s <= rating ? '#f4b400' : 'none'} color={s <= rating ? '#f4b400' : '#d1d5db'} />
                 </button>
               ))}
             </div>
-            <textarea className="shop-field" rows={2} value={comment}
-              onChange={(e) => setComment(e.target.value)}
+            <textarea className="shop-field" rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
               placeholder="Share your experience"
-              style={{ width: '100%', border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 8, fontSize: 13, resize: 'vertical' }} />
-            <button className="btn btn-secondary" style={{ marginTop: 8 }}
-              onClick={submit} disabled={busy || !comment.trim()}>
+              style={{ width: '100%', border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 8, fontSize: 13, resize: 'vertical', fontFamily: 'inherit' }} />
+            <button className="btn btn-secondary" style={{ marginTop: 8 }} onClick={submit} disabled={busy || !comment.trim()}>
               {busy ? 'Posting…' : 'Post review'}
             </button>
           </div>
@@ -270,7 +344,6 @@ function ProductSheet({ item, onClose, qty, onAdd, promiseMinutes = 15 }) {
     </div>
   );
 }
-
 /* ── receipt screen ──────────────────────────────────────────────────────── */
 
 function ReceiptScreen({ placed, onDone }) {
@@ -706,13 +779,16 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
     setCouponInput('');
   };
 
-  const submit = async () => {
+  /* Shared order placement — basket checkout and Buy now both go through
+     here. `clearBasket` is false for Buy now: it must not touch the
+     shopper's basket. */
+  const placeLines = async ({ items, coupon, clearBasket, onPlaced }) => {
     if (!serviceable) {
       setRefusal(`We do not deliver to ${shop?.pincode || 'this address'} from `
         + `${shop?.name || 'this store'} yet. Choose another store or address.`);
       return;
     }
-    if (!addressId) { setShowAddrPanel(true); return; }
+    if (!addressId) { setShowAddrPanel(true); setCartOpen(true); return; }
     if (!addr?.pincode || addr.pincode.trim() !== deliveryPincode) {
       setRefusal('Choose or add a delivery address with the same pincode used to load this store’s products.');
       setShowAddrPanel(true);
@@ -725,9 +801,9 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
       const res = await placeOrder({
         site: siteCode,
         address_id: addressId,
-        items: lines.map((l) => ({ sku_id: l.item.sku_id, qty: l.qty })),
+        items,
         payment_method: payMethod,
-        coupon_code: appliedCoupon?.code || '',
+        coupon_code: coupon,
       });
       if (payMethod === 'CASHFREE') {
         onlineOrderCreated = res;
@@ -744,22 +820,24 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
         if (verified.payment_status !== 'CAPTURED') {
           if (verified.payment_status === 'FAILED') {
             setPendingPayment(null);
-            setRefusal('Cashfree could not complete the payment. Your basket is still here; you can try again or choose Cash on Delivery.');
+            setRefusal(clearBasket
+              ? 'Cashfree could not complete the payment. Your basket is still here; you can try again or choose Cash on Delivery.'
+              : 'Cashfree could not complete the payment. Place the order again or choose Cash on Delivery.');
           } else {
-            setRefusal('Payment is still being confirmed. Check its status below before placing another order.');
+            setRefusal('Payment is still being confirmed. Check its status before placing another order.');
           }
         } else {
-          setBasket({});
-          setAppliedCoupon(null);
+          if (clearBasket) { setBasket({}); setAppliedCoupon(null); }
           setPlaced({ ...res, payment_method: 'Cashfree', status: 'CONFIRMED' });
           setPendingPayment(null);
           setCartOpen(false);
+          onPlaced?.();
         }
       } else {
         setPlaced(res);
-        setBasket({});
-        setAppliedCoupon(null);
+        if (clearBasket) { setBasket({}); setAppliedCoupon(null); }
         setCartOpen(false);
+        onPlaced?.();
       }
     } catch (e) {
       const message = onlineOrderCreated
@@ -770,6 +848,19 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
     }
     setPlacing(false);
   };
+
+  const submit = () => placeLines({
+    items: lines.map((l) => ({ sku_id: l.item.sku_id, qty: l.qty })),
+    coupon: appliedCoupon?.code || '',
+    clearBasket: true,
+  });
+
+  const buyNow = (item, qty) => placeLines({
+    items: [{ sku_id: item.sku_id, qty }],
+    coupon: '',
+    clearBasket: false,
+    onPlaced: () => setSheetItem(null),
+  });
 
   const refreshPendingPayment = async () => {
     if (!pendingPayment?.orderId) return;
@@ -1138,6 +1229,25 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
   );
 
   /* ── main ── */
+  if (sheetItem) {
+    // Clicking a product opens the dedicated detail page instead of the
+    // old bottom sheet — same information model as the app.
+    return (
+      <ProductPage
+        item={sheetItem}
+        qty={basket[sheetItem.sku_id] || 0}
+        onAdd={add} onInc={inc} onDec={dec}
+        promiseMinutes={shop?.promise_minutes || 10}
+        siteName={shop?.name}
+        onBack={() => setSheetItem(null)}
+        onBuyNow={buyNow}
+        placing={placing}
+        refusal={refusal}
+        clearRefusal={Boolean(refusal)}
+      />
+    );
+  }
+
   return (
     <div className="view-container shop-cart-layout">
       <div className="shop-cart-main">
@@ -1387,11 +1497,6 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
           </span>
           <span className="shop-cartbar__cta">View basket <ArrowRight size={15} /></span>
         </button>
-      )}
-
-      {sheetItem && (
-        <ProductSheet item={sheetItem} qty={basket[sheetItem.sku_id] || 0}
-          onAdd={add} onClose={() => setSheetItem(null)} />
       )}
     </div>
   );
