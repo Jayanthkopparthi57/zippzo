@@ -4,8 +4,6 @@ import {
   Boxes, ScanLine, Play, Send,
 } from 'lucide-react';
 import ScanInput from '../../components/ui/ScanInput';
-import WorkflowStepper from '../../components/ui/WorkflowStepper';
-import ProgressRing from '../../components/ui/ProgressRing';
 import ProductCard from '../../components/ui/ProductCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
@@ -20,12 +18,6 @@ import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../ap
  * units that genuinely have no barcode, which is the one case where scanning
  * cannot confirm the count.
  */
-const STEPS = [
-  { key: 'select', title: 'Select Task', description: 'Choose a pick task from the queue' },
-  { key: 'bin', title: 'Scan Bin', description: 'Confirm you are at the right location' },
-  { key: 'item', title: 'Scan Product', description: 'Scan each unit until the line is full' },
-  { key: 'done', title: 'Drop', description: 'Release the bin and move to packing' },
-];
 
 export default function PickExecutionView() {
   const toast = useToast();
@@ -224,12 +216,11 @@ export default function PickExecutionView() {
   if (!task) {
     return (
       <div>
-        <WorkflowStepper steps={STEPS} current={0} />
 
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><ScanLine size={17} /> Pick Queue</div>
+              <div className="wf-peek"> Pick Queue</div>
               <div className="wf-panel__hint">
                 {loading ? 'Loading tasks…' : `${active.length} open task${active.length === 1 ? '' : 's'}`}
               </div>
@@ -305,18 +296,17 @@ export default function PickExecutionView() {
 
   return (
     <div>
-      <WorkflowStepper steps={STEPS} current={step} />
 
       <div className="wf-split">
         <div className="wf-panel">
           <div className="wf-panel__header">
-            <div className="wf-panel__title"><ScanLine size={17} /> Scan</div>
+            <div className="wf-peek"> Scan</div>
           </div>
 
           {step === 1 && (
             <ScanInput
               key="bin"
-              label="Step 1 · Scan the bin"
+              label="Scan the bin"
               placeholder="Scan bin barcode to confirm location"
               value={scanText}
               onChange={setScanText}
@@ -331,7 +321,7 @@ export default function PickExecutionView() {
             <>
               <ScanInput
                 key="item"
-                label={`Step 2 · Scan ${need} × ${skuFor(task)?.sku_code || skuFor(task)?.name || task.sku}`}
+                label={`Scan ${need} × ${skuFor(task)?.sku_code || skuFor(task)?.name || task.sku}`}
                 placeholder="Scan each product unit"
                 value={scanText}
                 onChange={setScanText}
@@ -407,17 +397,14 @@ export default function PickExecutionView() {
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title">
-                <Package size={17} /> {task.product_name || task.description || `Task #${task.id}`}
+              <div className="wf-peek">
+ {task.product_name || task.description || `Task #${task.id}`}
               </div>
               <div className="wf-panel__hint mono-num">{skuFor(task)?.sku_code || task.sku}</div>
             </div>
-            <ProgressRing
-              value={done}
-              total={need}
-              label={`${done} of ${need} picked`}
-              dataTestId="pick-progress"
-            />
+            <span className="mono-num" style={{ fontSize: 12, color: 'var(--text-muted)' }} data-testid="pick-progress-value">
+              {done} of {need} picked
+            </span>
           </div>
 
           <div className="entity-card" style={{ marginBottom: 12 }}>

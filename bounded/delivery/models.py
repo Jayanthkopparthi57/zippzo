@@ -15,6 +15,11 @@ class RiderProfile(models.Model):
     vehicle_capacity_cbm = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True)
     can_carry_cold = models.BooleanField(default=False)
     kyc_status = models.CharField(max_length=20, choices=KYC_CHOICES, default='PENDING')
+    kyc_number = models.CharField(max_length=80, blank=True)
+    kyc_document_type = models.CharField(max_length=30, blank=True)
+    kyc_document_url = models.CharField(max_length=500, blank=True)
+    kyc_reviewed_at = models.DateTimeField(null=True, blank=True)
+    kyc_reviewed_by = models.CharField(max_length=64, blank=True)
     is_online = models.BooleanField(default=False)
     current_site = models.ForeignKey('network.Site', null=True, on_delete=models.SET_NULL, related_name='rider_profiles')
     rating = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
@@ -74,6 +79,7 @@ class DeliveryTask(models.Model):
     # removed, since the order itself is the durable record.
     staging_bin = models.CharField(max_length=50, null=True, blank=True)
     packed_at = models.DateTimeField(null=True, blank=True)
+    cash_collected_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

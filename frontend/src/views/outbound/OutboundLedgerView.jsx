@@ -106,15 +106,16 @@ const OUTBOUND_FEEDS = [
   },
 ];
 
-export default function OutboundLedgerView() {
+export default function OutboundLedgerView({ initialFeed = 'picks' }) {
   return (
     <LedgerScreen
       prefix="obl"
       title="Outbound Ledger"
       subtitle="Picks, packs and transfers — who did what, and when"
       feeds={OUTBOUND_FEEDS}
-      initialFeed="picks"
-      indexes={['staff', 'sites', 'skus', 'orders']}
+      initialFeed={initialFeed}
+      indexes={['sites', 'skus', 'orders']}
+      tableOnly
     />
   );
 }

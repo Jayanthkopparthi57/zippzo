@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { fetchApi, postApi, patchApi, describeError, unwrapList } from '../api/client';
 import DataTable from '../components/ui/DataTable';
@@ -7,7 +7,7 @@ import RiderAdminPanel from './admin/RiderAdminPanel';
 import ManpowerPanel, { monthlyCost } from './admin/ManpowerPanel';
 import {
   ShieldCheck, Building2, Users, X, Pencil, Ban, RotateCcw, Wallet, IndianRupee,
-  MapPin, Bike, Clock,
+  MapPin, Bike, Clock, Warehouse, Store
 } from 'lucide-react';
 
 const COMP_BASIS = ['MONTHLY', 'WEEKLY', 'DAILY', 'HOURLY', 'PER_TASK'];
@@ -21,7 +21,7 @@ function blankCompForm() {
 }
 
 export default function AdminSettingsView() {
-  const { user } = useAuth();
+  const { user, facility, isDarkStore } = useAuth();
   const [employees, setEmployees] = useState([]);
   const [stores, setStores] = useState([]);
   const [payroll, setPayroll] = useState([]);
@@ -34,36 +34,58 @@ export default function AdminSettingsView() {
     return () => { cancelled = true; };
   }, [activeTab]);
 
-  const loadData = async (isCancelled = () => false) => {
-    setLoading(true);
+  /**
+   * The staff directory is a full account table with a site join per row. On a
+   * cold managed Postgres that one read has taken 15s+, and a single
+   * Promise.all meant every other panel on this screen - the store network,
+   * the delivery pricing board, payroll - stayed blank until it answered.
+   * The directory therefore loads on its own and paints whenever it arrives.
+   */
+  const loadEmployees = async (isCancelled = () => false) => {
     try {
-      // Every panel needs the store list and the people list, so they load
-      // once per tab switch instead of being re-fetched by each panel. The
-      // tab's own data rides along in the same round trip: publishing the
-      // stores before their pricing rules arrive would let a save fire
-      // against a rule the panel has not seen yet.
-      const [usersRes, sitesRes, tabRes] = await Promise.all([
-        fetchApi('/iam/users/').catch(() => []),
-        fetchApi('/network/sites/'),
-        activeTab === 'compensation'
-          ? fetchApi('/network/payroll/?page_size=500')
-          : activeTab === 'pricing'
-            ? fetchApi('/money/pricing-rules/?page_size=500')
-            : Promise.resolve(null),
-      ]);
+      const usersRes = await fetchApi('/iam/users/?page_size=500');
       if (isCancelled()) return;
       setEmployees(Array.isArray(usersRes) ? usersRes : []);
-      setStores(Array.isArray(sitesRes) ? sitesRes : []);
-      if (activeTab === 'compensation') {
-        setPayroll(unwrapList(tabRes) || []);
-      } else if (activeTab === 'pricing') {
-        setPricing(unwrapList(tabRes) || []);
-      }
+      setTableError('');
     } catch (err) {
-      console.error(err);
-    } finally {
-      if (!isCancelled()) setLoading(false);
+      if (!isCancelled()) {
+        setTableError(`Could not read the staff directory — ${describeError(err)}`);
+      }
     }
+  };
+
+  const loadData = async (isCancelled = () => false) => {
+    setLoading(true);
+    // Not awaited: the directory must never hold up the panels below it.
+    loadEmployees(isCancelled);
+
+    // The site list and the tab's own ledger are independent too, so one
+    // failing read still leaves the other on screen.
+    const tabRead = activeTab === 'compensation'
+      ? fetchApi('/network/payroll/?page_size=500')
+      : activeTab === 'pricing'
+        ? fetchApi('/money/pricing-rules/?page_size=500')
+        : Promise.resolve(null);
+    const [sitesRes, tabRes] = await Promise.all([
+      fetchApi('/network/sites/').then((data) => ({ data }), (error) => ({ error })),
+      tabRead.then((data) => ({ data }), (error) => ({ error })),
+    ]);
+    if (isCancelled()) return;
+
+    if (sitesRes.error) {
+      setSitesError(`Could not read the site network — ${describeError(sitesRes.error)}`);
+    } else {
+      setSitesError('');
+      setStores(Array.isArray(sitesRes.data) ? sitesRes.data : []);
+    }
+    if (tabRes.error) {
+      if (activeTab === 'pricing') setPricingError(describeError(tabRes.error));
+    } else if (activeTab === 'compensation') {
+      setPayroll(unwrapList(tabRes.data) || []);
+    } else if (activeTab === 'pricing') {
+      setPricing(unwrapList(tabRes.data) || []);
+    }
+    setLoading(false);
   };
 
   // iam.User ROLE_CHOICES
@@ -73,14 +95,19 @@ export default function AdminSettingsView() {
   const [modalError, setModalError] = useState('');
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [showStoreModal, setShowStoreModal] = useState(false);
-  const [employeeForm, setEmployeeForm] = useState({ full_name: '', email: '', role: 'WAREHOUSE_STAFF', password: '' });
-  const [storeForm, setStoreForm] = useState({ code: '', name: '', site_type: 'DS', address: '' });
+  const [employeeForm, setEmployeeForm] = useState({
+    full_name: '', email: '', role: 'WAREHOUSE_STAFF', password: '', site_code: facility?.code || ''
+  });
+  const [storeForm, setStoreForm] = useState({ code: '', name: '', site_type: isDarkStore ? 'DS' : 'MH', address: '' });
 
   const [editingUser, setEditingUser] = useState(null);
-  const [editForm, setEditForm] = useState({ full_name: '', role: 'WAREHOUSE_STAFF', status: 'ACTIVE', password: '' });
+  const [editForm, setEditForm] = useState({
+    full_name: '', role: 'WAREHOUSE_STAFF', status: 'ACTIVE', password: '', site_code: ''
+  });
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
   const [tableError, setTableError] = useState('');
+  const [sitesError, setSitesError] = useState('');
 
   const [showCompModal, setShowCompModal] = useState(false);
   const [compForm, setCompForm] = useState(blankCompForm);
@@ -97,7 +124,13 @@ export default function AdminSettingsView() {
 
   const openEdit = (row) => {
     setEditingUser(row);
-    setEditForm({ full_name: row.full_name || '', role: row.role, status: row.status, password: '' });
+    setEditForm({
+      full_name: row.full_name || '',
+      role: row.role,
+      status: row.status,
+      password: '',
+      site_code: row.assigned_site?.code || facility?.code || ''
+    });
     setEditError('');
   };
 
@@ -116,6 +149,7 @@ export default function AdminSettingsView() {
         status: editForm.status,
       };
       if (editForm.password) payload.password = editForm.password;
+      if (editForm.site_code) payload.site_code = editForm.site_code;
       await patchApi(`/iam/users/${editingUser.user_id}/`, payload);
       setEditingUser(null);
       await loadData();
@@ -218,9 +252,12 @@ export default function AdminSettingsView() {
         role: employeeForm.role,
         status: 'ACTIVE',
         password: employeeForm.password,
+        site_code: employeeForm.site_code || facility?.code || '',
       });
       setShowEmployeeModal(false);
-      setEmployeeForm({ full_name: '', email: '', role: 'WAREHOUSE_STAFF', password: '' });
+      setEmployeeForm({
+        full_name: '', email: '', role: 'WAREHOUSE_STAFF', password: '', site_code: facility?.code || ''
+      });
       await loadData();
     } catch (e) {
       setModalError(describeError(e));
@@ -300,64 +337,134 @@ export default function AdminSettingsView() {
     );
   }
 
+  const isWmsMode = !isDarkStore;
+  const currentFacilityType = facility?.site_type || (isDarkStore ? 'DS' : 'MH');
+
   return (
     <div style={{ padding: '24px 32px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-        <ShieldCheck size={28} color="#7c3aed" />
-        <div>
-          <h1 style={{ margin: 0, fontSize: 24, color: '#1e293b' }}>Admin & System Configuration</h1>
-          <p style={{ margin: 0, color: '#64748b' }}>Manage system users, roles, and facilities across the network.</p>
+      {/* Header Banner - Differentiated for WMS Mother Hub vs Localized Dark Store */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 16,
+        marginBottom: 24,
+        background: isWmsMode ? 'linear-gradient(135deg, #f8fafc, #eff6ff)' : 'linear-gradient(135deg, #f0fdf4, #ecfdf5)',
+        border: isWmsMode ? '1px solid #bfdbfe' : '1px solid #a7f3d0',
+        borderRadius: '12px',
+        padding: '18px 24px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{
+            width: 44,
+            height: 44,
+            borderRadius: '10px',
+            background: isWmsMode ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'linear-gradient(135deg, #059669, #047857)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#fff',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+          }}>
+            {isWmsMode ? <Warehouse size={24} /> : <Store size={24} />}
+          </div>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: '#64748b', textTransform: 'uppercase' }}>
+              Admin & System Configuration
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: '#0f172a' }}>
+                {isWmsMode ? 'WMS Warehouse & Mother Hub Administration' : 'Dark Store Localized Administration'}
+              </h1>
+              <span className={`badge ${isWmsMode ? 'badge-info' : 'badge-success'}`} style={{ fontWeight: 800 }}>
+                {isWmsMode ? 'MOTHER HUB (MH)' : 'DARK STORE (DS)'}
+              </span>
+            </div>
+            <p style={{ margin: '4px 0 0', color: '#475569', fontSize: 13 }}>
+              {isWmsMode
+                ? 'Centralized bulk replenishment, cross-docking, facility registry, user access, and network compensation.'
+                : 'Hyperlocal darkstore replenishment, rapid picking zones, delivery radius pricing, rider fleet, and store staff.'}
+            </p>
+          </div>
         </div>
-        {loading && (
-          <span data-testid="admin-loading" style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>
-            Loading…
-          </span>
+
+        {/* Quick Active Store Badge */}
+        {facility && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            background: '#ffffff',
+            padding: '8px 14px',
+            borderRadius: '8px',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+          }}>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Active Facility</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: '#0f172a' }}>{facility.code} — {facility.name}</div>
+            </div>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981' }} />
+          </div>
         )}
       </div>
 
+      {/* Differentiated Tab Navigation */}
       <div className="subtabs-bar" style={{ marginBottom: 24, flexWrap: 'wrap' }}>
         <button className={`subtab-btn ${activeTab === 'employees' ? 'active' : ''}`}
           data-testid="admin-tab-employees" onClick={() => setActiveTab('employees')}>
-          <Users size={16} /> Employees & Roles
+          <Users size={16} /> {isWmsMode ? 'Warehouse Staff & Logins' : 'Store Staff & Pickers'}
         </button>
+
         <button className={`subtab-btn ${activeTab === 'stores' ? 'active' : ''}`}
           data-testid="admin-tab-stores" onClick={() => setActiveTab('stores')}>
-          <Building2 size={16} /> Dark Stores
+          <Building2 size={16} /> Hubs & Dark Store Network
         </button>
+
+        {/* Hyperlocal dark store operations. These stay available whichever
+            facility is active: an operator working from the mother hub still
+            administers the dark stores that hub replenishes. */}
         <button className={`subtab-btn ${activeTab === 'areas' ? 'active' : ''}`}
           data-testid="admin-tab-areas" onClick={() => setActiveTab('areas')}>
-          <MapPin size={16} /> Delivery Areas
+          <MapPin size={16} /> Hyperlocal Delivery Zones
         </button>
         <button className={`subtab-btn ${activeTab === 'pricing' ? 'active' : ''}`}
           data-testid="admin-tab-pricing" onClick={() => setActiveTab('pricing')}>
-          <IndianRupee size={16} /> Pricing
-        </button>
-        <button className={`subtab-btn ${activeTab === 'compensation' ? 'active' : ''}`}
-          data-testid="admin-tab-compensation" onClick={() => setActiveTab('compensation')}>
-          <Wallet size={16} /> Compensation
-        </button>
-        <button className={`subtab-btn ${activeTab === 'manpower' ? 'active' : ''}`}
-          data-testid="admin-tab-manpower" onClick={() => setActiveTab('manpower')}>
-          <Clock size={16} /> Manpower
+          <IndianRupee size={16} /> Instant Delivery Pricing
         </button>
         <button className={`subtab-btn ${activeTab === 'riders' ? 'active' : ''}`}
           data-testid="admin-tab-riders" onClick={() => setActiveTab('riders')}>
-          <Bike size={16} /> Riders
+          <Bike size={16} /> Store Rider Fleet
+        </button>
+
+        {/* Network-wide financial & manpower tools */}
+        <button className={`subtab-btn ${activeTab === 'compensation' ? 'active' : ''}`}
+          data-testid="admin-tab-compensation" onClick={() => setActiveTab('compensation')}>
+          <Wallet size={16} /> Payroll & Compensation
+        </button>
+        <button className={`subtab-btn ${activeTab === 'manpower' ? 'active' : ''}`}
+          data-testid="admin-tab-manpower" onClick={() => setActiveTab('manpower')}>
+          <Clock size={16} /> Facility Manpower Planning
         </button>
       </div>
 
+
+      {(tableError || sitesError) && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b',
+          padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12, fontWeight: 600,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+          data-testid="admin-load-error">
+          <span>{tableError || sitesError}</span>
+          <button className="modal-close" style={{ border: 'none' }}
+            onClick={() => { setTableError(''); setSitesError(''); }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {activeTab === 'employees' && (
         <>
-          {tableError && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b',
-              padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12, fontWeight: 600,
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>{tableError}</span>
-              <button className="modal-close" style={{ border: 'none' }} onClick={() => setTableError('')}>
-                <X size={14} />
-              </button>
-            </div>
-          )}
         <DataTable
           title="System Users & Employees"
           subtitle="Manage warehouse associates, pickers, riders, and administrators."
@@ -375,6 +482,17 @@ export default function AdminSettingsView() {
               <span className={`badge ${r.role === 'SUPER_ADMIN' ? 'badge-purple' : r.role === 'OPS_MANAGER' ? 'badge-info' : 'badge-default'}`}>
                 {r.role}
               </span>
+            )},
+            { header: 'Assigned Site', key: 'assigned_site', render: r => (
+              r.assigned_site?.code ? (
+                <span className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  {r.assigned_site.site_type === 'MH' ? <Warehouse size={11} /> : <Store size={11} />}
+                  <strong>{r.assigned_site.code}</strong>
+                  {r.assigned_site.role_at_site && <span style={{ opacity: 0.8 }}>({r.assigned_site.role_at_site})</span>}
+                </span>
+              ) : (
+                <span style={{ color: '#94a3b8', fontSize: 11 }}>—</span>
+              )
             )},
             { header: 'Status', key: 'status', render: r => (
               <span className={`badge ${r.status === 'ACTIVE' ? 'badge-success' : r.status === 'BLOCKED' ? 'badge-danger' : 'badge-warning'}`}>
@@ -514,7 +632,7 @@ export default function AdminSettingsView() {
               )},
               { header: 'Effective', key: 'effective_from', render: r => (
                 <span style={{ fontSize: 11, color: '#64748b' }}>
-                  {r.effective_from} → {r.effective_to || 'open'}
+                  {r.effective_from} â†’ {r.effective_to || 'open'}
                 </span>
               )},
               { header: 'Status', key: 'is_active', render: r => (
@@ -593,7 +711,7 @@ export default function AdminSettingsView() {
                           disabled={savingFeeSite === s.site_id}
                           data-testid={`pricing-save-${s.code}`}
                           onClick={() => saveFee(s)}>
-                          {savingFeeSite === s.site_id ? 'Saving…' : 'Save'}
+                          {savingFeeSite === s.site_id ? 'Saving€¦' : 'Save'}
                         </button>
                       </td>
                     </tr>
@@ -649,6 +767,24 @@ export default function AdminSettingsView() {
                   <input type="password" className="form-input" value={employeeForm.password} minLength={6}
                     onChange={e => setEmployeeForm(p => ({ ...p, password: e.target.value }))} required />
                 </div>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label className="form-label" style={{ fontSize: 11, fontWeight: 700 }}>Assigned Facility (Store / Hub)</label>
+                <select
+                  className="form-input"
+                  value={employeeForm.site_code || ''}
+                  onChange={e => setEmployeeForm(p => ({ ...p, site_code: e.target.value }))}
+                >
+                  <option value="">— Select facility —</option>
+                  {stores.map(s => (
+                    <option key={s.code} value={s.code}>
+                      {s.code} — {s.name} ({s.site_type === 'MH' ? 'Warehouse Hub' : 'Dark Store'})
+                    </option>
+                  ))}
+                </select>
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#64748b' }}>
+                  Determines which specific warehouse or dark store this user accesses and belongs to.
+                </p>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
                 <button type="button" className="btn-secondary" onClick={() => setShowEmployeeModal(false)}>Cancel</button>
@@ -765,8 +901,23 @@ export default function AdminSettingsView() {
                   New password <span style={{ fontWeight: 500, color: '#94a3b8' }}>(leave blank to keep current)</span>
                 </label>
                 <input type="password" className="form-input" value={editForm.password} minLength={6}
-                  placeholder="••••••"
+                  placeholder="€¢€¢€¢€¢€¢€¢"
                   onChange={e => setEditForm(p => ({ ...p, password: e.target.value }))} />
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label className="form-label" style={{ fontSize: 11, fontWeight: 700 }}>Assigned Facility (Store / Hub)</label>
+                <select
+                  className="form-input"
+                  value={editForm.site_code || ''}
+                  onChange={e => setEditForm(p => ({ ...p, site_code: e.target.value }))}
+                >
+                  <option value="">— Unassigned —</option>
+                  {stores.map(s => (
+                    <option key={s.code} value={s.code}>
+                      {s.code} — {s.name} ({s.site_type === 'MH' ? 'Warehouse Hub' : 'Dark Store'})
+                    </option>
+                  ))}
+                </select>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
                 <button type="button" className="btn-secondary" onClick={() => setEditingUser(null)}>Cancel</button>

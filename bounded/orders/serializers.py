@@ -47,9 +47,15 @@ class CartLineSerializer(serializers.ModelSerializer):
         read_only_fields = ['line_no','unit_price']
 
 class CustomerOrderSerializer(serializers.ModelSerializer):
+    # The operator queue shows who ordered and how many lines are on the order.
+    # Both are derived facts, not columns: exposing them here keeps every screen
+    # from inventing "Customer" / "—" when the fields are simply absent.
+    customer_name = serializers.SerializerMethodField()
+    total_items = serializers.SerializerMethodField()
+
     class Meta:
         model = CustomerOrder
-        fields = ['order_id','order_no','customer','site','address','status','payment_method','payment_status','subtotal','delivery_fee','discount','tax_amount','grand_total','short_amount','cancel_reason','cancel_actor','cancelled_at','picked_up_at','returned_at','delivered_at','delivery_slot','coupon_code','placed_at']
+        fields = ['order_id','order_no','customer','customer_name','total_items','site','address','status','payment_method','payment_status','subtotal','delivery_fee','discount','coupon_discount','combo_discount','combo_offer_details','tax_amount','grand_total','short_amount','cancel_reason','cancel_actor','cancelled_at','picked_up_at','returned_at','delivered_at','delivery_slot','coupon_code','placed_at','promise_at']
         # `status` is read-only here. It used to be writable, which meant
         # PATCH /api/orders/orders/<id>/ with {"status": "DELIVERED"} was a
         # complete state transition: no guard on where it came from, no
@@ -75,13 +81,34 @@ class CustomerOrderSerializer(serializers.ModelSerializer):
                             # Checkout is the only thing that writes these.
                             'customer','site','address','payment_method',
                             'payment_status','subtotal','delivery_fee',
-                            'discount','tax_amount','grand_total',
+                            'discount','coupon_discount','combo_discount',
+                            'combo_offer_details','tax_amount','grand_total',
                             'short_amount']
 
+    def get_customer_name(self, obj):
+        # `customer` is a bare FK to a profile whose display name may be blank;
+        # fall back to the linked account so the queue never shows an empty
+        # cell where a person should be.
+        customer = getattr(obj, 'customer', None)
+        if customer is None:
+            return ''
+        return customer.name or getattr(customer.user, 'full_name', '') or ''
+
+    def get_total_items(self, obj):
+        # Count distinct SKU lines, not units: the queue column says "SKUs".
+        return getattr(obj, 'lines').count() if hasattr(obj, 'lines') else 0
+
 class CustomerOrderLineSerializer(serializers.ModelSerializer):
+    # A past order can name a SKU this store no longer shelves, and the shopper
+    # app prices its detail screen from the current storefront. Without the
+    # snapshot-ish name/code here the line degrades to "Item" and the order
+    # becomes unreadable. Both are read-only views of the related SKU.
+    sku_name = serializers.CharField(source='sku.name', read_only=True)
+    sku_code = serializers.CharField(source='sku.sku_code', read_only=True)
+
     class Meta:
         model = CustomerOrderLine
-        fields = ['line_id','order','line_no','sku','lot','qty','picked_qty','packed_qty','shipped_qty','unit_price','line_total','status']
+        fields = ['line_id','order','line_no','sku','sku_name','sku_code','lot','qty','picked_qty','packed_qty','shipped_qty','unit_price','line_total','status']
         # The three quantity counters are ledger state, not user intent.
         # picked_qty is written by the scan endpoints, packed_qty by packing and
         # shipped_qty at rider pickup. Accepting them over the API would let a

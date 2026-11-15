@@ -3,8 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction
 
-from .models import ReturnOrder, RTVOrder, RTSOrder
-from .serializers import ReturnOrderSerializer, RTVOrderSerializer, RTSOrderSerializer
+from .models import ReturnOrder, RTVOrder, RTSOrder, CancellationPutaway
+from .serializers import ReturnOrderSerializer, RTVOrderSerializer, RTSOrderSerializer, CancellationPutawaySerializer
 
 # A return is only worth opening once the goods have actually left the store
 # for the customer, or once the order failed on the way back.
@@ -396,7 +396,10 @@ class ReturnOrderViewSet(viewsets.ModelViewSet):
                 site=site, sku=sku, lot=lot,
                 qty=line.shipped_qty, direction='IN',
                 movement_type='RETURN', ref_type='RETURN', ref_id=ret.return_id,
-                actor_id=request.data.get('actor_id', ''),
+                # Stamp the operator from the token. A body-supplied actor_id
+                # let the caller name somebody else on a stock movement.
+                actor_id=str(getattr(request.user, 'user_id', '') or ''),
+                actor_type=getattr(request.user, 'role', 'STAFF') or 'STAFF',
                 container='BIN' if container_ref else 'SITE',
                 container_ref=container_ref,
             )
@@ -450,3 +453,71 @@ class RTSOrderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return _scoped_orders(self.request.user, RTSOrder)
+
+
+class CancellationPutawayViewSet(viewsets.ModelViewSet):
+    queryset = CancellationPutaway.objects.select_related(
+        'order', 'site', 'sku', 'lot', 'created_by', 'completed_by').all()
+    serializer_class = CancellationPutawaySerializer
+    filterset_fields = {'status': ['exact'], 'site': ['exact'], 'order': ['exact'], 'sku': ['exact']}
+    search_fields = ['code', 'order__order_no', 'sku__sku_code', 'destination_bin', 'reason_code']
+    ordering_fields = ['created_at', 'qty', 'status']
+
+    def get_permissions(self):
+        from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
+        from bounded.iam.permissions import IsFieldSurface
+        if self.request.method in SAFE_METHODS:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsFieldSurface()]
+
+    def get_queryset(self):
+        from bounded.ds_ops.access import is_superuser, operator_site_codes
+
+        user = self.request.user
+        if is_superuser(user):
+            return self.queryset
+        codes = operator_site_codes(user)
+        return self.queryset.filter(site__code__in=codes)
+
+    def perform_create(self, serializer):
+        from bounded.ds_ops.access import require_site_access, require_session_facility
+        site = serializer.validated_data['site']
+        require_site_access(self.request.user, site.code)
+        require_session_facility(self.request.user, site.code)
+        serializer.save(created_by=self.request.user if getattr(self.request.user, 'is_authenticated', False) else None)
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def complete(self, request, pk=None):
+        from django.utils import timezone
+        from bounded.ds_ops.access import require_site_access, require_session_facility
+        from bounded.iam.names import acting_user_id
+        from bounded.inventory.stock import apply_stock
+
+        putaway = self.get_object()
+        if putaway.status == 'COMPLETED':
+            return Response({'success': True, 'already_completed': True, 'putaway_id': str(putaway.putaway_id), 'status': putaway.status})
+        if putaway.status in ('REJECTED', 'CANCELLED'):
+            return Response({'error': f'Putaway is {putaway.status} and cannot be completed.'}, status=400)
+        if not putaway.destination_bin:
+            return Response({'error': 'destination_bin is required before completion.'}, status=400)
+
+        require_site_access(request.user, putaway.site.code)
+        require_session_facility(request.user, putaway.site.code)
+
+        apply_stock(
+            site=putaway.site, sku=putaway.sku, lot=putaway.lot, qty=putaway.qty,
+            direction='IN', movement_type='CANCEL_PUTAWAY',
+            ref_type='CANCELLATION_PUTAWAY', ref_id=str(putaway.putaway_id),
+            actor_id=acting_user_id(request) or '',
+            actor_type=getattr(request.user, 'role', 'STAFF') or 'STAFF',
+            container='BIN', container_ref=putaway.destination_bin,
+            supply_from='CUSTODY', supply_from_ref=str(putaway.order_id),
+        )
+        now = timezone.now()
+        putaway.status = 'COMPLETED'
+        putaway.completed_at = now
+        putaway.completed_by = request.user if getattr(request.user, 'is_authenticated', False) else None
+        putaway.save(update_fields=['status', 'completed_at', 'completed_by', 'updated_at'])
+        return Response({'success': True, 'putaway_id': str(putaway.putaway_id), 'status': putaway.status})
+

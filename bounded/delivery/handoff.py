@@ -52,8 +52,8 @@ def issue_pickup_otp(order):
 def _start_pod(order, actor):
     """Move the order into POD_PENDING and hand back the OTP the customer must read."""
     otp = issue_pickup_otp(order)
-    from bounded.outbox.models import OutboxEvent
-    OutboxEvent.objects.create(
+    from bounded.outbox.services import enqueue_event
+    enqueue_event(
         aggregate_type='CustomerOrder', aggregate_id=order.order_id,
         event_type='delivery.pod_requested', correlation_id=order.order_id,
         payload_json={
@@ -192,7 +192,7 @@ def rider_pickup(*, task, actor, lpn_barcode=None):
     from bounded.inventory.models import LpnMaster, StockBalance
     from bounded.inventory.stock import already_applied, apply_stock
     from bounded.orders.models import CustomerOrderLine, OrderStatusHistory
-    from bounded.outbox.models import OutboxEvent
+    from bounded.outbox.services import enqueue_event
 
     order = task.order
     order = type(order).objects.select_for_update().select_related('site').get(pk=order.pk)
@@ -283,7 +283,7 @@ def rider_pickup(*, task, actor, lpn_barcode=None):
         order=order, from_status=previous, to_status='PICKED_UP',
         actor_type=actor.role, actor_id=str(actor.user_id))
 
-    OutboxEvent.objects.create(
+    enqueue_event(
         aggregate_type='CustomerOrder', aggregate_id=order.order_id,
         event_type='order.picked_up', correlation_id=order.order_id,
         payload_json={
@@ -315,7 +315,7 @@ def rider_pickup(*, task, actor, lpn_barcode=None):
 def complete_pod(*, task, actor, otp=None, cod_amount=None,
                  signature=None, method=None):
     from bounded.orders.models import OrderStatusHistory
-    from bounded.outbox.models import OutboxEvent
+    from bounded.outbox.services import enqueue_event
 
     order = type(task.order).objects.select_for_update().select_related(
         'site').get(pk=task.order_id)
@@ -372,7 +372,20 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
     cod = None
     cod_due = None
     cod_variance = None
+    # A COD order can be settled online at the door (card / UPI / UPI QR via
+    # Cashfree). The webhook may confirm that capture while the rider's phone
+    # is offline, so `order.payment_method` can still say COD even though the
+    # customer has already paid. If this delivery also records cash, the same
+    # order is collected twice; the provider attempt is the authority, not what
+    # the rider's screen happened to show.
+    from bounded.orders.models import PaymentAttempt
+
+    paid_online_attempt = None
     if order.payment_method == 'COD':
+        paid_online_attempt = PaymentAttempt.objects.filter(
+            order=order, status='PAID').order_by('-updated_at').first()
+
+    if order.payment_method == 'COD' and paid_online_attempt is None:
         if cod_amount is None or str(cod_amount).strip() == '':
             raise HandoffError(
                 f'{order.order_no} is cash on delivery; record what was '
@@ -404,16 +417,36 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
     now = timezone.now()
     previous = order.status
 
+    if paid_online_attempt is not None:
+        # The customer paid Cashfree, not the rider. Record the capture so the
+        # door handover, the payment row and the order agree, and deliberately
+        # write no cash movement: no note ever entered the rider's custody.
+        from bounded.money.models import Payment
+
+        order.payment_method = 'CASHFREE'
+        order.payment_status = 'CAPTURED'
+        Payment.objects.get_or_create(
+            order=order,
+            gateway_order_id=paid_online_attempt.provider_order_id,
+            defaults={
+                'customer_id': order.customer_id,
+                'method': 'COD_UPI',
+                'gateway': 'CASHFREE',
+                'gateway_payment_id': paid_online_attempt.provider_payment_id,
+                'amount': paid_online_attempt.amount,
+                'status': 'CAPTURED',
+                'captured_at': now,
+            })
+
     task.status = 'DELIVERED'
     task.delivered_at = now
     task.save(update_fields=['status', 'delivered_at'])
 
     order.status = 'DELIVERED'
     order.delivered_at = now
-    fields = ['status', 'delivered_at']
+    fields = ['status', 'delivered_at', 'payment_method', 'payment_status']
     if order.payment_method == 'COD':
         order.payment_status = 'CAPTURED'
-        fields.append('payment_status')
     # The code is single use. Keeping it would let a captured screenshot close
     # the same order again later.
     order.pod_otp_hash = None
@@ -453,7 +486,7 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
         order=order, from_status=previous, to_status='DELIVERED',
         actor_type=actor.role, actor_id=str(actor.user_id))
 
-    OutboxEvent.objects.create(
+    enqueue_event(
         aggregate_type='CustomerOrder', aggregate_id=order.order_id,
         event_type='order.delivered', correlation_id=order.order_id,
         payload_json={
@@ -483,6 +516,10 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
         'previous_status': previous,
         'delivered_at': order.delivered_at,
         'payment_status': order.payment_status,
+        'payment_method': order.payment_method,
+        # True when a door-step Cashfree capture settled this COD order, so the
+        # client can say "paid online" instead of asking for cash again.
+        'paid_online': paid_online_attempt is not None,
         'cod_amount': str(cod) if cod is not None else None,
         'cod_due': str(cod_due) if cod_due is not None else None,
         'cod_variance': str(cod_variance) if cod_variance is not None else None,

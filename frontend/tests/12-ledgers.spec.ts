@@ -66,7 +66,7 @@ test.describe('ledger screens', () => {
     }
   });
 
-  test('outbound ledger: picks, packs and both transfer feeds render', async ({ page }) => {
+  test('outbound ledger tables are separated into sidebar destinations', async ({ page }) => {
     test.setTimeout(600_000);
     await login(page);
 
@@ -75,11 +75,17 @@ test.describe('ledger screens', () => {
       'Outbound Ledger is offered in the hub menu',
     ).toBeVisible(LONG);
 
-    await openTab(page, 'outbound-ledger');
-    for (const tab of ['picks', 'packs', 'transfers', 'bins']) {
-      await page.click(`[data-testid="obl-tab-${tab}"]`);
+    for (const [tab, nav] of [
+      ['picks', 'outbound-ledger'],
+      ['packs', 'outbound-ledger-packs'],
+      ['transfers', 'outbound-ledger-transfers'],
+      ['bins', 'outbound-ledger-bins'],
+    ]) {
+      await page.locator(`[data-testid="nav-${nav}"]`).click();
       await expect(page.locator('[data-testid="obl-table"]'), `${tab} table paints`).toBeVisible(LONG);
       await expect(page.locator('[data-testid="obl-error"]'), `${tab} feed answers`).toHaveCount(0, LONG);
+      await expect(page.locator('[data-testid="obl-status"]')).toHaveCount(0);
+      await expect(page.locator('[data-testid="obl-actor"]')).toHaveCount(0);
     }
   });
 

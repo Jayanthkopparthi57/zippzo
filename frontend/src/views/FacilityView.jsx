@@ -51,9 +51,9 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ”————————————————————————————————————————————————————————————————€
   // CRUD HANDLERS
-  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ”————————————————————————————————————————————————————————————————€
 
   const openModal = (mode, entity, data = null) => {
     if (mode === 'create') {
@@ -183,8 +183,8 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
     }
   };
 
-  const siteOptions = sites.map(s => ({ value: s.site_id, label: `${s.code} â€” ${s.name}` }));
-  const zoneOptions = zones.map(z => ({ value: z.zone_id, label: `${z.code} (${z.site?.code || 'â€”'})` }));
+  const siteOptions = sites.map(s => ({ value: s.site_id, label: `${s.code} — ${s.name}` }));
+  const zoneOptions = zones.map(z => ({ value: z.zone_id, label: `${z.code} (${z.site?.code || '—'})` }));
 
   // Action renderers for DataTables
   const siteActions = (row) => (
@@ -231,7 +231,7 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
     </Box>
   );
 
-  const dash = (v) => (v === null || v === undefined || v === '' ? <span style={{ color: '#94a3b8' }}>â€”</span> : v);
+  const dash = (v) => (v === null || v === undefined || v === '' ? <span style={{ color: '#94a3b8' }}>—</span> : v);
 
   // Sites are referenced as UUID FKs by every other network row, so resolve
   // them once for display instead of rendering a raw UUID.
@@ -239,7 +239,7 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
 
   const statusBadge = (v) => (
     <span className={`badge ${v === 'ACTIVE' || v === 'OPEN' ? 'badge-success' : v === 'SUSPENDED' || v === 'BUSY' ? 'badge-warning' : 'badge-default'}`}>
-      {v || 'â€”'}
+      {v || '—'}
     </span>
   );
 
@@ -312,14 +312,14 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
                 {r.site_type}
               </span>
             )},
-            { header: 'Parent Site', key: 'parent_site', render: r => siteById[r.parent_site]?.code || 'â€”' },
+            { header: 'Parent Site', key: 'parent_site', render: r => siteById[r.parent_site]?.code || '—' },
             { header: 'DH Precedence', key: 'dh_precedence' },
             { header: 'Accepting Orders', key: 'is_accepting_orders', align: 'center', render: r => (
               <span className={`badge ${r.is_accepting_orders ? 'badge-success' : 'badge-default'}`}>
                 {r.is_accepting_orders ? 'Yes' : 'No'}
               </span>
             )},
-            { header: 'Address', key: 'address', render: r => r.address || 'â€”' },
+            { header: 'Address', key: 'address', render: r => r.address || '—' },
             { header: 'Status', key: 'status', render: r => statusBadge(r.status) },
             { header: 'Actions', key: 'actions', align: 'center', render: siteActions },
           ]}
@@ -338,7 +338,7 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
             { header: 'Category', key: 'category', render: r => dash(r.category) },
             { header: 'Value Type', key: 'value_type', render: r => dash(r.value_type) },
             { header: 'Fragility', key: 'fragility', render: r => dash(r.fragility) },
-            { header: 'Facility Site', key: 'site', render: r => siteById[r.site]?.code || 'â€”' },
+            { header: 'Facility Site', key: 'site', render: r => siteById[r.site]?.code || '—' },
             { header: 'Advance', key: 'is_advance_zone', align: 'center', render: r => (
               <span className={`badge ${r.is_advance_zone ? 'badge-info' : 'badge-default'}`}>{r.is_advance_zone ? 'Yes' : 'No'}</span>
             )},
@@ -375,7 +375,7 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
             )},
             { header: 'Barcode', key: 'barcode', render: r => <span className="code-cell">{r.barcode}</span> },
             { header: 'Zone', key: 'zone', render: r => dash(r.zone) },
-            { header: 'Site', key: 'site', render: r => siteById[r.site]?.code || 'â€”' },
+            { header: 'Site', key: 'site', render: r => siteById[r.site]?.code || '—' },
             { header: 'Container', key: 'container', render: r => dash(r.container) },
             { header: 'Aisle', key: 'aisle', render: r => dash(r.aisle) },
             { header: 'Rack', key: 'rack', render: r => dash(r.rack) },
@@ -402,7 +402,7 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
           columns={[
             { header: 'Door Code', key: 'code', render: r => <span className="code-cell">{r.code}</span> },
             { header: 'Capability', key: 'capability', render: r => <span className="badge badge-info">{r.capability}</span> },
-            { header: 'Site', key: 'site', render: r => siteById[r.site]?.code || 'â€”' },
+            { header: 'Site', key: 'site', render: r => siteById[r.site]?.code || '—' },
             { header: 'Status', key: 'status', render: r => statusBadge(r.status) },
             { header: 'Actions', key: 'actions', align: 'center', render: dockActions },
           ]}
@@ -498,7 +498,7 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
                       <select className="form-input" value={formData.parent_site} onChange={e => handleInputChange('parent_site', e.target.value)}>
                         <option value="">None (standalone)</option>
                         {sites.filter(s => s.site_type === 'MH').map(s => (
-                          <option key={s.site_id} value={s.site_id}>{s.code} â€” {s.name}</option>
+                          <option key={s.site_id} value={s.site_id}>{s.code} — {s.name}</option>
                         ))}
                       </select>
                     </label>
@@ -538,7 +538,7 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
                     </label>
                     <label className="form-group"><span className="form-label">Category</span>
                       <select className="form-input" value={formData.category} onChange={e => handleInputChange('category', e.target.value)}>
-                        <option value="">â€”</option>
+                        <option value="">—</option>
                         <option value="STANDARD">Standard</option>
                         <option value="HIGH_VALUE">High Value</option>
                         <option value="TEMPERATURE">Temperature Controlled</option>
@@ -549,7 +549,7 @@ export default function FacilityView({ initialTab = 'sites-registry' }) {
                   <Box style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     <label className="form-group"><span className="form-label">Value Type</span>
                       <select className="form-input" value={formData.value_type} onChange={e => handleInputChange('value_type', e.target.value)}>
-                        <option value="">â€”</option>
+                        <option value="">—</option>
                         <option value="STANDARD">Standard</option>
                         <option value="HIGH">High</option>
                         <option value="LOW">Low</option>

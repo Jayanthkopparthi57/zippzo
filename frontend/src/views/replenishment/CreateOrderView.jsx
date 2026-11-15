@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Truck, RefreshCw, AlertTriangle, Search, Trash2, Send, Building2, Package, CheckCircle2, Boxes, ScanLine, ArrowRight } from 'lucide-react';
-import ScanInput from '../../components/ui/ScanInput';
-import WorkflowStepper from '../../components/ui/WorkflowStepper';
+import { Truck, RefreshCw, AlertTriangle, Search, Trash2, Send, Building2, Package, CheckCircle2, Boxes, ArrowRight } from 'lucide-react';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../api/client';
@@ -21,11 +19,6 @@ import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../ap
  *   status         ALLOCATED -> PICKING once the lines exist, so the pick
  *                  queue has a genuinely releasable order behind it.
  */
-const STEPS = [
-  { key: 'route', title: 'Choose Lane', description: 'Source warehouse → destination dark store' },
-  { key: 'lines', title: 'Build Lines', description: 'Add products from real available stock' },
-  { key: 'release', title: 'Release', description: 'Create the order and its pick tasks' },
-];
 
 /** PickTask.bin is max_length=50; a Location.location_id fits, a barcode may not. */
 const BIN_MAX = 50;
@@ -282,16 +275,13 @@ export default function CreateOrderView() {
     }
   };
 
-  const step = result ? 2 : lines.length > 0 ? 1 : 0;
-
   return (
     <div>
-      <WorkflowStepper steps={STEPS} current={step} dataTestId="co-stepper" />
 
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div>
-            <div className="wf-panel__title"><ArrowRight size={17} /> Replenishment Lane</div>
+            <div className="wf-peek"> Replenishment Lane</div>
             <div className="wf-panel__hint">
               Mother hub warehouse → dark store, replenished from stock that is really on the shelf
             </div>
@@ -377,7 +367,7 @@ export default function CreateOrderView() {
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><Package size={17} /> Order Lines</div>
+              <div className="wf-peek"> Order Lines</div>
               <div className="wf-panel__hint">
                 {lines.length
                   ? `${lines.length} line(s) · ${totalQty} unit(s)`
@@ -458,28 +448,22 @@ export default function CreateOrderView() {
             </div>
           )}
 
-          <ScanInput
-            label="Step 2 · Scan a product to add it"
-            placeholder="Scan or type a SKU code / barcode to add that stock"
-            value={query}
-            onChange={setQuery}
-            onScan={async (code) => {
-              const want = norm(code);
-              const hit =
-                stock.find((r) => [r.sku_code, r.sku, r.ean].some((v) => norm(v) === want)) || null;
-              if (!hit) {
-                setFeedback({
-                  type: 'error',
-                  message: `"${code}" has no available stock at ${source?.code || 'the source warehouse'}.`,
-                });
-                return;
-              }
-              addLine(hit);
-              setQuery('');
-            }}
-            hint="or pick from the available stock list"
-            dataTestId="co-scan"
-          />
+          <div className="form-group">
+            <label className="form-label" htmlFor="co-stock-search">Search available stock</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Search size={15} aria-hidden="true" />
+              <input
+                id="co-stock-search"
+                className="form-input"
+                type="search"
+                placeholder="Search product name, SKU or batch"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                data-testid="co-stock-search"
+              />
+            </div>
+            <small className="form-hint">Select a row in the available stock list to add it to this replenishment order.</small>
+          </div>
 
           {feedback && (
             <div className="form-group">
@@ -505,8 +489,8 @@ export default function CreateOrderView() {
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title">
-                <Search size={17} /> Available at {source?.code || '—'}
+              <div className="wf-peek">
+ Available at {source?.code || '—'}
               </div>
               <div className="wf-panel__hint">
                 {stockLoading
@@ -588,7 +572,7 @@ export default function CreateOrderView() {
               </div>
               {visibleStock.length === 0 && (
                 <div className="wf-empty" data-testid="co-stock-nomatch">
-                  <ScanLine size={32} className="wf-empty__icon" />
+                  <Search size={32} className="wf-empty__icon" />
                   <div className="wf-empty__text">No stock row matches “{query}”.</div>
                 </div>
               )}
@@ -601,8 +585,8 @@ export default function CreateOrderView() {
         <div className="wf-panel" data-testid="co-result">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title">
-                <CheckCircle2 size={17} /> Persisted replenishment order
+              <div className="wf-peek">
+ Persisted replenishment order
               </div>
               <div className="wf-panel__hint">
                 Read back from the API after writing — not the POST response

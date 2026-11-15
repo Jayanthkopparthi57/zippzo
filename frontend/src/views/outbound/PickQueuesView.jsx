@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ClipboardList, RefreshCw, AlertTriangle, CheckCircle2, Boxes,
   ScanLine, Layers, CircleSlash,
 } from 'lucide-react';
-import ScanInput from '../../components/ui/ScanInput';
 import StatusBadge from '../../components/ui/StatusBadge';
+import { PageHead, FilterBar } from '../../components/ui/WmsUI';
 import { useToast } from '../../components/ui/Toast';
 import { fetchApi, postApi, unwrapList, describeError } from '../../api/client';
 
@@ -25,8 +25,6 @@ import { fetchApi, postApi, unwrapList, describeError } from '../../api/client';
 /** Pick statuses that are still work. COMPLETED / CANCELLED are history. */
 const OPEN_PICK = ['NOT_STARTED', 'IN_PROGRESS'];
 
-const norm = (v) => String(v ?? '').trim().toUpperCase();
-
 /**
  * unwrapList() returns null for a payload shape it does not recognise. Collapsing
  * that to [] would make a broken endpoint look like an empty queue, so an
@@ -42,17 +40,17 @@ const dt = (v) => (v ? new Date(v).toLocaleString() : '—');
 
 /**
  * The sidebar exposes three separate destinations that all open this screen:
- *   batches      "Batches & Waves"  -> both queues
- *   picklists    "Picklists"        -> the pick queue only
+ *   batches      "Batches & Waves"  -> the picklists summary
+ *   picklists    "Picklists"        -> the grouped picking summary
  *   sorting-list "Sorting"          -> the sorting waves only
  * Before this mapping the prop was ignored and all three rendered an identical
- * page. The panel a tab owns is the only thing hidden; both reads still run so
- * switching tabs is instant and a failed read stays visible on its own panel.
+ * page. The panel a tab owns is the only thing rendered (one table per
+ * section); all reads still run so switching tabs is instant and a failed
+ * read stays visible on its own panel.
  */
 const panelFor = (tab) => {
-  if (tab === 'picklists') return 'picks';
   if (tab === 'sorting-list') return 'waves';
-  return 'both';
+  return 'picklists';
 };
 
 export default function PickQueuesView({ initialTab = 'batches' }) {
@@ -64,25 +62,25 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
 
   const [picks, setPicks] = useState([]);
   const [waves, setWaves] = useState([]);
+  const [picklists, setPicklists] = useState([]);
+  const [showActivity, setShowActivity] = useState(false);
   const [skus, setSkus] = useState([]);
   const [staff, setStaff] = useState([]);
   const [assignBusy, setAssignBusy] = useState('');
 
   const [loading, setLoading] = useState(true);
+  // Per-read readiness so each panel renders the moment its own fetch lands
+  // instead of waiting on the slowest one (the user list takes ~16s).
+  const [ready, setReady] = useState({ waves: false, skus: false, picklists: false });
   // One error slot per section: a failing read never blanks the other table.
-  const [errs, setErrs] = useState({ picks: '', waves: '', skus: '' });
-  const hasErr = Boolean(errs.picks || errs.waves || errs.skus);
+  const [errs, setErrs] = useState({ picks: '', waves: '', skus: '', picklists: '' });
+  const hasErr = Boolean(errs.picks || errs.waves || errs.skus || errs.picklists);
 
-  const [scanText, setScanText] = useState('');
-  const [feedback, setFeedback] = useState(null);
+  const [tableFilter, setTableFilter] = useState('');
 
-  // { key: string, label: string, count: number } — the product a scan pointed at.
-  const [hit, setHit] = useState(null);
   // The pick task read back from the API after completing it.
   const [result, setResult] = useState(null);
   const [busyId, setBusyId] = useState('');
-
-  const picksRef = useRef(null);
 
   /**
    * Each group settles on its own.
@@ -94,31 +92,71 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
    */
   const load = useCallback(async () => {
     setLoading(true);
-    setErrs({ picks: '', waves: '', skus: '' });
+    setErrs({ picks: '', waves: '', skus: '', picklists: '' });
+    setReady({ waves: false, skus: false, picklists: false });
 
-    const [statusLists, waveRes, skuRes, staffRes] = await Promise.all([
-      Promise.all(
-        OPEN_PICK.map((s) =>
-          fetchApi(`/ds-ops/pick-tasks/?status=${s}&page_size=200`).then(
-            (payload) => ({ payload, err: '' }),
-            (e) => ({ payload: null, err: `${describeError(e)}` })
-          )
+    // Each secondary read settles on its own: one slow endpoint (the 500-row
+    // user list has taken ~16s) must not hold the picklist summary or the
+    // wave table hostage behind it. The pick queue is read first so the
+    // operator sees work as soon as it lands.
+    fetchApi('/ds-ops/sorting-waves/?page_size=200').then(
+      (payload) => {
+        try { setWaves(asList(payload, '/ds-ops/sorting-waves/')); }
+        catch (e) { setErrs((prev) => ({ ...prev, waves: describeError(e) })); }
+        setReady((prev) => ({ ...prev, waves: true }));
+      },
+      (e) => {
+        setErrs((prev) => ({ ...prev, waves: describeError(e) }));
+        setReady((prev) => ({ ...prev, waves: true }));
+      }
+    );
+    fetchApi('/catalog/skus/?page_size=500').then(
+      (payload) => {
+        try { setSkus(asList(payload, '/catalog/skus/')); }
+        catch (e) { setErrs((prev) => ({ ...prev, skus: describeError(e) })); }
+        setReady((prev) => ({ ...prev, skus: true }));
+      },
+      (e) => {
+        setErrs((prev) => ({ ...prev, skus: describeError(e) }));
+        setReady((prev) => ({ ...prev, skus: true }));
+      }
+    );
+    // The assignee dropdown's staff list — independent of the pick data.
+    fetchApi('/iam/users/?page_size=500').then(
+      (payload) => {
+        try {
+          setStaff(asList(payload, '/iam/users/').filter((u) => u.role !== 'CUSTOMER'));
+        } catch (e) { /* an unavailable staff list degrades to unassignable rows */ }
+      },
+      () => {}
+    );
+    // One row per picklist, grouped server-side (see the `picklists`
+    // action). Grouping in the browser from a capped line page would
+    // silently drop picklists once the page fills.
+    fetchApi('/ds-ops/pick-tasks/picklists/').then(
+      (payload) => {
+        try {
+          if (!Array.isArray(payload)) {
+            throw new Error('/ds-ops/pick-tasks/picklists/ returned an unrecognised payload shape.');
+          }
+          setPicklists(payload);
+        } catch (e) { setErrs((prev) => ({ ...prev, picklists: describeError(e) })); }
+        setReady((prev) => ({ ...prev, picklists: true }));
+      },
+      (e) => {
+        setErrs((prev) => ({ ...prev, picklists: describeError(e) }));
+        setReady((prev) => ({ ...prev, picklists: true }));
+      }
+    );
+
+    const statusLists = await Promise.all(
+      OPEN_PICK.map((s) =>
+        fetchApi(`/ds-ops/pick-tasks/?status=${s}&page_size=200`).then(
+          (payload) => ({ payload, err: '' }),
+          (e) => ({ payload: null, err: `${describeError(e)}` })
         )
-      ),
-      fetchApi('/ds-ops/sorting-waves/?page_size=200').then(
-        (payload) => ({ payload, err: '' }),
-        (e) => ({ payload: null, err: `${describeError(e)}` })
-      ),
-      fetchApi('/catalog/skus/?page_size=500').then(
-        (payload) => ({ payload, err: '' }),
-        (e) => ({ payload: null, err: `${describeError(e)}` })
-      ),
-      // The assignee dropdown's staff list — independent of the pick data.
-      fetchApi('/iam/users/?page_size=500').then(
-        (payload) => ({ payload, err: '' }),
-        (e) => ({ payload: null, err: `${describeError(e)}` })
-      ),
-    ]);
+      )
+    );
 
     const seen = new Set();
     const open = [];
@@ -140,30 +178,9 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
       }
     });
 
-    const next = { picks: pickErrors.join(' — '), waves: waveRes.err, skus: skuRes.err };
-
-    if (!next.picks) setPicks(open);
-    if (!waveRes.err) {
-      try {
-        setWaves(asList(waveRes.payload, '/ds-ops/sorting-waves/'));
-      } catch (e) {
-        next.waves = describeError(e);
-      }
-    }
-    if (!skuRes.err) {
-      try {
-        setSkus(asList(skuRes.payload, '/catalog/skus/'));
-      } catch (e) {
-        next.skus = describeError(e);
-      }
-    }
-    if (!staffRes.err) {
-      try {
-        setStaff(asList(staffRes.payload, '/iam/users/').filter((u) => u.role !== 'CUSTOMER'));
-      } catch (e) { /* an unavailable staff list degrades to unassignable rows */ }
-    }
-
-    setErrs(next);
+    const pickError = pickErrors.join(' — ');
+    if (!pickError) setPicks(open);
+    setErrs((prev) => ({ ...prev, picks: pickError }));
     setLoading(false);
   }, []);
 
@@ -190,60 +207,6 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
 
   const skuFor = useCallback((id) => skuById[String(id)] || null, [skuById]);
 
-  /* ── scroll the scanned product's rows into view ── */
-  useEffect(() => {
-    if (!hit) return;
-    const raf = requestAnimationFrame(() => {
-      const el = picksRef.current?.querySelector('[data-scan-hit="true"]');
-      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [hit]);
-
-  /* ── the one scan input: point at a product's rows, never gate the tables ── */
-
-  const onScan = (code) => {
-    const want = norm(code);
-    if (!want) return;
-
-    const hitSku =
-      skus.find((s) => [s.sku_code, s.ean, s.sku_id].some((v) => norm(v) === want)) || null;
-    const hitSkuId = hitSku ? String(hitSku.sku_id) : null;
-
-    // A raw task sku uuid also resolves, so a label printed with the id still works.
-    const rows = picks.filter((p) => {
-      if (hitSkuId) return String(p.sku) === hitSkuId;
-      return String(p.sku) === want;
-    });
-
-    if (!hitSkuId && rows.length === 0) {
-      setHit(null);
-      setFeedback({
-        type: 'error',
-        message: `No pick line in the open queues matches “${String(code).trim()}”. Scan a SKU code, its EAN, or the raw sku id.`,
-      });
-      return;
-    }
-
-    setHit({
-      key: hitSkuId || want,
-      label: hitSku ? `${hitSku.sku_code} — ${hitSku.name}` : `sku ${String(code).trim()}`,
-    });
-    picksRef.current = document.getElementById('pq-picks-table');
-    setScanText('');
-    setFeedback(
-      rows.length === 0
-        ? {
-            type: 'hint',
-            message: `${hitSku?.sku_code || String(code).trim()} is in the catalog but has no open pick line right now.`,
-          }
-        : {
-            type: 'ok',
-            message: `${rows.length} pick line${rows.length === 1 ? '' : 's'} for ${hitSku?.sku_code || String(code).trim()} highlighted.`,
-          }
-    );
-  };
-
   /* ── complete a pick ── */
 
   const completePick = async (row) => {
@@ -251,11 +214,9 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
     // Never build /ds-ops/pick-tasks/undefined/complete/ — that 404s.
     if (id === undefined || id === null || id === '') {
       toast.error('Cannot complete pick', 'This pick row has no id.');
-      setFeedback({ type: 'error', message: 'This pick row has no id, so it cannot be completed.' });
       return;
     }
     setBusyId(String(id));
-    setFeedback(null);
     try {
       await postApi(`/ds-ops/pick-tasks/${encodeURIComponent(String(id))}/complete/`, {});
       // Read the persisted task back and reload both queues, so the table shows
@@ -276,97 +237,270 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
         `Task ${id} · ${skuFor(persisted.sku)?.sku_code || String(persisted.sku ?? '')} is now ${persisted.status}.`
       );
     } catch (e) {
-      setFeedback({ type: 'error', message: describeError(e) });
       toast.error('Could not complete pick', describeError(e));
     } finally {
       setBusyId('');
     }
   };
 
-  const hitCell = (p) =>
-    hit?.key === String(p.sku) ? (
-      <span className="status-badge status-badge--accent" data-testid="pq-scan-match">
-        Scan match
-      </span>
-    ) : null;
-
   /** Named per section, so the operator knows which read failed. */
   const sectionErrors = [
     errs.picks ? `open picks — ${errs.picks}` : '',
     errs.waves ? `sorting waves — ${errs.waves}` : '',
+    errs.picklists ? `picklist summary — ${errs.picklists}` : '',
     errs.skus ? `SKU catalog — ${errs.skus} (pick rows show the raw sku id instead)` : '',
   ].filter(Boolean).join(' · ');
 
+  /* ── picker activity: open lines per picker, from the summary payload ── */
+  const pickerActivity = useMemo(() => {
+    const byPicker = new Map();
+    let unassigned = 0;
+    picklists.forEach((pl) => {
+      if (!pl.pickers?.length) {
+        unassigned += Number(pl.open_lines) || 0;
+        return;
+      }
+      pl.pickers.forEach((name) => {
+        if (!byPicker.has(name)) byPicker.set(name, { name, picklists: 0, lines: 0, qty: 0 });
+        const entry = byPicker.get(name);
+        entry.picklists += 1;
+        entry.lines += Number(pl.open_lines) || 0;
+        entry.qty += Number(pl.pending_qty) || 0;
+      });
+    });
+    return { byPicker: [...byPicker.values()].sort((a, b) => b.lines - a.lines), unassigned };
+  }, [picklists]);
+
+  /* ── drill from a summary row into its lines ── */
+  const openPicklistLines = (pl) => {
+    if (!pl?.picklist_id) return;
+    setPanel('picks');
+    setTableFilter(String(pl.picklist_id).slice(0, 8));
+  };
+
+  const filterText = tableFilter.trim().toLowerCase();
+  const filteredPicks = filterText
+    ? picks.filter((p) => [
+        p.id, p.picklist, p.status, p.bin, p.assigned_to,
+        skuFor(p.sku)?.sku_code, skuFor(p.sku)?.name,
+      ].some((v) => String(v ?? '').toLowerCase().includes(filterText)))
+    : picks;
+
+  const panelTitles = {
+    picklists: ['Picking Summary', 'Open picklists grouped server-side by picklist. Opening a row drills into its lines below.'],
+    picks: ['Picklists', 'Open pick lines from the fulfilment service.'],
+    waves: ['Sorting Waves', 'Open sorting waves from the fulfilment service.'],
+  };
+  const [headTitle, headSubtitle] = panelTitles[panel] || panelTitles.picklists;
+
   return (
     <div data-testid="pq-root" data-loading={loading ? 'true' : 'false'}>
+      <PageHead
+        title={headTitle}
+        count={panel === 'waves' ? waves.length : panel === 'picklists' ? picklists.length : picks.length}
+        subtitle={headSubtitle}
+        actions={(
+          <button className="btn-ui" onClick={load} disabled={loading} data-testid="pq-refresh-tabs">
+            <RefreshCw size={13} /> Sync
+          </button>
+        )}
+      />
       {/* ── Which queue this destination opens with ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
         <div className="subtabs-bar" style={{ marginBottom: 0 }} data-testid="pq-tabs">
+          <button type="button" className={`subtab-btn ${panel === 'picklists' ? 'active' : ''}`}
+            data-testid="pq-tab-picklists" onClick={() => setPanel('picklists')}>
+            Picklists
+          </button>
           <button type="button" className={`subtab-btn ${panel === 'picks' ? 'active' : ''}`}
             data-testid="pq-tab-picks" onClick={() => setPanel('picks')}>
-            Pick queue
+            Pick lines
           </button>
           <button type="button" className={`subtab-btn ${panel === 'waves' ? 'active' : ''}`}
             data-testid="pq-tab-waves" onClick={() => setPanel('waves')}>
             Sorting waves
-          </button>
-          <button type="button" className={`subtab-btn ${panel === 'both' ? 'active' : ''}`}
-            data-testid="pq-tab-both" onClick={() => setPanel('both')}>
-            All queues
           </button>
         </div>
         <button className="btn-secondary" onClick={load} disabled={loading} data-testid="pq-refresh-tabs"
           title="Reload both queues">
           <RefreshCw size={14} /> Refresh
         </button>
+        <button
+          type="button"
+          className={`btn-secondary ${showActivity ? 'btn-ui primary' : ''}`}
+          onClick={() => setShowActivity((v) => !v)}
+          data-testid="pq-activity-toggle"
+          title="Open lines per picker"
+        >
+          Picker activity
+        </button>
       </div>
 
-      {/* ── Scan: a pointer at the queues below, not a gate in front of them ── */}
-      {panel !== 'waves' && (
-      <div className="wf-panel">
-        <div className="wf-panel__header">
-          <div>
-            <div className="wf-panel__title"><ScanLine size={17} /> Outbound queues</div>
-            <div className="wf-panel__hint">
-              Every row below is real API data. Scanning is optional — it highlights that product's lines.
+      {/* ── picker activity ── */}
+      {showActivity && (
+        <div className="wf-panel" data-testid="pq-activity">
+          <div className="wf-panel__header">
+            <div>
+              <div className="wf-peek">Picker activity</div>
+              <div className="wf-panel__hint">
+                Open lines per picker across the picklist summary. Counts only assigned picklists.
+              </div>
             </div>
           </div>
-          <div className="wf-panel__actions">
-            <button className="btn-secondary" onClick={load} disabled={loading} data-testid="pq-refresh">
-              <RefreshCw size={14} /> Refresh
-            </button>
+          {pickerActivity.byPicker.length === 0 ? (
+            <div style={{ fontSize: 12, color: '#64748b', padding: '8px 0' }}>
+              No picker is assigned to an open picklist right now.
+            </div>
+          ) : (
+            <div className="table-container">
+              <table className="data-table" data-testid="pq-activity-table">
+                <thead>
+                  <tr>
+                    <th>Picker</th>
+                    <th style={{ textAlign: 'right' }}>Picklists</th>
+                    <th style={{ textAlign: 'right' }}>Open lines</th>
+                    <th style={{ textAlign: 'right' }}>Pending units</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pickerActivity.byPicker.map((p) => (
+                    <tr key={p.name} data-testid={`pq-activity-${p.name}`}>
+                      <td>{p.name}</td>
+                      <td className="mono-num" style={{ textAlign: 'right' }}>{p.picklists}</td>
+                      <td className="mono-num" style={{ textAlign: 'right' }}>{p.lines}</td>
+                      <td className="mono-num" style={{ textAlign: 'right' }}>{p.qty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {pickerActivity.unassigned > 0 && (
+            <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 8 }}>
+              {pickerActivity.unassigned} open line{pickerActivity.unassigned === 1 ? '' : 's'} unassigned.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 0. Open picklists, one row per picklist ── */}
+      {panel === 'picklists' && (
+      <div className="wf-panel" data-testid="pq-picklists-panel">
+        <div className="wf-panel__header">
+          <div>
+            <div className="wf-peek">Open picklists</div>
+            <div className="wf-panel__hint">
+              {!ready.picklists && !errs.picklists
+                ? 'Loading picklist summary…'
+                : errs.picklists
+                  ? 'Picklist summary failed — the queues below are unaffected'
+                  : `${picklists.length} picklist${picklists.length === 1 ? '' : 's'} with unfinished lines`}
+            </div>
           </div>
         </div>
 
-        <ScanInput
-          label="Scan a SKU code / EAN"
-          placeholder="Scan or type a product code, then press Enter"
-          value={scanText}
-          onChange={setScanText}
-          onScan={onScan}
-          busy={false}
-          feedback={feedback}
-          hint="Tables below are always visible — scanning only points at a product's rows."
-          dataTestId="pq-scan"
-        />
-
-        {hasErr && (
-          <div  className="form-group">
-            <div className="scan-feedback scan-feedback--error" data-testid="pq-load-error">
-              <AlertTriangle size={14} />
-              <span data-testid="pq-load-error-text">{sectionErrors}</span>
+        {errs.picklists && (
+          <div className="form-group">
+            <div className="scan-feedback scan-feedback--error" data-testid="pq-picklists-error">
+              <AlertTriangle size={14} /> <span>Could not read the picklist summary — {errs.picklists}</span>
             </div>
+          </div>
+        )}
+
+        {!ready.picklists && !errs.picklists && picklists.length === 0 && (
+          <div style={{ fontSize: 12, color: '#64748b', padding: '10px 0' }}>Loading picklist summary…</div>
+        )}
+
+        {ready.picklists && !errs.picklists && picklists.length === 0 && (
+          <div className="wf-empty" data-testid="pq-picklists-empty">
+            <ClipboardList size={40} className="wf-empty__icon" />
+            <div className="wf-empty__title">No open picklists</div>
+            <div className="wf-empty__text">
+              Every picklist is COMPLETED or CANCELLED. The summary only answers for
+              unfinished work, so finished history cannot masquerade as open work.
+            </div>
+          </div>
+        )}
+
+        {picklists.length > 0 && (
+          <div className="table-container">
+            <table className="data-table" data-testid="pq-picklists">
+              <thead>
+                <tr>
+                  <th>Picklist ID</th>
+                  <th>Site</th>
+                  <th>Status</th>
+                  <th style={{ textAlign: 'right' }}>Assigned</th>
+                  <th style={{ textAlign: 'right' }}>Picked / Pending</th>
+                  <th style={{ textAlign: 'right' }}>Short</th>
+                  <th>Picker</th>
+                  <th>Zone</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {picklists.map((pl) => {
+                  const id = String(pl.picklist_id ?? '');
+                  return (
+                    <tr
+                      key={id}
+                      data-testid={`pq-picklist-${id}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => openPicklistLines(pl)}
+                      title="Open this picklist's lines"
+                    >
+                      <td><span className="code-cell">{id.slice(0, 8)}</span></td>
+                      <td className="mono-num">{pl.site_code || '—'}</td>
+                      <td><StatusBadge status={pl.status} dataTestId={`pq-picklist-status-${id}`} /></td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ fontWeight: 700, color: '#0f172a', fontSize: 13 }}>
+                          {Number(pl.assigned_qty) || 0}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: '#94a3b8', fontWeight: 600 }}>
+                          {Number(pl.sku_count) || 0} SKUs · {Number(pl.lines) || 0} lines
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 12.5 }}>
+                          <span style={{ color: '#047857', fontWeight: 700 }}>{Number(pl.picked_qty) || 0}</span>
+                          <span style={{ color: '#94a3b8' }}> / </span>
+                          <span style={{ color: Number(pl.pending_qty) > 0 ? '#dc2626' : '#64748b', fontWeight: 700 }}>
+                            {Number(pl.pending_qty) || 0}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 10.5, color: '#94a3b8', fontWeight: 600 }}>
+                          {Number(pl.short_qty) || 0} Short
+                        </div>
+                      </td>
+                      <td className="mono-num" style={{ textAlign: 'right' }}>{Number(pl.short_qty) || 0}</td>
+                      <td style={{ fontSize: 12 }}>{(pl.pickers || []).join(', ') || '—'}</td>
+                      <td style={{ fontSize: 12 }}>{(pl.zones || []).join(', ') || '—'}</td>
+                      <td className="mono-num">{dt(pl.created_at)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
       )}
 
+      {hasErr && (
+        <div className="form-group">
+          <div className="scan-feedback scan-feedback--error" data-testid="pq-load-error">
+            <AlertTriangle size={14} />
+            <span data-testid="pq-load-error-text">{sectionErrors}</span>
+          </div>
+        </div>
+      )}
+
       {/* ── 1. Open picks ── */}
-      {panel !== 'waves' && (
+      {panel === 'picks' && (
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div >
-            <div className="wf-panel__title"><ClipboardList size={17} /> Open picks</div>
+            <div className="wf-peek"> Open picks</div>
             <div className="wf-panel__hint">
               {loading
                 ? 'Loading pick tasks…'
@@ -397,7 +531,9 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
         )}
 
         {picks.length > 0 && (
-          <div  className="table-container" id="pq-picks-table">
+          <>
+            <FilterBar value={tableFilter} onChange={setTableFilter} shown={filteredPicks.length} total={picks.length} />
+            <div className="table-container" id="pq-picks-table">
             <table className="data-table" data-testid="pq-picks">
               <thead>
                 <tr>
@@ -415,10 +551,9 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
                 </tr>
               </thead>
               <tbody>
-                {picks.map((p) => {
+                {filteredPicks.map((p) => {
                   const id = String(p.id);
                   const sku = skuFor(p.sku);
-                  const matched = hit?.key === String(p.sku);
                   const inProgress = String(p.status).toUpperCase() === 'IN_PROGRESS';
                   const picked = Number(p.picked_qty) || 0;
                   const canComplete = inProgress && picked > 0;
@@ -429,11 +564,8 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
                     <tr
                       key={id}
                       data-testid={`pq-row-${id}`}
-                      data-scan-hit={matched ? 'true' : undefined}
-                      aria-selected={matched || undefined}
                     >
                       <td>
-                        {matched && hitCell(p)}
                         <span className="code-cell">{id}</span>
                       </td>
                       <td className="mono-num">{String(p.picklist_id ?? '—').slice(0, 8)}</td>
@@ -484,18 +616,19 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
       )}
 
       {/* ── 2. Sorting waves ── */}
-      {panel !== 'picks' && (
+      {panel === 'waves' && (
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div >
-            <div className="wf-panel__title"><Layers size={17} /> Sorting waves</div>
+            <div className="wf-peek"> Sorting waves</div>
             <div className="wf-panel__hint">
-              {loading
+              {!ready.waves && !errs.waves
                 ? 'Loading sorting waves…'
                 : errs.waves
                   ? 'Wave read failed — the pick table above is unaffected'
@@ -512,7 +645,7 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
           </div>
         )}
 
-        {!loading && !errs.waves && waves.length === 0 && (
+        {ready.waves && !errs.waves && waves.length === 0 && (
           <div  className="wf-empty" data-testid="pq-waves-empty">
             <Layers size={40} className="wf-empty__icon" />
             <div className="wf-empty__title">No sorting waves</div>
@@ -565,7 +698,7 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
         <div className="wf-panel" data-testid="pq-result">
           <div  className="wf-panel__header">
             <div >
-              <div className="wf-panel__title"><ClipboardList size={17} /> Last persisted pick</div>
+              <div className="wf-peek"> Last persisted pick</div>
               <div className="wf-panel__hint">Read back from the API after the write, not the request body</div>
             </div>
             <div  className="wf-panel__actions">
@@ -591,7 +724,7 @@ export default function PickQueuesView({ initialTab = 'batches' }) {
         </div>
       )}
 
-      {!loading && !hasErr && picks.length === 0 && waves.length === 0 && (
+      {!loading && ready.picklists && ready.waves && !hasErr && picks.length === 0 && waves.length === 0 && picklists.length === 0 && (
         <div className="wf-panel">
           <div  className="wf-empty" data-testid="pq-nothing-open">
             <CircleSlash size={40} className="wf-empty__icon" />

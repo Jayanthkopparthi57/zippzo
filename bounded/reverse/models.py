@@ -38,3 +38,67 @@ class RTSOrder(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'rts_orders'
+
+
+class CancellationPutaway(models.Model):
+    """Cancelled-order stock that has come back and still needs shelf putaway.
+
+    Cancellation is not a customer return: the order never completed for the
+    customer, so the putaway record only needs the order, site, physical SKU
+    and qty, the destination bin, and the reason it came back.
+    """
+
+    STATUS_CHOICES = [
+        ('PENDING_QC', 'Pending QC'),
+        ('PUTAWAY_PENDING', 'Putaway Pending'),
+        ('COMPLETED', 'Completed'),
+        ('REJECTED', 'Rejected'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+
+    putaway_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(max_length=60, unique=True)
+    order = models.ForeignKey(
+        'orders.CustomerOrder', on_delete=models.PROTECT,
+        related_name='cancellation_putaways',
+    )
+    site = models.ForeignKey(
+        'network.Site', on_delete=models.PROTECT,
+        related_name='cancellation_putaways',
+    )
+    sku = models.ForeignKey(
+        'catalog.Sku', on_delete=models.PROTECT,
+        related_name='cancellation_putaways',
+    )
+    lot = models.ForeignKey(
+        'catalog.InventoryLot', null=True, blank=True, on_delete=models.PROTECT,
+        related_name='cancellation_putaways',
+    )
+    qty = models.PositiveIntegerField()
+    destination_bin = models.CharField(max_length=50, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING_QC')
+    reason_code = models.CharField(max_length=60, blank=True)
+    remarks = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        'iam.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='cancellation_putaways_created',
+    )
+    completed_by = models.ForeignKey(
+        'iam.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='cancellation_putaways_completed',
+    )
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'cancellation_putaways'
+        ordering = ['-created_at', 'putaway_id']
+        indexes = [
+            models.Index(fields=['site', 'status']),
+            models.Index(fields=['order', 'status']),
+            models.Index(fields=['sku', 'status']),
+        ]
+
+    def __str__(self):
+        return self.code

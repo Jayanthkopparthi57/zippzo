@@ -144,11 +144,16 @@ export default function RiderDashboardView() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Poll every 10 s so new job offers and package-ready notifications appear
-  // without the rider manually refreshing.
+  // Live notifications refresh jobs immediately. A slower poll recovers cleanly
+  // after a network interruption or when the device suspends the socket.
   useEffect(() => {
-    const id = setInterval(() => load(), 10000);
-    return () => clearInterval(id);
+    const refresh = () => load();
+    window.addEventListener('zippzo:live-event', refresh);
+    const id = setInterval(refresh, 45000);
+    return () => {
+      window.removeEventListener('zippzo:live-event', refresh);
+      clearInterval(id);
+    };
   }, [load]);
 
   // While online, keep the store's fleet board fed with where this rider
@@ -300,9 +305,16 @@ export default function RiderDashboardView() {
 
   // ── derived views ──
   const mine = tasks.filter(t => t.rider === profile?.rider_id);
+  // A direct offer is stamped with the rider it was offered to (fulfilment picks
+  // one rider and writes their id before the status flips to OFFERED), so
+  // filtering on "has no rider yet" hid every offer this rider actually had:
+  // the store board said the job was theirs while the console said "Nothing
+  // waiting". An offer belongs here when it is unclaimed at my store, or when
+  // it was offered to me.
   const offers = tasks.filter(t =>
-    !t.rider && t.site === profile?.current_site &&
-    ['UNASSIGNED', 'OFFERED'].includes(t.status));
+    ['UNASSIGNED', 'OFFERED'].includes(t.status) &&
+    (!t.rider || t.rider === profile?.rider_id) &&
+    (t.rider === profile?.rider_id || t.site === profile?.current_site));
   const active = mine.filter(t => ACTIVE_STATES.includes(t.status));
   const done = mine.filter(t => DONE_STATES.includes(t.status));
 
@@ -814,6 +826,9 @@ export default function RiderDashboardView() {
 }
 
 const NOTIF_LABELS = {
+  RIDER_ASSIGNED: 'Delivery assigned to you',
+  RIDER_ARRIVED: 'You have arrived at the customer',
+  ORDER_PLACED: 'Order received',
   RIDER_JOB_OFFERED: 'New job at your store',
   ORDER_PACKED: 'Order packed — ready to collect',
   ORDER_ON_THE_WAY: 'Order is on the way',

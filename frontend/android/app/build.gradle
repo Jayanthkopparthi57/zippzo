@@ -23,9 +23,8 @@ android {
         }
     }
 
-    // Three applications ship out of one Android project, in the same way the
-    // big quick-commerce players ship a customer app, a store-partner app and a
-    // delivery-partner app. Each flavor is its own install: its own
+    // WMS, Dark Store, Consumer, and Rider ship as separate installs. Each
+    // flavor is its own install: its own
     // applicationId, its own launcher name, and its own web bundle (see
     // src/<flavor>/assets, written by scripts/build-android.mjs).
     //
@@ -36,8 +35,13 @@ android {
     productFlavors {
         store {
             dimension "app"
-            applicationId "com.zippzo.app"
-            versionNameSuffix "-store"
+            applicationId "com.zippzo.wms"
+            versionNameSuffix "-wms"
+        }
+        darkstore {
+            dimension "app"
+            applicationId "com.zippzo.darkstore"
+            versionNameSuffix "-darkstore"
         }
         shopper {
             dimension "app"
@@ -60,6 +64,7 @@ android {
             // Deliberately left alone: the moved bundle is the only public dir.
         }
         store { assets.srcDirs += ['src/store/assets'] }
+        darkstore { assets.srcDirs += ['src/darkstore/assets'] }
         shopper { assets.srcDirs += ['src/shopper/assets'] }
         rider { assets.srcDirs += ['src/rider/assets'] }
     }

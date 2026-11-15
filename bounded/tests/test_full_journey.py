@@ -37,6 +37,7 @@ from bounded.inventory.ledger import expected_balances, actual_balances
 from bounded.inventory.models import LpnContent, LpnMaster, StockBalance
 from bounded.inventory.stock import apply_stock
 from bounded.network.models import EmployeeSiteAssignment, Location, Site
+from bounded.routing.models import DeliveryArea
 from bounded.notifications.publish import publish_batch
 from bounded.orders.models import (
     Cart, CartLine, Customer, CustomerAddress, CustomerOrder,
@@ -68,7 +69,9 @@ class FullJourneyTests(TestCase):
         # -- the store --------------------------------------------------------
         cls.site = Site.objects.create(
             code='DS-JOURNEY', site_type='DARK_STORE', name='Journey Dark Store',
-            address='1 Journey Road')
+            address='1 Journey Road', status='ACTIVE', is_accepting_orders=True)
+        DeliveryArea.objects.create(site=cls.site, pincode='560001', band='CORE')
+        DeliveryArea.objects.create(site=cls.site, pincode='560002', band='CORE')
         for emp, user, role in (
             ('JOURNEYPICK', cls.picker, 'PICKER'),
             ('JOURNEYPACK', cls.packer, 'PACKER'),
@@ -156,7 +159,7 @@ class FullJourneyTests(TestCase):
 
     def storefront(self):
         return self.as_user(self.shopper).get(
-            f'/api/orders/storefront?site={self.site.code}')
+            f'/api/orders/storefront?site={self.site.code}&pincode=560001')
 
     def complete_journey(self):
         """Run the whole thing and return everything worth asserting on."""

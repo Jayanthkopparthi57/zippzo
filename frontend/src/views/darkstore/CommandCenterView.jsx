@@ -1,11 +1,14 @@
 import React from 'react';
 import {
   LayoutDashboard, RefreshCw, PackageCheck, ShoppingBag, Bike, Boxes,
-  AlertTriangle, Timer, TrendingUp, Users, Warehouse,
+  AlertTriangle, Timer, TrendingUp, Users, Warehouse, ClipboardList, Route,
 } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
-import { useDarkStore, useAsyncData, dsOverview, mmss, num } from './useDarkStore';
+import {
+  useDarkStore, useAsyncData, dsOverview, dsDepartmentStatus, dsOrderTracking,
+  mmss, num,
+} from './useDarkStore';
 
 /**
  * Dark store command centre: the shift's headline numbers, plus the queues that
@@ -84,7 +87,7 @@ function Overview({ storeCode }) {
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div>
-            <div className="wf-panel__title"><LayoutDashboard size={17} /> Command Centre</div>
+            <div className="wf-peek"> Command Centre</div>
             <div className="wf-panel__hint">
               Live shift picture for <StoreBadge />
             </div>
@@ -161,13 +164,43 @@ function Overview({ storeCode }) {
             tone={num(data.pending_putaways) > 0 ? 'over' : 'ok'}
             testId="ds-tile-inbound"
           />
+          <Tile
+            label="Orders pending"
+            icon={ShoppingBag}
+            value={num(data.orders_pending)}
+            sub="Confirmed, not yet picking"
+            tone={num(data.orders_pending) > 0 ? 'short' : 'ok'}
+            testId="ds-tile-orders-pending"
+          />
+          <Tile
+            label="Picking now"
+            icon={ClipboardList}
+            value={num(data.orders_picking)}
+            sub={`${num(data.orders_picked)} picked, ${num(data.orders_rack_dropped)} at rack`}
+            testId="ds-tile-picking"
+          />
+          <Tile
+            label="Ready for rider"
+            icon={Boxes}
+            value={num(data.orders_ready)}
+            sub={`${num(data.out_for_delivery)} out for delivery`}
+            testId="ds-tile-ready"
+          />
+          <Tile
+            label="Pending pick queue"
+            icon={Timer}
+            value={num(data.pending_pick_queue)}
+            sub={num(data.pending_pick_queue) > 0 ? 'Nobody assigned yet' : 'Every pick has an owner'}
+            tone={num(data.pending_pick_queue) > 0 ? 'over' : 'ok'}
+            testId="ds-tile-pending-queue"
+          />
         </div>
       </div>
 
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div>
-            <div className="wf-panel__title"><AlertTriangle size={17} /> What needs attention</div>
+            <div className="wf-peek"> What needs attention</div>
             <div className="wf-panel__hint">Open the matching screen from the sidebar to work the queue</div>
           </div>
         </div>
@@ -184,8 +217,11 @@ function Overview({ storeCode }) {
               {[
                 { label: 'Totes waiting to be received', value: data.incoming_lpns, screen: 'ds-lpn-receipt' },
                 { label: 'Putaways not yet confirmed', value: data.pending_putaways, screen: 'ds-shelf-putaway' },
-                { label: 'Orders waiting to be picked', value: data.active_orders, screen: 'ds-order-picking' },
-                { label: 'Orders waiting on a rider', value: data.out_for_delivery, screen: 'ds-rider-handoff' },
+                { label: 'Orders waiting for a picker', value: data.pending_pick_queue, screen: 'ds-order-picking' },
+                { label: 'Orders being picked', value: data.orders_picking, screen: 'ds-order-picking' },
+                { label: 'Picked, waiting at the rack', value: data.orders_picked, screen: 'ds-order-picking' },
+                { label: 'Rack dropped, waiting for a tote', value: data.orders_rack_dropped, screen: 'ds-packing' },
+                { label: 'Packed totes waiting for a rider', value: data.orders_ready, screen: 'ds-rider-handoff' },
               ].map((row) => (
                 <tr key={row.screen} data-testid={`ds-queue-${row.screen}`}>
                   <td>{row.label}</td>
@@ -202,7 +238,143 @@ function Overview({ storeCode }) {
           </table>
         </div>
       </div>
+      <DepartmentStatus storeCode={storeCode} />
+      <OrderTracking storeCode={storeCode} />
     </>
+  );
+}
+
+function DepartmentStatus({ storeCode }) {
+  const { data, error } = useAsyncData(
+    () => dsDepartmentStatus(storeCode),
+    [storeCode],
+    { pollMs: 15000 },
+  );
+
+  return (
+    <div className="wf-panel">
+      <div className="wf-panel__header">
+        <div>
+          <div className="wf-peek"> Department status</div>
+          <div className="wf-panel__hint">
+            Work waiting in every part of the store. Open the sidebar screen to act.
+          </div>
+        </div>
+      </div>
+      {error ? (
+        <div className="scan-feedback scan-feedback--error">
+          <AlertTriangle size={14} /> {error}
+        </div>
+      ) : (
+        <div className="table-container">
+          <table className="data-table" data-testid="ds-department-status">
+            <thead>
+              <tr>
+                <th>Department</th>
+                <th>Waiting</th>
+                <th>What it means</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.departments || []).map((row) => (
+                <tr key={row.key}>
+                  <td><strong>{row.label}</strong></td>
+                  <td className="mono-num">{num(row.pending)}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>
+                    {row.detail}
+                    {row.unassigned ? ` · ${num(row.unassigned)} unassigned` : ''}
+                  </td>
+                  <td>
+                    <StatusBadge status={num(row.pending) > 0 ? 'PENDING' : 'CLEAR'} />
+                  </td>
+                </tr>
+              ))}
+              {!data?.departments?.length && (
+                <tr>
+                  <td colSpan={4} style={{ color: 'var(--text-muted)' }}>
+                    Loading departments…
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OrderTracking({ storeCode }) {
+  const { data, error } = useAsyncData(
+    () => dsOrderTracking(storeCode),
+    [storeCode],
+    { pollMs: 15000 },
+  );
+
+  return (
+    <div className="wf-panel">
+      <div className="wf-panel__header">
+        <div>
+          <div className="wf-peek"> Order tracking</div>
+          <div className="wf-panel__hint">
+            Every live order and the next physical step, newest first.
+          </div>
+        </div>
+      </div>
+      {error ? (
+        <div className="scan-feedback scan-feedback--error">
+          <AlertTriangle size={14} /> {error}
+        </div>
+      ) : (
+        <div className="table-container">
+          <table className="data-table" data-testid="ds-order-tracking">
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Customer</th>
+                <th>Status</th>
+                <th>Rack</th>
+                <th>Rider</th>
+                <th>Promise</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.orders || []).slice(0, 12).map((order) => (
+                <tr key={order.order_id}>
+                  <td>
+                    <strong className="mono-num">{order.order_no}</strong>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                      ₹{order.grand_total} · {order.payment_method}
+                    </div>
+                  </td>
+                  <td>{order.customer_name || '—'}</td>
+                  <td><StatusBadge status={order.status} /></td>
+                  <td className="mono-num">{order.rack_location || '—'}</td>
+                  <td className="mono-num">
+                    {order.delivery?.rider_id ? order.delivery.status : 'unassigned'}
+                  </td>
+                  <td className="mono-num">
+                    {order.promise_at
+                      ? new Date(order.promise_at).toLocaleTimeString([], {
+                        hour: '2-digit', minute: '2-digit',
+                      })
+                      : '—'}
+                  </td>
+                </tr>
+              ))}
+              {!data?.orders?.length && (
+                <tr>
+                  <td colSpan={6} style={{ color: 'var(--text-muted)' }}>
+                    No live orders.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

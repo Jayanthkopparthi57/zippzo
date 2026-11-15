@@ -1,0 +1,24 @@
+{
+  "cli": { "version": ">= 10.0.0", "appVersionSource": "local" },
+  "build": {
+    "shopper-apk": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "shopper",
+        "EXPO_PUBLIC_API_BASE": "https://zippzo-wms.onrender.com/api"
+      },
+      "android": { "buildType": "apk" }
+    },
+    "shopper-ios": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "shopper",
+        "EXPO_PUBLIC_API_BASE": "https://zippzo-wms.onrender.com/api"
+      },
+      "ios": { "simulator": false }
+    },
+    "operations": {
+      "env": { "EXPO_PUBLIC_APP_VARIANT": "operations" }
+    }
+  }
+}

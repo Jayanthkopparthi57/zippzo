@@ -48,10 +48,10 @@ class StoreAdminBase(TestCase):
 
         cls.site = Site.objects.create(
             code='DS-ADMIN', site_type='DARK_STORE', name='Admin Dark Store',
-            address='admin road')
+            address='admin road', status='ACTIVE', is_accepting_orders=True)
         cls.other_site = Site.objects.create(
             code='DS-ADMIN-2', site_type='DARK_STORE', name='Second Store',
-            address='second road')
+            address='second road', status='ACTIVE', is_accepting_orders=True)
 
 
 class DeliveryAreaPermissionTests(StoreAdminBase):
@@ -199,21 +199,26 @@ class DeliveryAreaCheckoutTests(StoreAdminBase):
         }, format='json')
 
     def test_an_order_inside_the_published_area_is_accepted(self):
-        DeliveryArea.objects.create(site=self.site, pincode='560001')
+        DeliveryArea.objects.get_or_create(site=self.site, pincode='560001', defaults={'band': 'CORE'})
         response = self.checkout()
         self.assertEqual(201, response.status_code, response.data)
 
     def test_an_order_outside_the_published_area_is_refused_before_stock(self):
         DeliveryArea.objects.create(site=self.site, pincode='560010')
         response = self.checkout()
-        self.assertEqual(400, response.status_code, response.data)
-        self.assertEqual('OUT_OF_DELIVERY_AREA', response.data.get('reason'))
+        self.assertEqual(409, response.status_code, response.data)
+        self.assertIn('does not serve pincode', str(response.data.get('error', '')))
         self.assertFalse(CustomerOrder.objects.exists())
 
     def test_an_unconfigured_store_keeps_accepting_every_pincode(self):
-        self.assertEqual(201, self.checkout().status_code)
+        # Once strict delivery coverage is in force, a store must publish its
+        # pincode list before checkout. An unconfigured store is refused.
+        response = self.checkout()
+        self.assertEqual(409, response.status_code)
+        self.assertIn('does not serve pincode', str(response.data.get('error', '')))
 
     def test_free_delivery_above_the_threshold_is_waived(self):
+        DeliveryArea.objects.get_or_create(site=self.site, pincode='560001', defaults={'band': 'CORE'})
         DeliveryPricingRule.objects.create(
             site=self.site, base_fee=Decimal('25.00'),
             free_above=Decimal('100.00'))
@@ -225,6 +230,7 @@ class DeliveryAreaCheckoutTests(StoreAdminBase):
         self.assertEqual(Decimal('120.00'), order.grand_total)
 
     def test_below_the_threshold_the_base_fee_is_charged(self):
+        DeliveryArea.objects.get_or_create(site=self.site, pincode='560001', defaults={'band': 'CORE'})
         DeliveryPricingRule.objects.create(
             site=self.site, base_fee=Decimal('25.00'),
             free_above=Decimal('100.00'))
@@ -236,7 +242,7 @@ class DeliveryAreaCheckoutTests(StoreAdminBase):
         DeliveryPricingRule.objects.create(
             site=self.site, base_fee=Decimal('35.00'),
             free_above=Decimal('499.00'))
-        DeliveryArea.objects.create(site=self.site, pincode='560001')
+        DeliveryArea.objects.get_or_create(site=self.site, pincode='560001', defaults={'band': 'CORE'})
 
         inside = self.api.get(STOREFRONT, {'site': self.site.code,
                                            'pincode': '560001'})
@@ -248,7 +254,8 @@ class DeliveryAreaCheckoutTests(StoreAdminBase):
 
         outside = self.api.get(STOREFRONT, {'site': self.site.code,
                                             'pincode': '560099'})
-        self.assertFalse(outside.data['serviceable'])
+        self.assertEqual(409, outside.status_code)
+        self.assertIn('does not serve pincode', str(outside.data.get('error', '')))
 
     def test_an_absurd_free_delivery_threshold_is_rejected(self):
         api = APIClient()

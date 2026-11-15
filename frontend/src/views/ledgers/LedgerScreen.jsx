@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, History, AlertTriangle, Info } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Info } from 'lucide-react';
 import DataTable from '../../components/ui/DataTable';
 import {
   fetchApiPage, fetchApiOr, describeError,
@@ -82,6 +82,7 @@ export default function LedgerScreen({
   title,
   subtitle,
   indexes = [],
+  tableOnly = false,
 }) {
   const [activeFeedId, setActiveFeedId] = useState(initialFeed || feeds[0].id);
   const [rows, setRows] = useState([]);
@@ -126,11 +127,13 @@ export default function LedgerScreen({
     try {
       const params = new URLSearchParams();
       params.set('page_size', String(PAGE_SIZE));
-      if (status !== 'ALL') params.set('status', status);
-      if (actor !== 'ALL' && feed.actorParam) params.set(feed.actorParam, actor);
-      const dateParam = feed.dateParam || 'created_at';
-      if (dateFrom) params.set(`${dateParam}__gte`, `${dateFrom}T00:00:00`);
-      if (dateTo) params.set(`${dateParam}__lte`, `${dateTo}T23:59:59`);
+      if (!tableOnly) {
+        if (status !== 'ALL') params.set('status', status);
+        if (actor !== 'ALL' && feed.actorParam) params.set(feed.actorParam, actor);
+        const dateParam = feed.dateParam || 'created_at';
+        if (dateFrom) params.set(`${dateParam}__gte`, `${dateFrom}T00:00:00`);
+        if (dateTo) params.set(`${dateParam}__lte`, `${dateTo}T23:59:59`);
+      }
       const page = await fetchApiPage(`${feed.endpoint}?${params.toString()}`);
       setRows(page.results);
       setCount(page.count);
@@ -141,7 +144,7 @@ export default function LedgerScreen({
     } finally {
       setLoading(false);
     }
-  }, [feed, status, actor, dateFrom, dateTo]);
+  }, [feed, status, actor, dateFrom, dateTo, tableOnly]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -178,49 +181,51 @@ export default function LedgerScreen({
 
   return (
     <>
-      <div className="subtabs-bar" style={{ marginBottom: 16 }}>
-        {feeds.map((f) => (
-          <button
-            key={f.id}
-            data-testid={`${prefix}-tab-${f.id}`}
-            className={`subtab-btn ${activeFeedId === f.id ? 'active' : ''}`}
-            onClick={() => switchFeed(f.id)}
-          >
-            {f.label}
-          </button>
-        ))}
-        <button
-          className="subtab-btn"
-          data-testid={`${prefix}-refresh`}
-          onClick={load}
-          disabled={loading}
-          style={{ marginLeft: 'auto' }}
-        >
-          <RefreshCw size={14} /> {loading ? 'Loading…' : 'Refresh'}
-        </button>
-      </div>
-
-      <div className="wf-panel">
-        <div className="wf-panel__header">
-          <div>
-            <div className="wf-panel__title"><History size={17} /> {title}</div>
-            <div className="wf-panel__hint">{feed.hint || subtitle}</div>
-          </div>
-          {filtersActive && (
-            <div className="wf-panel__actions">
+      {!tableOnly && (
+        <>
+          <div className="subtabs-bar" style={{ marginBottom: 16 }}>
+            {feeds.map((f) => (
               <button
-                className="btn-secondary"
-                data-testid={`${prefix}-clear`}
-                onClick={clearFilters}
+                key={f.id}
+                data-testid={`${prefix}-tab-${f.id}`}
+                className={`subtab-btn ${activeFeedId === f.id ? 'active' : ''}`}
+                onClick={() => switchFeed(f.id)}
               >
-                Clear filters
+                {f.label}
               </button>
-            </div>
-          )}
-        </div>
+            ))}
+            <button
+              className="subtab-btn"
+              data-testid={`${prefix}-refresh`}
+              onClick={load}
+              disabled={loading}
+              style={{ marginLeft: 'auto' }}
+            >
+              <RefreshCw size={14} /> {loading ? 'Loading…' : 'Refresh'}
+            </button>
+          </div>
 
-        <div className="form-group">
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div className="wf-panel">
+            <div className="wf-panel__header">
+              <div>
+                <div className="wf-peek"> {title}</div>
+                <div className="wf-panel__hint">{feed.hint || subtitle}</div>
+              </div>
+              {filtersActive && (
+                <div className="wf-panel__actions">
+                  <button
+                    className="btn-secondary"
+                    data-testid={`${prefix}-clear`}
+                    onClick={clearFilters}
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="form-group">
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <select
               className="form-input"
               data-testid={`${prefix}-status`}
@@ -267,34 +272,43 @@ export default function LedgerScreen({
               style={{ minHeight: 42 }}
               aria-label="To date"
             />
-          </div>
-        </div>
+              </div>
+            </div>
 
-        {error && (
-          <div className="scan-feedback scan-feedback--error" data-testid={`${prefix}-error`}>
-            <AlertTriangle size={14} /> {error}
+            {error && (
+              <div className="scan-feedback scan-feedback--error" data-testid={`${prefix}-error`}>
+                <AlertTriangle size={14} /> {error}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      {!indexesLoaded || loading ? (
+      {!tableOnly && (!indexesLoaded || loading) ? (
         <div className="wf-panel">
           <div className="scan-feedback scan-feedback--hint" data-testid={`${prefix}-loading`}>
             Loading ledger…
           </div>
         </div>
       ) : (
+        <>
+          {tableOnly && error && (
+            <div className="scan-feedback scan-feedback--error" data-testid={`${prefix}-error`}>
+              <AlertTriangle size={14} /> {error}
+            </div>
+          )}
         <DataTable
           data-testid={`${prefix}-table`}
-          title={`${feed.label} ledger`}
-          subtitle={subtitle}
+          title={tableOnly ? undefined : `${feed.label} ledger`}
+          subtitle={tableOnly ? undefined : subtitle}
           columns={columns}
           data={rows}
           searchPlaceholder="Search this page…"
         />
+        </>
       )}
 
-      {indexesLoaded && !loading && truncated && (
+      {!tableOnly && indexesLoaded && !loading && truncated && (
         <div
           className="scan-feedback scan-feedback--hint"
           data-testid={`${prefix}-truncated`}

@@ -8,12 +8,25 @@
 // would fail. The native build therefore passes VITE_API_BASE (see
 // `.env.native` and the `build:native` script) pointing at the reachable
 // Django host.
-const configuredBase = import.meta.env.VITE_API_BASE;
+const configuredBase = (typeof import.meta !== 'undefined' && import.meta?.env)
+  ? import.meta.env.VITE_API_BASE
+  : undefined;
 const BASE_URL = configuredBase
   ? String(configuredBase).replace(/\/+$/, '')
   : (typeof window !== 'undefined' && window.location && window.location.origin)
     ? `${window.location.origin}/api`
     : 'http://127.0.0.1:8000/api';
+
+export function liveEventsUrl() {
+  // Development and proxy based deployments may intentionally configure a
+  // path-only API base (for example `/api`). Resolve it against this origin so
+  // the socket URL follows the same host as fetch requests.
+  const apiUrl = new URL(BASE_URL, typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1');
+  apiUrl.protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  apiUrl.pathname = `${apiUrl.pathname.replace(/\/?api\/?$/, '').replace(/\/$/, '')}/ws/events/`;
+  apiUrl.search = '';
+  return apiUrl.toString();
+}
 
 let _authToken = null;
 
@@ -58,8 +71,25 @@ export class ApiError extends Error {
   }
 }
 
-function buildUrl(endpoint) {
-  return endpoint.startsWith('http') ? endpoint : `${BASE_URL}${endpoint}`;
+function buildUrl(endpoint, params) {
+  const url = endpoint.startsWith('http') ? endpoint : `${BASE_URL}${endpoint}`;
+  if (!params) return url;
+
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    if (Array.isArray(value)) {
+      value.forEach(item => {
+        if (item !== undefined && item !== null) query.append(key, String(item));
+      });
+    } else {
+      query.set(key, String(value));
+    }
+  });
+
+  const queryString = query.toString();
+  if (!queryString) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}${queryString}`;
 }
 
 async function readBody(res) {
@@ -93,8 +123,8 @@ export function describeError(err) {
  * endpoint indistinguishable from genuinely empty stock, so callers must
  * handle the failure explicitly (or use fetchApiOr where a fallback is right).
  */
-export async function fetchApi(endpoint) {
-  const data = await getJson(endpoint);
+export async function fetchApi(endpoint, params) {
+  const data = await getJson(endpoint, params);
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.results)) return data.results;
   return data;
@@ -107,8 +137,8 @@ export async function fetchApi(endpoint) {
  * of everything, but a ledger needs "page 3 of 12" and a total. Bare-array
  * endpoints are normalised to a single page so callers never branch on shape.
  */
-export async function fetchApiPage(endpoint) {
-  const data = await getJson(endpoint);
+export async function fetchApiPage(endpoint, params) {
+  const data = await getJson(endpoint, params);
   if (Array.isArray(data)) {
     return { count: data.length, next: null, previous: null, results: data };
   }
@@ -150,21 +180,38 @@ export async function fetchApiOr(endpoint, fallback) {
 }
 
 /** One GET as raw JSON; the shared body of fetchApi / fetchApiPage. */
-async function getJson(endpoint) {
-  const url = buildUrl(endpoint);
-  let res;
-  try {
-    res = await fetch(url, { headers: getHeaders(), redirect: 'follow' });
-  } catch (err) {
-    throw new ApiError(`Network error: ${err.message}`, { url, body: null });
-  }
-  if (!res.ok) {
+async function getJson(endpoint, params) {
+  const url = buildUrl(endpoint, params);
+  let lastError = null;
+  // Managed Postgres (Neon) occasionally drops a connection mid-request and
+  // the backend answers 500 for that one call. A GET has no side effects, so
+  // one retry turns a transient blip into a normal page instead of an error
+  // strip the operator has to clear by hand.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let res;
+    try {
+      res = await fetch(url, { headers: getHeaders(), redirect: 'follow' });
+    } catch (err) {
+      lastError = new ApiError(`Network error: ${err.message}`, { url, body: null });
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        continue;
+      }
+      throw lastError;
+    }
+    if (res.ok) return readBody(res);
+
     const body = await readBody(res);
-    throw new ApiError(`GET ${endpoint} -> ${res.status} ${res.statusText}`, {
+    lastError = new ApiError(`GET ${endpoint} -> ${res.status} ${res.statusText}`, {
       status: res.status, url, body,
     });
+    if (res.status >= 500 && attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      continue;
+    }
+    throw lastError;
   }
-  return readBody(res);
+  throw lastError;
 }
 
 /**
@@ -186,6 +233,26 @@ export async function postApi(endpoint, payload) {
   if (!res.ok) {
     const body = await readBody(res);
     throw new ApiError(`POST ${endpoint} -> ${res.status}`, { status: res.status, url, body });
+  }
+  return readBody(res);
+}
+
+export async function putApi(endpoint, payload) {
+  const url = buildUrl(endpoint);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(payload ?? {}),
+      redirect: 'follow'
+    });
+  } catch (err) {
+    throw new ApiError(`Network error: ${err.message}`, { url });
+  }
+  if (!res.ok) {
+    const body = await readBody(res);
+    throw new ApiError(`PUT ${endpoint} -> ${res.status}`, { status: res.status, url, body });
   }
   return readBody(res);
 }
@@ -217,8 +284,8 @@ export async function patchApi(endpoint, payload) {
  * POST a single file as multipart/form-data.
  *
  * The browser must set the multipart boundary itself, so no Content-Type
- * header is sent here (unlike getHeaders()). Used for product photos, which
- * the catalog screen uploads before saving the SKU payload.
+ * header is sent here (unlike getHeaders()). Used by catalog and Darkstore
+ * pricing screens to upload product photos before saving the SKU image URL.
  */
 export async function uploadFile(endpoint, file, field = 'file') {
   const url = buildUrl(endpoint);
@@ -257,3 +324,11 @@ export async function deleteApi(endpoint) {
   }
   return true;
 }
+
+export const apiClient = {
+  get: fetchApi,
+  post: postApi,
+  put: putApi,
+  patch: patchApi,
+  delete: deleteApi,
+};

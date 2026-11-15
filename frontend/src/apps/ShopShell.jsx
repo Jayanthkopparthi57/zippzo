@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ShoppingBasket, ClipboardList, Bell, Users, MapPin, Clock,
+  ShoppingBasket, ClipboardList, Bell, Users, MapPin,
 } from 'lucide-react';
 import { useTabs } from '../context/TabContext';
 import { myAddresses, asList } from '../views/darkstore/useDarkStore';
+import { fetchApi } from '../api/client';
 
 /**
  * Fired on `window` by the storefront and the address book whenever the saved
@@ -31,6 +32,7 @@ const NAV = [
 export default function ShopShell({ children }) {
   const { activeTabId, openTab } = useTabs();
   const [addresses, setAddresses] = useState([]);
+  const [unread, setUnread] = useState(0);
 
   const loadAddresses = useCallback(() => {
     myAddresses()
@@ -46,6 +48,21 @@ export default function ShopShell({ children }) {
     return () => window.removeEventListener(ADDRESSES_CHANGED, loadAddresses);
   }, [loadAddresses]);
 
+  useEffect(() => {
+    let mounted = true;
+    const refresh = () => fetchApi('/notifications/notifications/unread_count/')
+      .then(result => { if (mounted) setUnread(result?.unread || 0); })
+      .catch(() => {});
+    refresh();
+    const timer = setInterval(refresh, 30000);
+    window.addEventListener('zippzo:live-event', refresh);
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+      window.removeEventListener('zippzo:live-event', refresh);
+    };
+  }, []);
+
   const home = addresses.find((a) => a.is_default) || addresses[0] || null;
   const where = home ? [home.line1, home.city].filter(Boolean).join(', ') : 'Add an address';
 
@@ -55,8 +72,8 @@ export default function ShopShell({ children }) {
     <div className="shop-app">
       <header className="shop-topbar">
         <div className="shop-brand">
-          <span className="shop-brand__mark">Z</span>
-          Zippzo
+          <img className="shop-brand__mark" src="/zippzo-logo-192.png" alt="Zippzo" />
+          <span className="shop-brand__word">ZIPPZO</span>
         </div>
 
         <nav className="shop-nav" aria-label="Shopper">
@@ -74,16 +91,17 @@ export default function ShopShell({ children }) {
               >
                 <Icon size={17} />
                 <span>{item.label}</span>
+                {item.id === 'shop-notifications' && unread > 0 && (
+                  <span className="shop-nav__badge" aria-label={`${unread} unread notifications`}>
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
               </button>
             );
           })}
         </nav>
 
         <div className="shop-topbar__spacer" />
-
-        <span className="shop-eta">
-          <Clock size={13} /> 10-min delivery
-        </span>
 
         <button
           type="button"

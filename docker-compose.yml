@@ -37,7 +37,7 @@ services:
   backend:
     build: .
     container_name: zippzo-backend
-    command: sh -c "python manage.py migrate && gunicorn zippzo_wms.wsgi:application --bind 0.0.0.0:8000"
+    command: sh -c "python manage.py migrate && daphne -b 0.0.0.0 -p 8000 zippzo_wms.asgi:application"
     ports:
       - "8000:8000"
     environment:
@@ -61,6 +61,28 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
+
+  outbox-worker:
+    build: .
+    container_name: zippzo-outbox-worker
+    command: python manage.py publish_outbox --loop --interval 1
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=zippzo
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SECRET_KEY=change-me-in-production
+      - DEBUG=False
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
     restart: unless-stopped
 
 volumes:

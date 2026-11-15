@@ -5,7 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .access import require_order_access
+from bounded.iam.permissions import IsFieldSurface
+from .access import require_order_access, require_session_facility
 
 
 class DSPackOrderView(APIView):
@@ -17,7 +18,7 @@ class DSPackOrderView(APIView):
     events in the same transaction as the stock move - so a rolled-back pack
     cannot leave a promise to notify a rider behind.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsFieldSurface]
 
     def post(self, request):
         from bounded.orders.models import CustomerOrder
@@ -34,6 +35,7 @@ class DSPackOrderView(APIView):
             return Response({'error': 'Order not found'}, status=404)
 
         require_order_access(request.user, order)
+        require_session_facility(request.user, order.site.code)
 
         try:
             result = pack_order(

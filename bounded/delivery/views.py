@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -79,6 +80,52 @@ def _my_profile(user):
         user_id=user.user_id).first()
 
 
+def _rider_qr(profile, create=False):
+    """The rider's currently valid scan code.
+
+    Codes are one-time: each successful scan rotates the row to a fresh code,
+    so the image shown to the rider changes after every use. The row's
+    ``data`` keeps the rider link; ``code`` is the token that must match.
+    """
+    qr = QRCode.objects.filter(data__rider_id=str(profile.rider_id)).order_by('-created_at').first()
+    if qr is None and create:
+        site = profile.current_site
+        qr = QRCode.objects.create(
+            code=f'RIDER:{profile.rider_id}',
+            qr_type='USER',
+            data={
+                'kind': 'rider',
+                'rider_id': str(profile.rider_id),
+                'user_id': str(profile.user_id),
+                'name': profile.name,
+                'site': site.code if site else '',
+            },
+        )
+    return qr
+
+
+def _rotate_rider_qr(qr, profile=None):
+    if qr is None:
+        if profile is None:
+            return None
+        site = profile.current_site
+        return QRCode.objects.create(
+            code=f'RIDER:{uuid.uuid4()}',
+            qr_type='USER',
+            data={
+                'kind': 'rider',
+                'rider_id': str(profile.rider_id),
+                'user_id': str(profile.user_id),
+                'name': profile.name,
+                'site': site.code if site else '',
+            },
+        )
+    qr.code = f'RIDER:{uuid.uuid4()}'
+    qr.scan_count = (qr.scan_count or 0) + 1
+    qr.save(update_fields=['code', 'scan_count'])
+    return qr
+
+
 def _delivery_queryset_for(user, qs, rider_lookup, site_lookup):
     """Scope a delivery row set the way DeliveryTask already is.
 
@@ -106,6 +153,25 @@ def _delivery_queryset_for(user, qs, rider_lookup, site_lookup):
     if codes:
         return qs.filter(**{f'{site_lookup}__code__in': codes})
     return qs.none()
+
+
+def _notify_delivery_transition(event_type, task):
+    """Queue an inbox event with recipient and order-routing metadata."""
+    from bounded.outbox.services import enqueue_event
+
+    order = task.order
+    rider_user_id = task.rider.user_id if task.rider_id else None
+    enqueue_event(
+        aggregate_type='DeliveryTask', aggregate_id=task.task_id,
+        event_type=event_type, correlation_id=order.order_id,
+        payload_json={
+            'task_id': str(task.task_id),
+            'order_id': str(order.order_id),
+            'order_no': order.order_no,
+            'site_code': task.site.code,
+            'rider_user_id': str(rider_user_id) if rider_user_id else None,
+        },
+    )
 
 
 def _require_profile(user):
@@ -152,9 +218,15 @@ ORDER_STEP_WINDOWS = {
 
 # Rider task transitions the rider drives themselves. Pickup and POD are not
 # here: they move stock and money and have their own guarded endpoints.
+#
+# EN_ROUTE only opens once the store has physically handed the tote over. The
+# rider's own phone cannot create the handoff — it belongs to the counter
+# screen, where the picker scans the tote off the staging slot. Letting a rider
+# advance into EN_ROUTE straight from AT_DS meant they could "collect" totes
+# nobody had packed or handed over.
 TASK_TRANSITIONS = {
     'AT_DS': ({'UNASSIGNED', 'OFFERED', 'ACCEPTED'}, None),
-    'EN_ROUTE': ({'AT_DS', 'PICKED_UP'}, 'OUT_FOR_DELIVERY'),
+    'EN_ROUTE': ({'PICKED_UP'}, 'OUT_FOR_DELIVERY'),
     'ARRIVED': ({'EN_ROUTE', 'POD_PENDING'}, 'ARRIVED'),
 }
 
@@ -245,6 +317,121 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
         profile = serializer.save(current_site=site)
         return Response(RiderProfileSerializer(profile).data, status=201)
 
+    @action(detail=False, methods=['post'], url_path='activate-by-qr')
+    @transaction.atomic
+    def activate_by_qr(self, request):
+        """Activate this rider by scanning the store check-in QR.
+
+        The rider is active for FIFO assignment only after this scan: the
+        profile goes online at that store and an open RiderShift is started,
+        which is also the timestamp checkout's FIFO ordering uses. The store
+        QR payload is `zippzo:site:<SITE_CODE>` (also accepts `SITE:<CODE>`
+        or the bare code); one QRCode row per store records the scan.
+        """
+        from bounded.network.models import Site
+
+        profile = _my_profile(request.user)
+        if profile is None:
+            return Response({'error': 'No rider profile to activate.'}, status=404)
+        raw = str(request.data.get('qr') or request.data.get('qr_code')
+                  or request.data.get('site_code') or '').strip()
+        if not raw:
+            return Response({'error': 'Scan the store QR to activate.'}, status=400)
+        code = raw
+        lowered = code.lower()
+        if lowered.startswith('zippzo:site:'):
+            code = code[len('zippzo:site:'):]
+        elif lowered.startswith('site:'):
+            code = code[len('site:'):]
+        elif lowered.startswith('store:'):
+            code = code[len('store:'):]
+        site = Site.objects.filter(code=code.strip().upper()).first()
+        if site is None:
+            return Response({'error': f'No store matches this QR ({raw[:40]}).'}, status=404)
+
+        qr_code = f'SITE:{site.code}'
+        qr, _created = QRCode.objects.get_or_create(
+            code=qr_code,
+            defaults={'qr_type': 'LOCATION', 'data': {'kind': 'site-checkin', 'site': site.code}},
+        )
+        qr.scan_count = (qr.scan_count or 0) + 1
+        qr.save(update_fields=['scan_count'])
+
+        # One open shift per rider: activating at another store ends the prior
+        # shift so the FIFO queue cannot hold the same rider twice.
+        now = timezone.now()
+        for old in RiderShift.objects.select_for_update().filter(
+            rider=profile, status='OPEN',
+        ).exclude(site=site):
+            old.status = 'CLOSED'
+            old.ended_at = now
+            old.end_reason = 'FORCED'
+            old.save(update_fields=['status', 'ended_at', 'end_reason'])
+        shift = RiderShift.objects.select_for_update().filter(
+            rider=profile, site=site, status='OPEN').first()
+        if shift is None:
+            shift = RiderShift.objects.create(rider=profile, site=site, qr_in=qr)
+        elif shift.qr_in_id is None:
+            shift.qr_in = qr
+            shift.save(update_fields=['qr_in'])
+
+        profile.current_site = site
+        profile.is_online = True
+        profile.save(update_fields=['current_site', 'is_online'])
+        return Response({
+            'profile': RiderProfileSerializer(profile).data,
+            'shift': RiderShiftSerializer(shift).data,
+            'active': True,
+            'site': site.code,
+        })
+
+    @action(detail=False, methods=['post'], url_path='admin-bootstrap')
+    @transaction.atomic
+    def admin_bootstrap(self, request):
+        """Create a rider profile for another user (admin/ops only).
+
+        Self-bootstrap stays the rider's own path; this exists so the store
+        can register an employee and hand them a QR without them tapping
+        through first-run setup. The profile is pre-pinned to the store but
+        starts offline — the rider still activates by scanning the QR.
+        """
+        from bounded.iam.models import User
+        from bounded.network.models import Site
+
+        if getattr(request.user, 'role', None) not in ('SUPER_ADMIN', 'OPS_MANAGER', 'ADMIN'):
+            raise PermissionDenied('Only administrators or ops can register riders.')
+        user_id = request.data.get('user') or request.data.get('user_id')
+        user = User.objects.filter(user_id=user_id).first() if user_id else None
+        if user is None:
+            return Response({'error': 'A valid user is required.'}, status=400)
+        if RiderProfile.objects.filter(user=user).exists():
+            return Response({'error': 'This account already has a rider profile.'}, status=409)
+        site_code = request.data.get('site_code') or request.data.get('site')
+        site = Site.objects.filter(code=site_code).first() if site_code else None
+        if site_code and site is None:
+            return Response({'error': f'No store with code {site_code}.'}, status=404)
+        serializer = RiderProfileSerializer(data={
+            **request.data,
+            'user': str(user.user_id),
+            'name': request.data.get('name') or user.full_name,
+            'phone': request.data.get('phone') or user.phone or '0000000000',
+            'vehicle_type': request.data.get('vehicle_type') or 'BIKE',
+            'kyc_status': request.data.get('kyc_status') or 'VERIFIED',
+        })
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.save(current_site=site, is_online=False)
+        return Response({
+            'profile': RiderProfileSerializer(profile).data,
+            'qr': {
+                'code': f'RIDER:{profile.rider_id}',
+                'payload': f'zippzo:rider:{profile.rider_id}',
+            },
+            'store_qr': {
+                'code': f'SITE:{site.code}' if site else None,
+                'payload': f'zippzo:site:{site.code}' if site else None,
+            },
+        }, status=201)
+
     @action(detail=True, methods=['post'])
     def set_online(self, request, pk=None):
         profile = self.get_object()
@@ -299,12 +486,13 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='me/qr')
     def me_qr(self, request):
-        """The rider's personal scan code — stable for the life of the profile.
+        """Current handoff QR for this rider.
 
-        The store counter scans this to hand jobs over (see
-        DeliveryTaskViewSet.assign_by_rider). One iam.QRCode row per rider,
-        keyed on RIDER:<rider_id>, so the image never changes between app
-        opens and the row doubles as the scan ledger (scan_count).
+        One-time codes: every successful counter scan at the handoff (the
+        POST assign-by-rider path) rotates the row to a fresh code
+        immediately. The DS counter scans the rider's QR on every delivery;
+        the rider's app shows whatever the current code is and lets the app
+        auto-refresh it.
         """
         profile = _my_profile(request.user)
         if profile is None:
@@ -319,10 +507,8 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
             'name': profile.name,
             'site': site.code if site else '',
         }
-        code = f'RIDER:{profile.rider_id}'
-        qr, created = QRCode.objects.get_or_create(
-            code=code, defaults={'qr_type': 'USER', 'data': data})
-        if not created and qr.data != data:
+        qr = _rider_qr(profile, create=True)
+        if qr.data != data:
             qr.data = data
             qr.save(update_fields=['data'])
         return Response({
@@ -332,6 +518,139 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
             'site': site.code if site else None,
             'is_online': profile.is_online,
             'scan_count': qr.scan_count,
+        })
+
+
+    @action(detail=False, methods=['get'], url_path='me/summary')
+    def me_summary(self, request):
+        """One snapshot for the rider's home screen.
+
+        The rider app used to fan out to four endpoints (profile, tasks,
+        earnings, custody) and still could not answer "how many did I deliver
+        today, what did I earn, how much cash am I carrying, and may I take
+        jobs yet". This joins those answers server-side in a fixed number of
+        queries and states the activation flag explicitly: an open shift plus
+        online is the only state in which the DS has handed this rider a store.
+        """
+        from decimal import Decimal
+
+        from django.db.models import Sum
+        from django.db.models.functions import Coalesce
+
+        from bounded.money.models import (CashMovement, RiderCustodyState,
+                                          RiderEarnings)
+
+        profile = _my_profile(request.user)
+        if profile is None:
+            return Response({'has_profile': False})
+
+        now = timezone.now()
+        today = timezone.localdate(now)
+        week_start = today - timedelta(days=today.weekday())
+
+        tasks = DeliveryTask.objects.filter(rider=profile)
+        delivered = tasks.filter(status='DELIVERED')
+        active_states = ['ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE',
+                         'ARRIVED', 'POD_PENDING']
+
+        earnings = RiderEarnings.objects.filter(rider=profile)
+
+        def money_sum(qs, field='amount'):
+            return qs.aggregate(
+                total=Coalesce(Sum(field), Decimal('0.00')))['total']
+
+        cust = RiderCustodyState.objects.filter(
+            rider_id=profile.rider_id).first()
+        cash_today = money_sum(CashMovement.objects.filter(
+            movement_type='COD_COLLECT', to_ref_id=str(profile.rider_id),
+            created_at__date=today))
+
+        active_cod = tasks.filter(
+            status__in=active_states,
+            order__payment_method='COD',
+            order__payment_status='PENDING').aggregate(
+                total=Coalesce(Sum('order__grand_total'), Decimal('0.00')))['total']
+
+        shift = RiderShift.objects.filter(
+            rider=profile, status='OPEN').select_related('site').first()
+        site = shift.site if shift else profile.current_site
+        offers = DeliveryTask.objects.filter(
+            site_id=profile.current_site_id, rider__isnull=True,
+            status__in=['UNASSIGNED', 'OFFERED']).count() \
+            if profile.current_site_id else 0
+
+        movements = CashMovement.objects.filter(
+            Q(to_ref_id=str(profile.rider_id))
+            | Q(from_ref_id=str(profile.rider_id))
+        ).order_by('-created_at')[:20]
+        recent_earnings = earnings.select_related('order').order_by(
+            '-created_at')[:20]
+
+        return Response({
+            'has_profile': True,
+            'profile': RiderProfileSerializer(profile).data,
+            'activation': {
+                'active': bool(profile.is_online and shift),
+                'online': bool(profile.is_online),
+                'site': site.code if site else None,
+                'site_id': str(site.site_id) if site else None,
+                'shift_id': str(shift.shift_id) if shift else None,
+                'shift_started_at': shift.started_at if shift else None,
+            },
+            'stats': {
+                'deliveries_today': delivered.filter(
+                    delivered_at__date=today).count(),
+                'deliveries_week': delivered.filter(
+                    delivered_at__date__gte=week_start).count(),
+                'deliveries_total': delivered.count(),
+                'active_jobs': tasks.filter(status__in=active_states).count(),
+                'offers': offers,
+                'earnings_today': money_sum(earnings.filter(
+                    created_at__date=today)),
+                'earnings_week': money_sum(earnings.filter(
+                    created_at__date__gte=week_start)),
+                'earnings_total': money_sum(earnings),
+                'earnings_pending': money_sum(
+                    earnings.filter(status='PENDING')),
+                'earnings_paid': money_sum(earnings.filter(status='PAID')),
+                'cod_cash_today': cash_today,
+                'cod_cash_total': money_sum(CashMovement.objects.filter(
+                    movement_type='COD_COLLECT',
+                    to_ref_id=str(profile.rider_id))),
+                'cod_due_on_active_jobs': active_cod,
+                'cash_to_remit': getattr(cust, 'current_cash', Decimal('0.00'))
+                if cust else Decimal('0.00'),
+            },
+            'custody': {
+                'current_cash': getattr(cust, 'current_cash', None),
+                'current_float': getattr(cust, 'current_float', None),
+                'bags_in_custody': getattr(cust, 'bags_in_custody', 0),
+                'ceiling_amount': getattr(cust, 'ceiling_amount', None),
+                'site': getattr(cust, 'site', None),
+                'updated_at': getattr(cust, 'updated_at', None),
+            } if cust else None,
+            'earnings': [{
+                'earning_id': str(e.earning_id),
+                'order_id': str(e.order_id),
+                'order_no': getattr(e.order, 'order_no', None),
+                'amount': e.amount,
+                'delivery_fee': e.delivery_fee,
+                'tips': e.tips,
+                'status': e.status,
+                'created_at': e.created_at,
+            } for e in recent_earnings],
+            'cash_movements': [{
+                'entry_id': m.entry_id,
+                'movement_type': m.movement_type,
+                'amount': m.amount,
+                'site': m.site,
+                'from_container': m.from_container,
+                'to_container': m.to_container,
+                'ref_type': m.ref_type,
+                'ref_id': m.ref_id,
+                'actor_type': m.actor_type,
+                'created_at': m.created_at,
+            } for m in movements],
         })
 
 
@@ -438,6 +757,25 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
         _refuse_lifecycle_write(self.request)
         return super().perform_update(serializer)
 
+    @action(detail=True, methods=['post'], url_path='toggle-cash-collected')
+    def toggle_cash_collected(self, request, pk=None):
+        """Mark/unmark whether the rider handed this job's COD cash in at the
+        counter. Store operators only — riders can flag a job delivered, but
+        the counter is the one that settles the cash."""
+        from django.utils import timezone
+
+        user = request.user
+        role = getattr(user, 'role', '') or ''
+        allowed = bool(getattr(user, 'is_superuser', False)) or role in (
+            'SUPER_ADMIN', 'ADMIN', 'OPS_MANAGER',
+        )
+        if not allowed:
+            return Response({'error': 'Only a store operator can settle COD cash.'}, status=403)
+        task = self.get_object()
+        task.cash_collected_at = None if task.cash_collected_at else timezone.now()
+        task.save(update_fields=['cash_collected_at'])
+        return Response(DeliveryTaskSerializer(task).data)
+
     @action(detail=True, methods=['post'])
     @transaction.atomic
     def accept(self, request, pk=None):
@@ -466,8 +804,9 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
         task.save(update_fields=['rider', 'status', 'accepted_at', 'offered_at'])
 
         previous = task.order.status
-        _record_order_status(task.order, 'RIDER_ASSIGNED', request.user,
-                             previous)
+        if _record_order_status(task.order, 'RIDER_ASSIGNED', request.user,
+                                previous):
+            _notify_delivery_transition('delivery.rider_assigned', task)
         return Response(DeliveryTaskSerializer(task).data)
 
     @action(detail=True, methods=['post'])
@@ -495,6 +834,49 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     @transaction.atomic
+    def reoffer(self, request, pk=None):
+        """Counter/ops reoffer after decline (FIFO next rider at the store)."""
+        from bounded.ds_ops.access import is_superuser
+        if not is_superuser(request.user) and getattr(request.user, 'role', '') not in ('SUPER_ADMIN', 'OPS_MANAGER', 'ADMIN'):
+            return Response({'error': 'Operators only.'}, status=403)
+        task = self.get_object()
+        if task.status not in ('UNASSIGNED', 'OFFERED'):
+            return Response({'error': f'Task is {task.status}; it cannot be reoffered.'}, status=409)
+        order_weight = Decimal('0')
+        for line in task.order.lines.select_related('sku').all():
+            order_weight += Decimal(line.sku.weight_g or 0) / Decimal('1000') * line.qty
+        candidates = list(
+            RiderProfile.objects
+            .filter(current_site=task.site, is_online=True, kyc_status='VERIFIED')
+            .exclude(rider_id=task.rider_id)
+            .exclude(rider_id__in=DeliveryTask.objects.filter(status__in=['OFFERED', 'ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING']).values_list('rider_id', flat=True))
+            .prefetch_related('shifts')
+            .order_by('-rating', 'created_at')
+        )
+        candidates = [
+            profile for profile in candidates
+            if profile.vehicle_capacity_kg is None or Decimal(str(profile.vehicle_capacity_kg)) >= order_weight
+        ]
+        if not candidates:
+            task.rider = None
+            task.status = 'UNASSIGNED'
+            task.save(update_fields=['rider', 'status'])
+            return Response({'offered': False, 'error': 'No free rider is currently in the FIFO queue.'}, status=409)
+        def _queue_key(profile):
+            open_shifts = [s for s in profile.shifts.all() if s.status == 'OPEN' and str(s.site_id) == str(task.site_id)]
+            return (0, min(s.started_at for s in open_shifts)) if open_shifts else (1, profile.created_at)
+        candidates.sort(key=_queue_key)
+        chosen = candidates[0]
+        now = timezone.now()
+        task.rider = chosen
+        task.status = 'OFFERED'
+        task.offer_count = (task.offer_count or 0) + 1
+        task.offered_at = now
+        task.save(update_fields=['rider', 'status', 'offer_count', 'offered_at'])
+        return Response({'offered': True, 'rider': {'rider_id': str(chosen.rider_id), 'name': chosen.name}, 'task': DeliveryTaskSerializer(task).data})
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
     def advance(self, request, pk=None):
         """Move an accepted job to AT_DS / EN_ROUTE / ARRIVED.
 
@@ -513,6 +895,10 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
             return Response({'error': 'This job is not assigned to you.'},
                             status=409)
 
+        if task.status == target:
+            # Idempotent retry: task is already in target status
+            return Response(DeliveryTaskSerializer(task).data)
+
         allowed_from, order_status = TASK_TRANSITIONS[target]
         if task.status not in allowed_from:
             return Response({
@@ -521,14 +907,151 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
                          f'{", ".join(sorted(allowed_from))}.'
             }, status=409)
 
+        profile.refresh_from_db(fields=['last_lat', 'last_lng'])
+        address = getattr(task.order, 'address', None)
+        origin_lat = getattr(task.site, 'geo_lat', None)
+        origin_lng = getattr(task.site, 'geo_lng', None)
+        dest_lat = getattr(address, 'geo_lat', None)
+        dest_lng = getattr(address, 'geo_lng', None)
+        rider_lat = profile.last_lat
+        rider_lng = profile.last_lng
+
+        def _distance_m(a_lat, a_lng, b_lat, b_lng):
+            try:
+                lat1, lng1, lat2, lng2 = map(float, (a_lat, a_lng, b_lat, b_lng))
+            except (TypeError, ValueError):
+                return None
+            from math import sin, cos, sqrt, atan2
+            r = 6371000.0
+            p1, p2 = lat1 * 3.141592653589793 / 180, lat2 * 3.141592653589793 / 180
+            dp = (lat2 - lat1) * 3.141592653589793 / 180
+            dl = (lng2 - lng1) * 3.141592653589793 / 180
+            a = sin(dp / 2) ** 2 + cos(p1) * cos(p2) * sin(dl / 2) ** 2
+            return 2 * r * atan2(sqrt(min(1.0, max(0.0, a))), sqrt(max(0.0, 1 - min(1.0, max(0.0, a)))))
+
+        if target == 'ARRIVED' and None not in (rider_lat, rider_lng, dest_lat, dest_lng):
+            distance = _distance_m(rider_lat, rider_lng, dest_lat, dest_lng)
+            if distance is not None and distance > 1000:
+                return Response({'error': f'Arrive geofence is 1000 m. Latest rider location is {round(distance)} m away.'}, status=409)
+
         task.status = target
-        task.save(update_fields=['status'])
+        update_fields = ['status']
+        if target == 'EN_ROUTE':
+            distance = _distance_m(origin_lat, origin_lng, dest_lat, dest_lng) if None not in (origin_lat, origin_lng, dest_lat, dest_lng) else None
+            if distance is None and None not in (rider_lat, rider_lng, dest_lat, dest_lng):
+                distance = _distance_m(rider_lat, rider_lng, dest_lat, dest_lng)
+            if distance is not None:
+                task.distance_m = round(distance, 2)
+                task.eta_at = timezone.now() + timedelta(seconds=distance / 4.2)  # ~15 km/h
+                update_fields.extend(['distance_m', 'eta_at'])
+        task.save(update_fields=update_fields)
+        status_recorded = False
         if order_status:
             previous = task.order.status
-            _record_order_status(task.order, order_status, request.user,
-                                 previous)
+            status_recorded = _record_order_status(
+                task.order, order_status, request.user, previous)
+        if status_recorded and target == 'EN_ROUTE':
+            _notify_delivery_transition('delivery.out_for_delivery', task)
+        elif status_recorded and target == 'ARRIVED':
+            _notify_delivery_transition('delivery.arrived', task)
 
         return Response(DeliveryTaskSerializer(task).data)
+
+    @action(detail=True, methods=['post'], url_path='start-payment')
+    @transaction.atomic
+    def start_payment(self, request, pk=None):
+        """Open a Cashfree checkout for a COD order at the customer's door.
+
+        Card, UPI and the UPI QR all arrive through the same Cashfree session
+        the shopper app already uses, so the rider does not re-implement a
+        payment page. Only the rider carrying the job may start it, and only
+        after pickup - before that there is nothing to hand over.
+        """
+        from django.conf import settings
+
+        from bounded.orders.payments import CashfreeError, create_attempt
+
+        profile = _require_profile(request.user)
+        task = self.get_object()
+        if task.rider_id != profile.rider_id:
+            return Response({'error': 'This job is not assigned to you.'},
+                            status=409)
+        order = task.order
+        if order.payment_method != 'COD' or order.payment_status == 'CAPTURED':
+            return Response({
+                'error': 'This order is already paid online; collect nothing at the door.'
+            }, status=409)
+        if task.status not in {'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING'}:
+            return Response({
+                'error': f'Task is {task.status}; collect the tote before asking for payment.'
+            }, status=409)
+
+        phone = str(request.data.get('phone') or '').strip()
+        if not phone:
+            customer_user = getattr(order.customer, 'user', None)
+            phone = getattr(customer_user, 'phone', '') or ''
+        digits = ''.join(ch for ch in phone if ch.isdigit())
+        if len(digits) < 10:
+            return Response({
+                'error': 'Enter the customer mobile number to start the payment.',
+                'phone_required': True,
+            }, status=400)
+
+        now = timezone.now()
+        attempt = order.payment_attempts.filter(
+            status__in=['CREATED', 'PENDING'],
+            expires_at__gt=now).order_by('-created_at').first()
+        if attempt is None:
+            try:
+                attempt = create_attempt(
+                    order, phone=digits,
+                    provider_order_id=f'zp_cod_{uuid.uuid4().hex[:32]}')
+            except CashfreeError as exc:
+                return Response({'error': str(exc)}, status=503)
+
+        return Response({
+            'attempt_id': str(attempt.attempt_id),
+            'order_id': str(order.order_id),
+            'order_no': order.order_no,
+            'amount': str(attempt.amount),
+            'cashfree': {
+                'payment_session_id': attempt.payment_session_id,
+                'order_id': attempt.provider_order_id,
+                'environment': getattr(settings, 'CASHFREE_ENV', 'sandbox'),
+            },
+        })
+
+    @action(detail=True, methods=['get'], url_path='payment-status')
+    def payment_status(self, request, pk=None):
+        """Refresh the door-step Cashfree attempt and report the order state."""
+        from bounded.orders.payments import CashfreeError, verify_doorstep_attempt
+
+        profile = _require_profile(request.user)
+        task = self.get_object()
+        if task.rider_id != profile.rider_id:
+            return Response({'error': 'This job is not assigned to you.'},
+                            status=409)
+        order = task.order
+        attempt = order.payment_attempts.order_by('-created_at').first()
+        if attempt is None:
+            return Response(
+                {'error': 'No online payment has been started for this order.'},
+                status=404)
+        if attempt.status == 'PENDING':
+            try:
+                order = verify_doorstep_attempt(attempt)
+            except CashfreeError as exc:
+                return Response({'error': str(exc)}, status=503)
+        attempt.refresh_from_db()
+        order.refresh_from_db()
+        return Response({
+            'order_id': str(order.order_id),
+            'order_no': order.order_no,
+            'payment_method': order.payment_method,
+            'payment_status': order.payment_status,
+            'attempt_status': attempt.status,
+            'amount': str(attempt.amount),
+        })
 
     @action(detail=False, methods=['post'], url_path='assign-by-rider')
     @transaction.atomic
@@ -549,22 +1072,35 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
         if not raw:
             return Response({'error': 'qr_code is required.'}, status=400)
 
-        text = raw
-        lowered = text.lower()
+        # Resolve the scan to a rider. Current codes are one-time tokens
+        # (RIDER:<token>); the legacy stable form was RIDER:<rider_id> and the
+        # app payload is zippzo:rider:<rider_id>. Try the exact row first.
+        payload = raw
+        lowered = payload.lower()
         if lowered.startswith('zippzo:rider:'):
-            text = text[len('zippzo:rider:'):]
+            payload = payload[len('zippzo:rider:'):]
         elif lowered.startswith('rider:'):
-            text = text[len('rider:'):]
+            payload = payload[len('rider:'):]
+        payload = payload.strip()
+        qr = QRCode.objects.filter(code=raw).first()
+        if qr is None and payload != raw:
+            qr = QRCode.objects.filter(code=f'RIDER:{payload}').first()
+        if qr is not None:
+            rider_id = str((qr.data or {}).get('rider_id') or '')
+        else:
+            rider_id = payload
         try:
-            rider_id = uuid.UUID(text.strip())
+            rider_uuid = uuid.UUID(rider_id)
         except ValueError:
             return Response(
                 {'error': f'Not a rider QR code ({raw[:40]}).'}, status=404)
-        profile = RiderProfile.objects.filter(rider_id=rider_id).first()
+        profile = RiderProfile.objects.filter(rider_id=rider_uuid).first()
         if profile is None:
             return Response(
                 {'error': 'No rider profile matches this QR code.'},
                 status=404)
+        if qr is None:
+            qr = _rider_qr(profile)
 
         if RiderProfile.objects.filter(user_id=request.user.user_id).exists():
             return Response(
@@ -572,14 +1108,8 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
                           'not by scanning at the counter.'},
                 status=403)
 
-        # The scan itself lands on the rider's QR row before task resolution,
-        # so an allowed scan counts even when the job it is aimed at turns
-        # out to be ineligible — a code nobody ever scans (or one scanned
-        # constantly) stays visible from the model.
-        qr = QRCode.objects.filter(code=f'RIDER:{profile.rider_id}').first()
-        if qr is not None:
-            qr.scan_count = (qr.scan_count or 0) + 1
-            qr.save(update_fields=['scan_count'])
+        # The scan is counted and rotated only once it actually hands a job
+        # over, below. A rejected scan never burns the rider's QR.
 
         task_id = request.data.get('task_id')
         if not task_id:
@@ -591,11 +1121,14 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
                 status=404)
 
         if task.rider_id == profile.rider_id:
+            next_qr = _rotate_rider_qr(qr, profile)
             return Response({
                 'rider': {'rider_id': str(profile.rider_id),
                           'name': profile.name},
                 'assigned': [str(task.task_id)],
                 'already_assigned': True,
+                'qr_rotated': True,
+                'next_qr': next_qr.code if next_qr else None,
             })
         if task.rider_id:
             return Response(
@@ -614,14 +1147,18 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
         task.save(update_fields=['rider', 'status', 'accepted_at',
                                  'offered_at'])
         previous = task.order.status
-        _record_order_status(task.order, 'RIDER_ASSIGNED', request.user,
-                             previous)
+        if _record_order_status(task.order, 'RIDER_ASSIGNED', request.user,
+                                previous):
+            _notify_delivery_transition('delivery.rider_assigned', task)
+        next_qr = _rotate_rider_qr(qr, profile)
 
         return Response({
             'rider': {'rider_id': str(profile.rider_id),
                       'name': profile.name},
             'assigned': [str(task.task_id)],
             'already_assigned': False,
+            'qr_rotated': True,
+            'next_qr': next_qr.code if next_qr else None,
         })
 
 
@@ -786,6 +1323,10 @@ class RiderAdminRosterView(APIView):
                 'vehicle_type': p.vehicle_type,
                 'vehicle_number': p.vehicle_number,
                 'kyc_status': p.kyc_status,
+                'kyc_number': p.kyc_number,
+                'kyc_document_type': p.kyc_document_type,
+                'kyc_document_url': p.kyc_document_url,
+                'kyc_reviewed_at': p.kyc_reviewed_at,
                 'is_online': p.is_online,
                 'current_site': p.current_site.code if p.current_site else '',
                 'rating': str(p.rating) if p.rating is not None else '',
@@ -810,10 +1351,12 @@ class RiderAdminRosterView(APIView):
         if profile is None:
             return Response({'error': 'No such rider.'}, status=404)
         profile.kyc_status = kyc_status
+        profile.kyc_reviewed_at = timezone.now()
+        profile.kyc_reviewed_by = str(request.user.user_id)
         if kyc_status == 'REJECTED':
             # A rejected rider must not keep receiving offers.
             profile.is_online = False
-            profile.save(update_fields=['kyc_status', 'is_online'])
+            profile.save(update_fields=['kyc_status', 'kyc_reviewed_at', 'kyc_reviewed_by', 'is_online'])
         else:
-            profile.save(update_fields=['kyc_status'])
+            profile.save(update_fields=['kyc_status', 'kyc_reviewed_at', 'kyc_reviewed_by'])
         return Response(RiderProfileSerializer(profile).data)

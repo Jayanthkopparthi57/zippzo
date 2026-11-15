@@ -29,17 +29,20 @@ all inside one transaction:
      actually on the shelf. A clear "only 2 left" is recoverable; a half-placed
      order is not.
 
-Payment is deliberately not faked. There is no payment adapter in this project,
-so a PREPAID order cannot honestly be marked CAPTURED, and it cannot reach
-CONFIRMED either - the store would start picking goods nobody has paid for.
-PREPAID is therefore refused with an explanation rather than quietly accepted.
-COD is the supported path, and it reaches CONFIRMED.
+Online orders remain PAYMENT_PENDING and are not assigned for picking until the
+Cashfree provider confirms payment server-side. COD continues directly to
+CONFIRMED. A browser or mobile SDK callback alone never authorizes fulfilment.
 """
+import logging
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 # Default dark-store delivery fee, for a store with no pricing rule of its
 # own. The live number comes from money.DeliveryPricingRule (see
@@ -143,14 +146,15 @@ def place_order(*, customer, site, address, items=None, cart=None,
     leave a half-built order behind. Nothing is committed unless it all works.
     """
     from bounded.catalog.models import InventoryLot, Listing, Sku, Coupon
+    from bounded.catalog.promotions import calculate_combo_discounts
     from bounded.inventory.models import StockBalance
     from bounded.orders.models import (
         CustomerOrder, CustomerOrderLine, OrderStatusHistory,
     )
-    from bounded.outbox.models import OutboxEvent
+    from bounded.outbox.services import enqueue_event
     from bounded.ds_ops.allocation import (
-    AllocationError, allocate_order, reserved_qty,
-)
+        AllocationError, allocate_order, reserved_qty,
+    )
 
     if not is_orderable_site(site):
         raise CheckoutError(
@@ -210,12 +214,10 @@ def place_order(*, customer, site, address, items=None, cart=None,
     # exist as a price record while the store has delisted the item or switched
     # it off, and a shopper must not be able to buy it just because the row is
     # still there.
-    prices = {
-        str(l.sku_id): l.price
-        for l in Listing.objects.filter(
+    listings = list(Listing.objects.filter(
             site=site, sku_id__in=list(wanted), price__gt=0,
-            is_listed=True, is_available=True)
-    }
+            is_listed=True, is_available=True))
+    prices = {str(listing.sku_id): listing.price for listing in listings}
     unlisted = [
         {'sku_id': k, 'name': skus[k].name if k in skus else None}
         for k in wanted if k not in prices
@@ -290,9 +292,11 @@ def place_order(*, customer, site, address, items=None, cart=None,
     # Coupon: resolve it now that we know the subtotal, before the order row
     # exists, so an invalid code is a clean 400 instead of a rolled-back insert.
     coupon = None
-    discount = Decimal('0.00')
+    coupon_discount = Decimal('0.00')
     if coupon_code:
-        coupon = Coupon.objects.filter(code=coupon_code.strip().upper()).first()
+        coupon = Coupon.objects.filter(
+            code=coupon_code.strip().upper(),
+        ).filter(Q(site__isnull=True) | Q(site=site)).first()
         if coupon is None or not coupon.is_valid_now():
             raise CheckoutError(
                 'That coupon code is not valid right now.', status=400)
@@ -302,10 +306,10 @@ def place_order(*, customer, site, address, items=None, cart=None,
     order = CustomerOrder(
         order_no=_next_order_no(),
         customer=customer, site=site, address=address,
-        status='CONFIRMED', payment_method=payment_method,
-        # COD/UPI/Card are all settled outside this build's payment layer, so
-        # nothing is captured now. The store may still pick, because the order
-        # itself is real.
+        status=('CONFIRMED' if payment_method == 'COD' else 'PAYMENT_PENDING'),
+        payment_method=payment_method,
+        # Cashfree payment is confirmed asynchronously by its server API or
+        # signed webhook; only that confirmation promotes the order.
         payment_status='PENDING',
         subtotal=Decimal('0.00'), delivery_fee=delivery_fee,
         grand_total=Decimal('0.00'),
@@ -341,11 +345,31 @@ def place_order(*, customer, site, address, items=None, cart=None,
             raise CheckoutError(
                 f'{coupon.code} needs a minimum order of '
                 f'₹{coupon.min_order}.', status=400)
-        discount = coupon.compute_discount(subtotal)
-        order.discount = discount
+        coupon_discount = coupon.compute_discount(subtotal)
+
+    combo_discount, combo_offer_details = calculate_combo_discounts(
+        site, wanted, prices,
+    )
+    combo_discount = min(combo_discount, subtotal)
+    coupon_discount = min(coupon_discount, max(Decimal('0.00'), subtotal - combo_discount))
+    discount = (coupon_discount + combo_discount).quantize(Decimal('0.01'))
+    order.discount = discount
+    order.coupon_discount = coupon_discount
+    order.combo_discount = combo_discount
+    order.combo_offer_details = combo_offer_details
 
     order.grand_total = (subtotal - discount + delivery_fee).quantize(Decimal('0.01'))
-    order.save(update_fields=['subtotal', 'delivery_fee', 'discount', 'grand_total'])
+    try:
+        from bounded.money.models import DeliveryPricingRule
+        promise_rule = DeliveryPricingRule.objects.filter(site=site, is_active=True).first()
+        promise_minutes = int(promise_rule.promise_minutes) if promise_rule and promise_rule.promise_minutes else 15
+    except Exception:
+        promise_minutes = 15
+    order.promise_at = timezone.now() + timedelta(minutes=promise_minutes)
+    order.save(update_fields=[
+        'subtotal', 'delivery_fee', 'discount', 'coupon_discount',
+        'combo_discount', 'combo_offer_details', 'grand_total', 'promise_at',
+    ])
     for line in lines:
         line.save()
 
@@ -366,16 +390,36 @@ def place_order(*, customer, site, address, items=None, cart=None,
         cart.subtotal = subtotal
         cart.save(update_fields=['status', 'subtotal'])
 
+    # -- auto-assign to a picker and rider --------------------------------
+    # A COD order must not wait for a supervisor to click "assign". The pick
+    # tasks are already created by allocate_order; here the order goes to the
+    # picker at this store carrying the fewest open tasks (or waits in the
+    # pending queue if the store has nobody free), and a free rider is offered
+    # the delivery so the rider app surfaces it immediately. The same function
+    # is called from Cashfree confirmation, so prepaid orders are not left
+    # without an owner.
+    if payment_method == 'COD':
+        try:
+            from bounded.orders.fulfilment import auto_assign_after_confirmation
+
+            auto_assign_after_confirmation(order, actor=actor)
+        except Exception:  # noqa: BLE001 - auto-assignment must not break checkout
+            logger.exception(
+                'Could not auto-assign picker or rider for order %s at store %s',
+                order.order_no, site.code,
+            )
+
     OrderStatusHistory.objects.create(
-        order=order, from_status=None, to_status='CONFIRMED',
+        order=order, from_status=None, to_status=order.status,
         actor_type=(actor.role if actor is not None else 'SYSTEM'),
         actor_id=(actor.user_id if actor is not None else None),
-        remark='Order placed by the customer.',
+        remark=('Order placed by the customer.' if payment_method == 'COD' else 'Waiting for Cashfree payment confirmation.'),
     )
 
-    OutboxEvent.objects.create(
+    enqueue_event(
         aggregate_type='CustomerOrder', aggregate_id=order.order_id,
-        event_type='order.placed',
+        event_type=('order.placed' if payment_method == 'COD'
+                    else 'order.payment_pending'),
         payload_json={
             'order_id': str(order.order_id),
             'order_no': order.order_no,
@@ -397,8 +441,13 @@ def place_order(*, customer, site, address, items=None, cart=None,
             'payment_method': payment_method,
             'subtotal': str(subtotal),
             'discount': str(order.discount),
+            'coupon_discount': str(order.coupon_discount),
+            'combo_discount': str(order.combo_discount),
+            'combo_offer_details': order.combo_offer_details,
             'delivery_fee': str(delivery_fee),
             'grand_total': str(order.grand_total),
+            'promise_at': order.promise_at.isoformat() if order.promise_at else None,
+            'promise_minutes': promise_minutes,
             'coupon_code': order.coupon_code,
             'delivery_slot': order.delivery_slot,
             'lines': [

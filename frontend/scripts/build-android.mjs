@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Build one Android APK per Zippzo application from the single web tree.
+ * Build one Android APK per Zippzo installed application from the shared web tree.
  *
  * Vite emits all three HTML entries into dist/ in one pass, but Capacitor
  * always copies webDir into android/app/src/main/assets/public — a path every
@@ -13,12 +13,12 @@
  *   3. asks Gradle to assemble that flavor
  *
  * Usage:
- *   node scripts/build-android.mjs                 # all three
+ *   node scripts/build-android.mjs                 # all four
  *   node scripts/build-android.mjs rider           # one
  *   node scripts/build-android.mjs --release       # release instead of debug
  */
 import { spawnSync } from 'node:child_process';
-import { rmSync, mkdirSync, existsSync, renameSync, copyFileSync, readdirSync } from 'node:fs';
+import { rmSync, mkdirSync, existsSync, renameSync, copyFileSync, cpSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,9 +30,10 @@ const sharedAssets = join(androidApp, 'src', 'main', 'assets', 'public');
 const liveConfig = join(frontend, 'capacitor.config.json');
 
 const APPS = [
-  { key: 'store', flavor: 'store', config: 'capacitor.store.json' },
-  { key: 'shopper', flavor: 'shopper', config: 'capacitor.shopper.json' },
-  { key: 'rider', flavor: 'rider', config: 'capacitor.rider.json' },
+  { key: 'store', flavor: 'store', config: 'capacitor.store.json', entry: 'operations-app.html' },
+  { key: 'darkstore', flavor: 'darkstore', config: 'capacitor.darkstore.json', entry: 'darkstore.html' },
+  { key: 'shopper', flavor: 'shopper', config: 'capacitor.shopper.json', entry: 'consumer-app.html' },
+  { key: 'rider', flavor: 'rider', config: 'capacitor.rider.json', entry: 'rider.html' },
 ];
 
 const args = process.argv.slice(2);
@@ -117,7 +118,11 @@ for (const app of targets) {
     console.error(`[build-android] ${sharedAssets} missing after cap sync`);
     process.exit(1);
   }
-  renameSync(sharedAssets, flavorAssets);
+  // Directory rename can fail with EPERM on Windows when a just-written file
+  // is still held open. Copy into the flavor, then clear shared staging so
+  // Gradle only packages the selected app bundle.
+  cpSync(sharedAssets, flavorAssets, { recursive: true, force: true });
+  rmSync(sharedAssets, { recursive: true, force: true });
 
   // Capacitor boots `index.html` and has no per-app entry option, so the
   // bundle has to contain exactly one entry. Vite emits all three HTML files
@@ -125,7 +130,24 @@ for (const app of targets) {
   // this app's, drop the sibling applications' bundles, then rename ours to
   // index.html. Shipping all three would also mean installing the customer
   // app hands the user the store console's code.
-  const entryHtml = app.key === 'store' ? 'index.html' : `${app.key}.html`;
+  const entryHtml = app.entry;
+  const htmlFiles = readdirSync(flavorAssets).filter((name) => name.endsWith('.html'));
+  const referencedAssets = (html) =>
+    [...html.matchAll(/(?:src|href)="\/assets\/([^\"]+)"/g)].map((match) => match[1]);
+  const selectedAssets = new Set(referencedAssets(readFileSync(join(flavorAssets, entryHtml), 'utf8')));
+  const siblingOnlyAssets = new Set();
+  for (const name of htmlFiles) {
+    if (name === entryHtml) continue;
+    for (const asset of referencedAssets(readFileSync(join(flavorAssets, name), 'utf8'))) {
+      if (!selectedAssets.has(asset)) siblingOnlyAssets.add(asset);
+    }
+  }
+  for (const asset of siblingOnlyAssets) {
+    const filename = asset.split('/').at(-1);
+    if (/^(?:entry|rider|darkStore)-/.test(filename) && /\.(?:js|css)$/.test(filename)) {
+      rmSync(join(flavorAssets, 'assets', filename), { force: true });
+    }
+  }
   for (const name of readdirSync(flavorAssets)) {
     if (name.endsWith('.html') && name !== entryHtml) {
       rmSync(join(flavorAssets, name));
@@ -134,20 +156,12 @@ for (const app of targets) {
   if (entryHtml !== 'index.html') {
     renameSync(join(flavorAssets, entryHtml), join(flavorAssets, 'index.html'));
   }
-  // The sibling applications' entry chunks are never imported by this bundle
+  // Sibling product entry assets are removed using the selected HTML's references.
   // (only this HTML references them), so drop them for the same reason as the
   // HTML: a customer install should not ship the store console's code. Shared
   // chunks such as src-*.js and the lazily-loaded view chunks stay — a dynamic
   // import is invisible to the HTML, so only the three known entry names are
   // safe to remove.
-  const chunkAssets = join(flavorAssets, 'assets');
-  if (existsSync(chunkAssets)) {
-    for (const name of readdirSync(chunkAssets)) {
-      const entry = name.match(/^(store|shopper|rider)-[\w-]+\.js$/);
-      if (entry && entry[1] !== app.key) rmSync(join(chunkAssets, name));
-    }
-  }
-
   // AGP packages into the APK file that is already there, and an entry which
   // shrinks between runs leaves its old bytes behind: the shopper and rider
   // APKs each carried 139 KB of zero-filled dead space (and a stale local

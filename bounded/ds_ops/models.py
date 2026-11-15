@@ -183,11 +183,60 @@ class TransferOrder(models.Model):
         ordering = ['-created_at']
 
 
+class TransferOrderLine(models.Model):
+    """The SKU detail of a transfer order.
+
+    TransferOrder is the header the bundle builder creates; this is the
+    line the warehouse can actually report against. Bundle packing writes
+    one row per SKU/lot as units enter LPNs, so a transfer no longer has
+    to derive its contents from pick tasks or tote manifests.
+    """
+
+    STATUS_CHOICES = [
+        ('OPEN', 'Open'),
+        ('PARTIAL', 'Partial'),
+        ('COMPLETED', 'Completed'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+
+    line_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    transfer = models.ForeignKey(
+        TransferOrder, on_delete=models.CASCADE, related_name='lines',
+    )
+    line_no = models.PositiveSmallIntegerField()
+    sku = models.ForeignKey('catalog.Sku', on_delete=models.PROTECT, related_name='transfer_lines')
+    lot = models.ForeignKey(
+        'catalog.InventoryLot', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='transfer_lines',
+    )
+    ordered_qty = models.PositiveIntegerField(default=0)
+    picked_qty = models.PositiveIntegerField(default=0)
+    shipped_qty = models.PositiveIntegerField(default=0)
+    received_qty = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='OPEN')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'transfer_order_lines'
+        ordering = ['transfer', 'line_no']
+        unique_together = [('transfer', 'line_no')]
+        indexes = [
+            models.Index(fields=['transfer', 'status']),
+            models.Index(fields=['sku', 'status']),
+            models.Index(fields=['lot'], name='ix_toline_lot'),
+        ]
+
+    def __str__(self):
+        return f'{self.transfer_id} line {self.line_no}: {self.sku_id}'
+
+
 class BinTransfer(models.Model):
     STATUS_CHOICES = [('CREATED','Created'),('APPROVED','Approved'),('IN_PROGRESS','In Progress'),('COMPLETED','Completed'),('CANCELLED','Cancelled')]
     transfer_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     source_bin = models.CharField(max_length=50)
     dest_bin = models.CharField(max_length=50)
+    scanned_items = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='CREATED')
     # Who requested the bin move and who executed it.
     created_by = models.UUIDField(null=True, blank=True)
@@ -197,3 +246,51 @@ class BinTransfer(models.Model):
     class Meta:
         db_table = 'bin_transfers'
         ordering = ['-created_at', 'transfer_id']
+
+
+class Droplist(models.Model):
+    """A named movement list: which totes came off which bin and where they drop.
+
+    This is deliberately separate from BinTransfer. A bin transfer moves
+    everything standing in a source bin; a droplist is the operator-facing
+    list of tote drops, with the tote and drop counts the warehouse actually
+    reports against.
+    """
+
+    STATUS_CHOICES = [
+        ('CREATED', 'Created'),
+        ('IN_PROGRESS', 'In Progress'),
+        ('DROPPED', 'Dropped'),
+        ('COMPLETED', 'Completed'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+
+    droplist_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(max_length=60, unique=True)
+    site = models.ForeignKey('network.Site', on_delete=models.PROTECT, related_name='droplists')
+    source_bin = models.CharField(max_length=50)
+    dest_bin = models.CharField(max_length=50)
+    tote_count = models.PositiveIntegerField(default=0)
+    dropped_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='CREATED')
+    notes = models.CharField(max_length=250, blank=True)
+    created_by = models.UUIDField(null=True, blank=True)
+    completed_by = models.UUIDField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'droplists'
+        ordering = ['-created_at', 'droplist_id']
+        indexes = [
+            models.Index(fields=['site', 'status']),
+            models.Index(fields=['source_bin', 'dest_bin']),
+        ]
+
+    def clean(self):
+        if self.source_bin == self.dest_bin:
+            from django.core.exceptions import ValidationError
+            raise ValidationError({'dest_bin': 'Source and destination bins must differ.'})
+
+    def __str__(self):
+        return self.code

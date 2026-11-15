@@ -15,10 +15,33 @@ export const TEST_USERS = {
  */
 export const APP_ENTRIES = {
   store: '/index.html',
+  darkstore: '/darkstore.html',
   shopper: '/shopper.html',
   rider: '/rider.html',
 };
 
+/** Wait for a specific auth call and click the wizard's primary button. */
+async function submitStep(page: Page, endpoint: string) {
+  const response = page.waitForResponse(
+    r => r.url().includes(endpoint),
+    { timeout: 60_000 },
+  );
+  await page.locator('[data-testid="login-submit"]').click();
+  return response;
+}
+
+async function readJson(response: any) {
+  try { return await response.json(); } catch { return null; }
+}
+
+/**
+ * Complete the staff sign-in wizard.
+ *
+ * The server decides the path: rider/consumer accounts receive a token from the
+ * password step; single-site staff go straight to the one-time code; multi-site
+ * staff first choose one of the facilities the server returned. In development
+ * `OTP_DEV_ECHO=1` includes the code so the suite never needs an SMS provider.
+ */
 export async function login(
   page: Page,
   user = TEST_USERS.admin,
@@ -29,32 +52,42 @@ export async function login(
   await page.fill('input[type="email"]', user.email);
   await page.fill('input[type="password"]', user.password);
 
-  let failure: unknown = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await Promise.all([
-        page.waitForResponse(
-          r => r.url().includes('/api/iam/auth/login') && r.status() === 200,
-          { timeout: 60_000 },
-        ).catch(() => null),
-        page.click('button[type="submit"]'),
-      ]);
-      await page.waitForFunction(
-        () => !!window.localStorage.getItem('zippzo_jwt'),
-        undefined,
-        { timeout: 60_000 },
-      );
-      failure = null;
-      break;
-    } catch (err) {
-      failure = err;
-      if (attempt === 1) break;
-      await page.fill('input[type="email"]', user.email);
-      await page.fill('input[type="password"]', user.password);
-    }
-  }
-  if (failure) throw failure;
+  let response = await submitStep(page, '/api/iam/auth/login');
+  let body = await readJson(response);
 
+  if (body?.facility_required) {
+    const options = page.locator('[data-testid="login-facility-option"]');
+    await options.first().waitFor({ state: 'visible', timeout: 30_000 });
+    const preferred = entry.includes('darkstore')
+      ? options.filter({ hasText: 'Dark store' })
+      : entry.includes('index') ? options.filter({ hasText: 'Warehouse' }) : options;
+    const target = (await preferred.count()) ? preferred.first() : options.first();
+    response = page.waitForResponse(
+      r => r.url().includes('/api/iam/auth/facility'),
+      { timeout: 60_000 },
+    );
+    await target.click();
+    response = await response;
+    body = await readJson(response);
+  }
+
+  if (body?.otp_required || response.status() === 403) {
+    const otp = body?.dev_otp;
+    if (!otp) throw new Error(`login as ${user.email}: the server did not return a development OTP`);
+    await page.locator('[data-testid="login-otp"]').fill(String(otp));
+    response = await submitStep(page, '/api/iam/auth/otp/verify');
+    body = await readJson(response);
+  }
+
+  if (response.status() !== 200) {
+    throw new Error(`login as ${user.email} failed with HTTP ${response.status()}: ${JSON.stringify(body)}`);
+  }
+
+  await page.waitForFunction(
+    () => !!window.localStorage.getItem('zippzo_jwt'),
+    undefined,
+    { timeout: 60_000 },
+  );
   await page.locator('input[type="email"]').waitFor({ state: 'hidden', timeout: 90_000 });
 }
 
@@ -93,27 +126,67 @@ export async function loginRider(page: Page, user = TEST_USERS.rider) {
  * gets a DS facility at login, so log in as a WMS operator and pick the store
  * from the header site picker.
  */
-export async function selectDarkStore(page: Page, siteCode?: string) {
-  await login(page, TEST_USERS.admin);
-  const picker = page.locator('[data-testid="facility-switcher"]');
-  await picker.waitFor({ state: 'visible', timeout: 60_000 });
-  // The site directory loads after the header renders, so an option read too
-  // early comes back empty and selectOption() rejects the disabled placeholder.
-  const dsOption = page.locator(
-    '[data-testid="facility-switcher"] optgroup[label="Dark stores"] option'
+export async function selectDarkStore(page: Page, siteCode?: string): Promise<string> {
+  await login(page, TEST_USERS.admin, APP_ENTRIES.darkstore);
+
+  const gate = page.locator('[data-testid="ds-store-gate"]');
+  const resolved = page.locator(
+    '[data-testid="ds-overview-tiles"], [data-testid="ds-overview-error"]'
   );
-  await dsOption.first().waitFor({ state: 'attached', timeout: 60_000 });
-  const code = siteCode ?? (await dsOption.first().getAttribute('value'));
-  if (!code) throw new Error('no dark store site is offered in the facility picker');
-  await picker.selectOption(code);
-  await page.locator('[data-testid="nav-ds-dashboard"]').waitFor({ state: 'visible', timeout: 90_000 });
-  await page.waitForLoadState('networkidle');
+
+  await Promise.race([
+    gate.waitFor({ state: 'visible', timeout: 90_000 }),
+    resolved.first().waitFor({ state: 'visible', timeout: 90_000 }),
+  ]);
+
+  if (await gate.isVisible().catch(() => false)) {
+    const options = page.locator('[data-testid^="ds-store-option-"]');
+    await options.first().waitFor({ state: 'visible', timeout: 60_000 });
+    const target = siteCode
+      ? page.locator(`[data-testid="ds-store-option-${siteCode}"]`)
+      : options.first();
+    await target.click();
+    await gate.waitFor({ state: 'hidden', timeout: 90_000 });
+  }
+
+  const code = await page.evaluate(() => {
+    try {
+      const raw = localStorage.getItem('zippzo_auth_facility');
+      return raw ? JSON.parse(raw)?.code || '' : '';
+    } catch {
+      return '';
+    }
+  });
+  if (!code) throw new Error('dark store resolved but no facility code was persisted');
+  return code;
 }
 
 /** Navigate to a tab by its sidebar testid and wait for a wf-panel to render. */
-export async function openTab(page: Page, tabId: string) {
-  await page.click(`[data-testid="nav-${tabId}"]`);
-  await page.locator('.wf-panel').first().waitFor({ state: 'visible', timeout: 90_000 });
+export async function openDarkStoreTab(page: Page, title: string) {
+  const item = page.locator('button.subnav-item', { hasText: title });
+
+  if ((await item.count()) === 0) {
+    for (const header of [
+      'Outbound · Customer Orders',
+      'Inbound · Store Stock',
+      'Store control',
+      'Administration',
+    ]) {
+      const group = page.locator('button.accordion-header', { hasText: header });
+      if ((await group.count()) === 0) continue;
+      const isOpen = await group
+        .evaluate((el) => el.classList.contains('open'))
+        .catch(() => false);
+      if (!isOpen) await group.click();
+      if ((await item.count()) > 0) break;
+    }
+  }
+
+  await item.first().click();
+  await page
+    .locator('.wf-panel, .screen-header, .data-table, .tally-grid')
+    .first()
+    .waitFor({ state: 'visible', timeout: 90_000 });
 }
 
 export async function navigateTo(page: Page, tabId: string) {

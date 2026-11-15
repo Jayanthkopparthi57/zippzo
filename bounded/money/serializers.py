@@ -1,5 +1,7 @@
 from rest_framework import serializers
-from .models import Payment, CancelIntent, Refund, RefundDecision, CashMovement, RiderCustodyState, RiderEarnings, DeliveryPricingRule
+from .models import (Payment, CancelIntent, Refund, RefundDecision, CashMovement,
+                     RiderCustodyState, RiderEarnings, RiderPayout,
+                     DeliveryPricingRule)
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -38,17 +40,45 @@ class RiderCustodyStateSerializer(serializers.ModelSerializer):
         read_only_fields = ['updated_at']
 
 class RiderEarningsSerializer(serializers.ModelSerializer):
+    order_no = serializers.CharField(source='order.order_no', read_only=True)
+    payout_id = serializers.UUIDField(source='payout.payout_id', read_only=True, allow_null=True)
+
     class Meta:
         model = RiderEarnings
-        fields = ['earning_id','rider','order','amount','delivery_fee','tips','status','created_at']
+        fields = ['earning_id','rider','order','order_no','amount','delivery_fee','tips',
+                  'status','payout_id','paid_at','created_at']
         read_only_fields = ['earning_id','created_at']
+
+
+class RiderPayoutEarningSerializer(serializers.ModelSerializer):
+    order_no = serializers.CharField(source='order.order_no', read_only=True)
+    delivered_at = serializers.DateTimeField(source='order.delivered_at', read_only=True)
+
+    class Meta:
+        model = RiderEarnings
+        fields = ['earning_id','order','order_no','amount','delivery_fee','tips',
+                  'status','paid_at','delivered_at']
+
+
+class RiderPayoutSerializer(serializers.ModelSerializer):
+    rider_name = serializers.CharField(source='rider.name', read_only=True)
+    rider_phone = serializers.CharField(source='rider.phone', read_only=True)
+    earnings = RiderPayoutEarningSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = RiderPayout
+        fields = ['payout_id','rider','rider_name','rider_phone','site','amount',
+                  'earnings_count','period_start','period_end','status','reference',
+                  'created_by','created_at','earnings']
+        read_only_fields = ['payout_id','amount','earnings_count','period_start',
+                            'period_end','status','created_by','created_at']
 
 class DeliveryPricingRuleSerializer(serializers.ModelSerializer):
     site_code = serializers.CharField(source='site.code', read_only=True)
 
     class Meta:
         model = DeliveryPricingRule
-        fields = ['rule_id','site','site_code','base_fee','free_above','is_active','updated_by','created_at','updated_at']
+        fields = ['rule_id','site','site_code','base_fee','promise_minutes','free_above','is_active','updated_by','created_at','updated_at']
         read_only_fields = ['rule_id','updated_by','created_at','updated_at']
 
     def validate_base_fee(self, value):

@@ -109,6 +109,26 @@ class ShopperUxBase(TestCase):
         return response
 
 
+class ShopperStoreDirectoryTests(ShopperUxBase):
+
+    def test_customer_store_directory_includes_coordinates_for_nearest_store(self):
+        self.site.site_type = 'DS'
+        self.site.status = 'ACTIVE'
+        self.site.is_accepting_orders = True
+        self.site.geo_lat = Decimal('12.9716000')
+        self.site.geo_lng = Decimal('77.5946000')
+        self.site.save(update_fields=[
+            'site_type', 'status', 'is_accepting_orders', 'geo_lat', 'geo_lng',
+        ])
+
+        response = self.api_for(self.shopper).get('/api/network/overview')
+
+        self.assertEqual(200, response.status_code, response.data)
+        store = next(row for row in response.data['dark_stores'] if row['code'] == self.site.code)
+        self.assertEqual(Decimal('12.9716000'), store['geo_lat'])
+        self.assertEqual(Decimal('77.5946000'), store['geo_lng'])
+
+
 class DeliveryCodeTests(ShopperUxBase):
 
     def test_the_shopper_reads_the_code_the_rider_was_not_given(self):

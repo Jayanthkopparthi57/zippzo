@@ -34,3 +34,7 @@ dist-native/
 # capacitor.<app>.json here before each `cap sync`, so this file is a build
 # artefact and never the source of truth.
 capacitor.config.json
+
+# Generated iOS web bundle and Xcode build output
+dist-ios/
+build/

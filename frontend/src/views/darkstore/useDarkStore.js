@@ -40,11 +40,19 @@ export const storefront = (siteCode, q = '', pincode = '') =>
     + (q ? `&q=${encodeURIComponent(q)}` : '')
     + (pincode ? `&pincode=${encodeURIComponent(pincode)}` : ''));
 
+/** Stores that have explicitly published delivery coverage for this pincode. */
+export const deliveryCoverage = (pincode) =>
+  fetchApi(`/routing/coverage?pincode=${encodeURIComponent(pincode)}`);
+
 /**
  * Place an order. Prices are decided by the server from `Listing`; anything
  * price-shaped sent here is ignored, which is deliberate.
  */
 export const placeOrder = (payload) => postApi('/orders/checkout', payload);
+
+/** Server-verified Cashfree result for one of the signed-in shopper's orders. */
+export const cashfreePaymentStatus = (orderId) =>
+  fetchApi(`/orders/payments/${encodeURIComponent(orderId)}/status`);
 
 /** The signed-in shopper's own orders, newest first. */
 export const myOrders = () => fetchApi('/orders/orders/');
@@ -87,8 +95,9 @@ export const removeAddress = (id) =>
 export const deliveryCode = (orderId) =>
   fetchApi(`/orders/orders/${encodeURIComponent(orderId)}/delivery-code/`);
 
-/** Active coupons a shopper can apply at checkout. */
-export const activeCoupons = () => fetchApi('/catalog/coupons/');
+/** Active coupons a shopper can apply at the selected store. */
+export const activeCoupons = (siteCode = '') =>
+  fetchApi(`/catalog/coupons/${siteCode ? `?site=${encodeURIComponent(siteCode)}` : ''}`);
 
 /** Cancel one of the shopper's own orders, while it is still before picking. */
 export const cancelOrder = (orderId, reason = '') =>
@@ -254,6 +263,23 @@ export function useAsyncData(fn, deps, { pollMs = 0 } = {}) {
     return () => clearInterval(id);
   }, [pollMs, load]);
 
+  // Realtime & Online Recovery: catch live updates, WebSocket reconnects,
+  // and returning online without waiting for the slow polling timer.
+  useEffect(() => {
+    const onLive = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      load({ quiet: true });
+    };
+    window.addEventListener('zippzo:live-event', onLive);
+    window.addEventListener('online', onLive);
+    document.addEventListener('visibilitychange', onLive);
+    return () => {
+      window.removeEventListener('zippzo:live-event', onLive);
+      window.removeEventListener('online', onLive);
+      document.removeEventListener('visibilitychange', onLive);
+    };
+  }, [load]);
+
   return { data, error, loading, reload: load, setData };
 }
 
@@ -333,10 +359,23 @@ export async function loadSkuIndex() {
  * newest orders and nothing else — an operator filtering client-side would see
  * a queue that is missing every order they actually have to pick. Server-side
  * filtering is a correctness requirement here, not an optimisation.
+ *
+ * `statuses` has no safe default for the caller to forget: an undefined value
+ * used to throw on `for…of` and leave the whole picking screen blank. The
+ * default below is the server's own pickable set (`PICKABLE_STATUSES`), so a
+ * caller that omits it still asks the right question.
  */
-export async function loadOrderQueue(siteId, statuses) {
+export const ORDER_QUEUE_STATUSES = [
+  'CONFIRMED', 'PICKING', 'INTERRUPTED', 'PARTIALLY_FULFILLED',
+  'PICKED', 'RACK_DROPPED',
+];
+
+export async function loadOrderQueue(siteId, statuses = ORDER_QUEUE_STATUSES) {
+  const wanted = Array.isArray(statuses) && statuses.length
+    ? statuses
+    : ORDER_QUEUE_STATUSES;
   const seen = new Map();
-  for (const status of statuses) {
+  for (const status of wanted) {
     const rows = asList(
       await fetchApi(
         `/orders/orders/?site=${encodeURIComponent(siteId)}` +
@@ -400,6 +439,65 @@ export async function resolveStoreBin(storeCode, scanned) {
 }
 
 /**
+ * Close an order's pick once every line is picked.
+ *
+ * `COMPLETE_PICK` is the only order transition the dark-store order-action
+ * endpoint exposes; packing, handoff, and POD each own their own state moves.
+ */
+export async function completePick(orderId) {
+  return postApi('/ds-ops/order-action', {
+    order_id: orderId,
+    action: 'COMPLETE_PICK',
+  });
+}
+
+/**
+ * Execute one scan against an allocated order line.
+ *
+ * This is the physical pick write. The bin must be one of the line's allocated
+ * bins; the server refuses a scan against any other shelf and replays are
+ * keyed by scan_id.
+ */
+export async function pickLine({
+  orderId, lineId, binLocationId, productBarcode, qty = 1, scanId,
+}) {
+  return postApi('/ds-ops/pick-line', {
+    order_id: orderId,
+    line_id: lineId,
+    bin_location_id: binLocationId,
+    ...(productBarcode ? { product_barcode: productBarcode } : {}),
+    qty,
+    ...(scanId ? { scan_id: scanId } : {}),
+  });
+}
+
+/**
+ * Receive one mother-hub tote into this dark store's custody.
+ *
+ * The backend resolves by barcode, not by LPN id: the label on the tote is
+ * the only thing the operator can guarantee they are holding.
+ */
+export const receiveLpn = (barcode, storeCode, sealNumber = '') =>
+  postApi('/ds-ops/receive-lpn', {
+    barcode,
+    store_code: storeCode,
+    ...(sealNumber ? { seal_number: sealNumber } : {}),
+  });
+
+/**
+ * Break a received tote onto shelf bins.
+ *
+ * The backend takes one atomic word of placements — `{sku, lot, bin, qty}` —
+ * not one request per line; a partial response can never leave half a tote
+ * shelved and half in LPN custody.
+ */
+export const shelfPutaway = (lpnId, placements) =>
+  postApi('/ds-ops/shelf-putaway', {
+    lpn: lpnId,
+    placements,
+  });
+
+/**
  * Fix the route for an order: which bin each line comes from, and how many units
  * from each. Idempotent on the server, so a retry after a dropped response is
  * safe.
@@ -434,6 +532,55 @@ export async function packOrder(orderId, { lpnBarcode, stagingBin }) {
   });
 }
 
+/**
+ * Chart's Rack Drop step: the picker has carried the picked units to the
+ * packing rack and confirmed the drop.
+ *
+ * This is deliberately not packing. The order becomes RACK_DROPPED, the rack
+ * label is recorded, and the pack station still has to seal a tote before a
+ * rider job exists. Sending the same order twice is safe: the server answers
+ * `already_dropped` instead of moving the order again.
+ */
+export const rackDrop = (orderId, rackLocation) =>
+  postApi('/ds-ops/rack-drop', {
+    order_id: orderId,
+    rack_location: rackLocation,
+  });
+
+/** Assign one order to the picker with the fewest open tasks. */
+export const assignOrder = (orderId, pickerId) =>
+  postApi('/ds-ops/assign-order', {
+    order_id: orderId,
+    ...(pickerId ? { picker_id: pickerId } : {}),
+  });
+
+/** Orders whose pick tasks nobody owns yet. */
+export const pendingPicks = (storeCode) =>
+  fetchApi(`/ds-ops/pending-picks?site_code=${encodeURIComponent(storeCode)}`);
+
+/** One assignment pass over the pending queue. */
+export const assignPendingPicks = (storeCode) =>
+  postApi(`/ds-ops/pending-picks?site_code=${encodeURIComponent(storeCode)}`, {});
+
+/** Packed totes waiting for a rider (chart: Ready for Rider). */
+export const dsDeliveryQueue = (storeCode) =>
+  fetchApi(`/ds-ops/delivery-queue?site_code=${encodeURIComponent(storeCode)}`);
+
+/** Pending work per department, for the manager overview. */
+export const dsDepartmentStatus = (storeCode) =>
+  fetchApi(`/ds-ops/department-status?site_code=${encodeURIComponent(storeCode)}`);
+
+/** Order tracking board, optionally narrowed to one status. */
+export const dsOrderTracking = (storeCode, status = '') =>
+  fetchApi(
+    `/ds-ops/order-tracking?site_code=${encodeURIComponent(storeCode)}`
+    + (status ? `&status=${encodeURIComponent(status)}` : '')
+  );
+
+/** Today's shared store code; one per calendar day. */
+export const rotatingStoreOtp = (storeCode) =>
+  fetchApi(`/iam/auth/store-code?site_code=${encodeURIComponent(storeCode)}`);
+
 /** Empty totes at this store, to offer the packer something to fill. */
 export const emptyLpns = async (siteId) =>
   asList(
@@ -454,8 +601,21 @@ export const emptyLpns = async (siteId) =>
  *
  * The backend scopes this to the caller's own site for anyone without a rider
  * profile, so an operator sees the totes staged at their store and nobody else's.
+ *
+ * `statuses` must be explicit: `status__in=` with an empty value matches
+ * nothing. Active handoff work and delivered history are requested separately
+ * so completed deliveries do not inflate the live queue.
  */
-export const deliveryTasks = async (siteId, statuses) =>
+export const ACTIVE_HANDOFF_STATUSES = [
+  'UNASSIGNED', 'OFFERED', 'ACCEPTED', 'AT_DS', 'STAGED',
+  'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING',
+];
+
+export const HANDOFF_STATUSES = [
+  ...ACTIVE_HANDOFF_STATUSES, 'DELIVERED',
+];
+
+export const deliveryTasks = async (siteId, statuses = HANDOFF_STATUSES) =>
   asList(
     await fetchApi(
       // The router registers `delivery-tasks`; `/delivery/tasks/` is not a

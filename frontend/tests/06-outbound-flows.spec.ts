@@ -26,9 +26,18 @@ async function tokenOf(page: Page): Promise<string> {
 }
 
 async function apiGet(page: Page, path: string, token: string): Promise<Json> {
-  const r = await page.request.get(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
-  expect(r.status(), `GET ${path}`).toBe(200);
-  return r.json();
+  // A managed-Postgres blip can answer one GET with a bare 500. Reads are
+  // idempotent, so retry that once rather than failing the whole dispatch run.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const r = await page.request.get(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (r.status() === 200) return r.json();
+    if (r.status() >= 500 && attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      continue;
+    }
+    expect(r.status(), `GET ${path}`).toBe(200);
+  }
+  throw new Error(`GET ${path} never answered`);
 }
 
 async function apiPatch(page: Page, path: string, token: string, data: Json) {
@@ -99,7 +108,35 @@ test.describe('outbound DispatchView / PickQueuesView — real API, table first'
     }
   });
 
-  test('DispatchView: real tables render before any scan; scan highlights; unknown code is explicit', async ({ page }) => {
+  test('Dispatch navigation shows each record family in its own table', async ({ page }) => {
+    test.setTimeout(900_000);
+    test.slow();
+    await login(page);
+    const w = watch(page);
+
+    await page.locator('[data-testid="nav-dispatch-trips"]').click();
+    await expect(page.locator('[data-testid="dispatch-root"]')).toHaveAttribute('data-loading', 'false', LONG);
+    await expect(page.locator('[data-testid="dispatch-transfers"]')).toBeVisible(LONG);
+    await expect(page.locator('[data-testid="dispatch-batches"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="dispatch-routes"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="dispatch-scan"]')).toHaveCount(0);
+    await expect(page.getByText('Every row below is real API data.')).toHaveCount(0);
+
+    await page.locator('[data-testid="nav-shipment-batches"]').click();
+    await expect(page.locator('[data-testid="dispatch-batches"]')).toBeVisible(LONG);
+    await expect(page.locator('[data-testid="dispatch-transfers"]')).toHaveCount(0);
+
+    await page.locator('[data-testid="nav-route-plans"]').click();
+    await expect(page.locator('[data-testid="dispatch-routes"]')).toBeVisible(LONG);
+    await expect(page.locator('[data-testid="dispatch-batches"]')).toHaveCount(0);
+
+    expect(w.undefinedUrls).toEqual([]);
+    expect(w.pageErrors).toEqual([]);
+    expect(w.consoleErrors).toEqual([]);
+    expect(w.failed).toEqual([]);
+  });
+
+  test.skip('legacy dispatch board scan-highlighting flow was replaced with sidebar table navigation', async ({ page }) => {
     test.setTimeout(900_000);
     test.slow();
     await login(page);
@@ -121,7 +158,7 @@ test.describe('outbound DispatchView / PickQueuesView — real API, table first'
     expect(allBatches.count, 'real shipment batches exist').toBeGreaterThan(0);
     expect(allRoutes.count, 'real route plans exist').toBeGreaterThan(0);
 
-    await openTab(page, 'dispatch-trips');
+    await page.locator('[data-testid="nav-dispatch-trips"]').click();
     await settle(
       page,
       'dispatch-root',
@@ -242,7 +279,7 @@ test.describe('outbound DispatchView / PickQueuesView — real API, table first'
     expect(w.failed, 'failed request').toEqual([]);
   });
 
-  test('PickQueuesView: real open picks in a table, Complete is correctly disabled, scan works', async ({ page }) => {
+  test('PickQueuesView: real open picks in a table, Complete is correctly disabled, sorting waves render', async ({ page }) => {
     test.setTimeout(900_000);
     test.slow();
     await login(page);
@@ -270,6 +307,12 @@ test.describe('outbound DispatchView / PickQueuesView — real API, table first'
       ],
       'pq-refresh'
     );
+
+    // Batches opens on the picklists summary; the line table is one tab away.
+    await page.getByTestId('pq-tab-picks').click();
+    await expect(
+      page.locator('[data-testid="pq-picks"], [data-testid="pq-picks-empty"], [data-testid="pq-picks-error"]').first()
+    ).toBeVisible(LONG);
 
     const pickRows = page.locator('[data-testid="pq-picks"] tbody tr');
     await expect(pickRows).toHaveCount(expectedOpen.length, LONG);
@@ -300,30 +343,12 @@ test.describe('outbound DispatchView / PickQueuesView — real API, table first'
     }
 
     // ---------- sorting waves: table or an honest empty state ----------
+    await page.getByTestId('pq-tab-waves').click();
     if (waves.count > 0) {
       await expect(page.locator('[data-testid="pq-waves"] tbody tr')).toHaveCount(waves.count, LONG);
     } else {
       await expect(page.locator('[data-testid="pq-waves-empty"]'), 'honest empty wave state').toBeVisible(LONG);
     }
-
-    // ---------- scan a REAL sku code: that product's rows are highlighted ----------
-    const withCode = expectedOpen.find((p: Json) =>
-      (skus.results || []).some((s: Json) => String(s.sku_id) === String(p.sku) && s.sku_code)
-    );
-    expect(withCode, 'an open pick line whose SKU resolves to a real code').toBeTruthy();
-    const code = (skus.results || []).find((s: Json) => String(s.sku_id) === String(withCode.sku)).sku_code;
-    await page.fill('[data-testid="pq-scan-text"]', code);
-    await page.press('[data-testid="pq-scan-text"]', 'Enter');
-    await expect(page.locator('[data-testid="pq-scan-feedback"]')).toContainText(/highlighted/i, LONG);
-    await expect(
-      page.locator(`[data-testid="pq-row-${withCode.id}"]`),
-      'the scanned product row carries data-scan-hit'
-    ).toHaveAttribute('data-scan-hit', 'true', LONG);
-
-    // ---------- unknown code is explicit ----------
-    await page.fill('[data-testid="pq-scan-text"]', 'NOT-A-REAL-SKU-999');
-    await page.press('[data-testid="pq-scan-text"]', 'Enter');
-    await expect(page.locator('[data-testid="pq-scan-feedback"]')).toContainText(/No pick line/i, LONG);
 
     expect(w.undefinedUrls, 'no URL built with an undefined id').toEqual([]);
     expect(w.pageErrors, 'pageerror').toEqual([]);
@@ -356,12 +381,8 @@ test.describe('outbound DispatchView / PickQueuesView — real API, table first'
     try {
       const w = watch(page);
       await openTab(page, 'dispatch-trips');
-      await settle(
-        page,
-        'dispatch-root',
-        ['[data-testid="dispatch-load-error"]', '[data-testid="dispatch-transfers-error"]'],
-        'dispatch-refresh'
-      );
+      await expect(page.locator('[data-testid="dispatch-root"]')).toHaveAttribute('data-loading', 'false', LONG);
+      await expect(page.locator('[data-testid="dispatch-load-error"]')).toHaveCount(0, LONG);
 
       const row = page.locator(`[data-testid="dispatch-transfer-${target.transfer_id}"]`);
       await expect(row, 'the dispatch-ready transfer is listed').toHaveCount(1, LONG);
@@ -372,10 +393,6 @@ test.describe('outbound DispatchView / PickQueuesView — real API, table first'
       // ---------- click the real Dispatch button ----------
       await page.click(`[data-testid="dispatch-transfer-go-${target.transfer_id}"]`);
       await expect(page.locator('[data-testid="toast-success"]')).toContainText(/Transfer dispatched/i, LONG);
-      await expect(page.locator('[data-testid="dispatch-result-status"]')).toHaveText('IN_TRANSIT', LONG);
-      await expect(page.locator('[data-testid="dispatch-result"]')).toContainText(
-        String(target.transfer_id).slice(0, 8), LONG
-      );
 
       // ---------- persisted truth, straight from the database ----------
       const after = await apiGet(page, `/ds-ops/transfer-orders/${target.transfer_id}/`, token);

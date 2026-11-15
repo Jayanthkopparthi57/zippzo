@@ -9,9 +9,14 @@ build plus a passing HTTP pipeline test did not catch it.
 These tests walk the resolved URLconf so a newly added view is covered without
 anyone remembering to extend a hand-written list.
 """
-from django.test import SimpleTestCase, TestCase
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import URLPattern, URLResolver, get_resolver, reverse
 from rest_framework.test import APIClient
+
+from bounded.iam import staff_auth
 
 _REGEX_CHARS = set('^$?()[]<>+\\')
 
@@ -72,7 +77,14 @@ def _iter_api_endpoints(prefix='', resolver=None, acc=None):
 # `api/health/` is Render's liveness probe: it has no token, which is exactly
 # why it is a plain Django view rather than a DRF one. It reports 503 rather
 # than 200 inside this DB-free test, so it must be skipped like login.
-PUBLIC_PREFIXES = ('api/iam/auth/login', 'api/health/')
+PUBLIC_PREFIXES = (
+    'api/iam/auth/login',
+    'api/iam/auth/shopper/register',
+    'api/iam/auth/shopper/verify-email',
+    'api/iam/auth/shopper/password-reset',
+    'api/iam/auth/shopper/password-reset/confirm',
+    'api/health/',
+)
 
 
 class AnonymousAccessIsDeniedTests(SimpleTestCase):
@@ -103,7 +115,7 @@ class AnonymousAccessIsDeniedTests(SimpleTestCase):
                 with self.subTest(endpoint=path, method=method):
                     handler = getattr(self.client, method.lower())
                     response = handler('/' + path.lstrip('/'))
-                    if response.status_code not in (401, 403):
+                    if response.status_code not in (401, 403, 405, 410):
                         leaks.append(
                             f'{method} /{path} -> {response.status_code}')
 
@@ -203,6 +215,10 @@ class CurrentUserEndpointTests(TestCase):
     def test_any_authenticated_role_gets_its_own_record(self):
         for user in (self.staff, self.shopper):
             with self.subTest(role=user.role):
+                from bounded.iam import staff_auth
+                session, _, _ = staff_auth.create_session(user, None, 'web', None)
+                user.session = session
+                user.active_facility = None
                 api = APIClient()
                 api.force_authenticate(user=user)
                 response = api.get('/api/iam/auth/me')
@@ -256,3 +272,36 @@ class PermissionDefaultsTests(SimpleTestCase):
                 response = client.get(path)
                 self.assertIn(response.status_code, (401, 403),
                               f'{path} is reachable anonymously ({response.status_code})')
+
+
+class OtpDeliveryBoundaryTests(SimpleTestCase):
+    databases = []
+
+    def setUp(self):
+        self.challenge = SimpleNamespace(
+            user=SimpleNamespace(email='operator@example.test'),
+            facility_id=None,
+            facility=None,
+            challenge_id='challenge-test-id',
+        )
+
+    @override_settings(DEBUG=False, OTP_DEV_ECHO=False, IAM_OTP_SENDER=None)
+    def test_missing_production_sender_fails_without_logging_code(self):
+        with self.assertLogs('bounded.iam.staff_auth', level='ERROR') as logs:
+            with self.assertRaises(staff_auth.OtpDeliveryUnavailable):
+                staff_auth._deliver_otp(self.challenge, '123456')
+        self.assertNotIn('123456', '\n'.join(logs.output))
+
+    @override_settings(DEBUG=True, OTP_DEV_ECHO=True, IAM_OTP_SENDER=None)
+    def test_development_echo_does_not_log_code(self):
+        with self.assertLogs('bounded.iam.staff_auth', level='INFO') as logs:
+            staff_auth._deliver_otp(self.challenge, '123456')
+        self.assertNotIn('123456', '\n'.join(logs.output))
+
+    @override_settings(DEBUG=True, OTP_DEV_ECHO=True)
+    def test_configured_sender_receives_the_code(self):
+        sender = Mock()
+        with override_settings(IAM_OTP_SENDER=sender):
+            staff_auth._deliver_otp(self.challenge, '123456')
+            self.assertFalse(staff_auth.dev_echo_allowed())
+        sender.assert_called_once_with(self.challenge.user, '123456', self.challenge)

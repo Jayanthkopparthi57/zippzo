@@ -55,8 +55,12 @@ test.describe('Scan-first warehouse screens render', () => {
       await login(page);
       await page.locator(`[data-testid="${nav}"]`).click();
 
-      // The shared design system must be present on every operational screen.
-      await expect(page.locator('.wf-panel').first()).toBeVisible({ timeout: 60000 });
+      if (nav === 'nav-dispatch-trips') {
+        await expect(page.locator('[data-testid="dispatch-transfers"]')).toBeVisible({ timeout: 60000 });
+      } else {
+        // The shared design system must be present on every scan-first screen.
+        await expect(page.locator('.wf-panel').first()).toBeVisible({ timeout: 60000 });
+      }
 
       // No screen may be an empty shell.
       const body = (await page.locator('body').innerText()).trim();
@@ -74,14 +78,27 @@ test.describe('Scan-first warehouse screens render', () => {
   test('each outbound destination opens the queue it names', async ({ page }) => {
     await login(page);
 
-    // Picklists: the pick queue only — the sorting-wave panel is not rendered.
+    // Picklists: the grouped picking summary only — pick lines are one tab
+    // away, and the sorting-wave panel is not rendered.
     await page.locator('[data-testid="nav-picklists"]').click();
     await expect(page.locator('[data-testid="pq-root"]')).toBeVisible({ timeout: 60000 });
     await expect(
-      page.locator('[data-testid="pq-picks"], [data-testid="pq-picks-empty"], [data-testid="pq-picks-error"]').first()
+      page.locator('[data-testid="pq-picklists"], [data-testid="pq-picklists-empty"], [data-testid="pq-picklists-error"]').first()
     ).toBeVisible({ timeout: 60000 });
     await expect(page.getByTestId('pq-waves')).toHaveCount(0);
     await expect(page.getByTestId('pq-waves-empty')).toHaveCount(0);
+    await expect(page.getByTestId('pq-picks')).toHaveCount(0);
+    await expect(page.getByTestId('pq-picks-empty')).toHaveCount(0);
+
+    // The grouped row drills into its own lines.
+    const firstRow = page.locator('[data-testid="pq-picklists"] tbody tr').first();
+    if ((await firstRow.count()) > 0) {
+      await firstRow.click();
+      await page.getByTestId('pq-tab-picks').click();
+      await expect(
+        page.locator('[data-testid="pq-picks"], [data-testid="pq-picks-empty"], [data-testid="pq-picks-error"]').first()
+      ).toBeVisible({ timeout: 60000 });
+    }
 
     // Sorting: the wave table only — no pick queue, no scan gate.
     await page.getByTestId('pq-tab-waves').click();
@@ -91,12 +108,14 @@ test.describe('Scan-first warehouse screens render', () => {
     await expect(page.getByTestId('pq-picks')).toHaveCount(0);
     await expect(page.getByTestId('pq-picks-empty')).toHaveCount(0);
 
-    // Batches is the combined view: both queues are on screen.
+    // Batches opens on the picklists summary — one table per section now,
+    // with pick lines and sorting waves one tab away.
     await page.locator('[data-testid="nav-batches"]').click();
-    await expect(page.getByTestId('pq-tab-both')).toHaveClass(/active/, { timeout: 60000 });
+    await expect(page.getByTestId('pq-tab-picklists')).toHaveClass(/active/, { timeout: 60000 });
     await expect(
-      page.locator('[data-testid="pq-waves"], [data-testid="pq-waves-empty"], [data-testid="pq-waves-error"]').first()
+      page.locator('[data-testid="pq-picklists"], [data-testid="pq-picklists-empty"], [data-testid="pq-picklists-error"]').first()
     ).toBeVisible({ timeout: 60000 });
+    await page.getByTestId('pq-tab-picks').click();
     await expect(
       page.locator('[data-testid="pq-picks"], [data-testid="pq-picks-empty"], [data-testid="pq-picks-error"]').first()
     ).toBeVisible({ timeout: 60000 });

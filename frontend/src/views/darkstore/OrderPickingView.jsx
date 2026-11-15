@@ -1,797 +1,603 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  ClipboardList, Check, X, AlertTriangle, Lock, RefreshCw,
-  Undo2, MapPin,
+  ClipboardList, Check, X, AlertTriangle, RefreshCw, Smartphone, MapPin,
 } from 'lucide-react';
-import StoreGate, { StoreBadge } from './StoreGate';
-import ScanInput from '../../components/ui/ScanInput';
-import WorkflowStepper from '../../components/ui/WorkflowStepper';
+import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
-import { useToast } from '../../components/ui/Toast';
-import { useAuth } from '../../context/AuthContext';
-import { postApi } from '../../api/client';
 import {
-  useDarkStore, useAsyncData, loadOrderQueue, loadSkuIndex, loadPickLines,
-  resolveStoreBin, allocateOrder, num,
+  useDarkStore, useAsyncData, loadOrderQueue, loadPickLines, allocateOrder,
+  completePick, pickLine, resolveStoreBin, rackDrop, ORDER_QUEUE_STATUSES,
 } from './useDarkStore';
 
 /**
- * Pick a customer order for this dark store.
+ * Dark-store picking worklist and scan execution.
  *
- * Every count on this screen comes from the server, and every scan changes
- * stock. There is no local tally.
- *
- * That used to be the opposite: the screen kept a React-only tally, wrote
- * nothing, and COMPLETE_PICK moved the order to PACKED on the strength of that
- * tally. The order then claimed to be packed while every unit was still on the
- * shelf, so the ledger and the order status disagreed permanently. Now:
- *
- *   - `picked_qty`, the per-bin balance and the ledger move together in one
- *     transaction (POST /ds-ops/pick-line);
- *   - the bin is scanned first and checked against the bin the server says the
- *     lot is shelved in, so a scan cannot be made from the wrong shelf;
- *   - the server refuses COMPLETE_PICK until every line is genuinely full, and
- *     names the short lines if it is not;
- *   - "Drop out" returns the units to the bin they came from instead of
- *     quietly zeroing a counter.
- *
- * Two things the order used to lack now exist, and this screen depends on both:
- *
- *   - The operator is fenced to the store they are assigned to. `requireSiteAccess`
- *     on the server resolves `EmployeeSiteAssignment.user`; an operator with no
- *     assignment gets a 403 naming the gap, not a silently wider view.
- *   - The route is fixed before picking starts. POST /ds-ops/allocate-order
- *     writes an allocation per bin, and the work list below is that allocation.
- *     It is what makes a lot split across two shelves pickable, and it is why
- *     the screen has a real bin to send the operator to.
- *
- * COMPLETE_PICK only reaches PICKED. Packing into a tote is a separate operation
- * with its own screen, because "the units are off the shelf" and "the units are
- * in a tote at slot STAGE-03" are different facts and used to be the same status.
+ * Allocating and reading the worklist work from any signed-in operator
+ * session. Taking units off a shelf is guarded server-side by
+ * `IsFieldSurface`: floor accounts execute it from the mobile Operations app,
+ * while console roles (SUPER_ADMIN / OPS_MANAGER) may execute it here. The
+ * UI calls the same `/ds-ops/pick-line` endpoint either way, so a web scan and
+ * a phone scan cannot drift apart.
  */
 
-const STEPS = [
-  { key: 'order', title: 'Pick an order', description: 'Orders waiting to be picked at this store' },
-  { key: 'allocate', title: 'Allocate', description: 'Fix the shelf route before anyone walks' },
-  { key: 'bin', title: 'Scan the bin', description: 'Walk to the shelf the lot is shelved in' },
-  { key: 'items', title: 'Scan the items', description: 'Each scan takes one unit off the shelf' },
-  { key: 'done', title: 'Complete pick', description: 'Units are off the shelf; pack them next' },
-];
-
-/** Statuses the server accepts COMPLETE_PICK from. Mirrors ORDER_ACTIONS. */
 const COMPLETABLE = new Set([
   'CONFIRMED', 'PICKING', 'INTERRUPTED', 'PARTIALLY_FULFILLED',
 ]);
 
-/**
- * Why a queued order cannot be picked here.
- *
- * The order queue lists CONFIRMED orders so an operator can inspect them, and
- * they are pickable — PICKABLE_STATUSES on the server includes CONFIRMED.
- */
-const BLOCKED_REASON = {
-  PACKED: 'Already packed. Its units are in a tote, not on a shelf.',
-  STAGED: 'Already staged for a rider.',
-  RIDER_ASSIGNED: 'A rider has this order.',
-  OUT_FOR_DELIVERY: 'On the road.',
-  PICKED_UP: 'Collected by the rider.',
-  ARRIVED: 'Out for delivery.',
-  DELIVERED: 'Delivered.',
-  REFUNDED: 'Refunded, so nothing is owed.',
-  CANCELLED: 'Cancelled.',
-};
-
-function norm(v) {
-  return String(v || '').trim().toUpperCase();
-}
-
-/** RFC-4122-ish id, so a retried scan carries the same token as its first try. */
-function newScanId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
-
-function OrderQueue({ siteId, storeCode }) {
-  const toast = useToast();
-  const { user } = useAuth();
-
-  const [statuses] = useState(() => ['CONFIRMED', 'PICKING', 'PICKED', 'PARTIALLY_FULFILLED']);
-  const { data: orders, error, loading, reload } = useAsyncData(
-    () => loadOrderQueue(siteId, statuses),
+function Picker({ siteId, storeCode }) {
+  const { data: queue, error, loading, reload } = useAsyncData(
+    () => loadOrderQueue(siteId, ORDER_QUEUE_STATUSES),
     [siteId],
-    { pollMs: 45000 }
+    { pollMs: 20000 }
   );
 
-  const [work, setWork] = useState(null);   // the /ds-ops/pick-lines payload
-  const [skuIndex, setSkuIndex] = useState(null);
-  const [step, setStep] = useState(0);
-  const [scanText, setScanText] = useState('');
-  const [feedback, setFeedback] = useState(null);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [pickMeta, setPickMeta] = useState(null);
+  const [pickLines, setPickLines] = useState([]);
+  const [pickDrafts, setPickDrafts] = useState({});
   const [busy, setBusy] = useState(false);
-  const [confirmedBin, setConfirmedBin] = useState(null); // {location_id, label}
+  const [feedback, setFeedback] = useState(null);
+  const [rackLocation, setRackLocation] = useState('RACK-01');
+  const [filterQuery, setFilterQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
 
-  const queue = useMemo(() => orders || [], [orders]);
-
-  useEffect(() => {
-    let live = true;
-    loadSkuIndex()
-      .then((idx) => { if (live) setSkuIndex(idx); })
-      .catch(() => { if (live) setSkuIndex(null); });
-    return () => { live = false; };
-  }, []);
-
-  // Memoised because `work?.lines || []` allocates a new array every render,
-  // which would make the scan callbacks below re-evaluate on every keystroke.
-  const lines = useMemo(() => work?.lines || [], [work?.lines]);
-  const outstandingTotal = useMemo(
-    () => lines.reduce((t, l) => t + Math.max(0, num(l.outstanding)), 0),
-    [lines]
-  );
-
-  /** Refresh the server view. Never invents numbers the API did not send. */
-  const refresh = useCallback(async (orderId) => {
-    const id = orderId || work?.order_id;
-    if (!id) return null;
-    const next = await loadPickLines(id);
-    setWork(next);
-    return next;
-  }, [work?.order_id]);
+  const orders = useMemo(() => queue || [], [queue]);
 
   const openOrder = async (order) => {
-    setBusy(true);
+    setSelectedOrder(order);
     setFeedback(null);
-    setConfirmedBin(null);
-    setScanText('');
+    setBusy(true);
     try {
-      const next = await loadPickLines(order.order_id);
-      setWork(next);
-      // Land on the allocate step only when the order has no route yet. The
-      // stepper is a reading aid, not the flow: an allocated order goes straight
-      // to the shelf.
-      setStep(next.lines.some((l) => l.allocated) ? 2 : 1);
-      if (!next.pickable) {
-        setFeedback({
-          type: 'error',
-          message: next.blocked_reason || `This order is ${next.status}.`,
-        });
+      if (order.status === 'CONFIRMED') {
+        try {
+          await allocateOrder(order.order_id);
+        } catch (err) {
+          // Allocation can legitimately fail on a short order; the worklist
+          // below still renders and names the short lines, so this is not
+          // treated as a fatal error.
+          setFeedback({
+            type: 'error',
+            message: err.message || 'This order could not be fully allocated.',
+          });
+        }
       }
+      const payload = await loadPickLines(order.order_id);
+      setPickLines(payload.lines || []);
+      setPickMeta(payload);
+      setPickDrafts(Object.fromEntries((payload.lines || []).map(line => [
+        line.line_id,
+        {
+          binScan: '',
+          productBarcode: '',
+          qty: line.outstanding ?? Math.max(0, (line.qty || 0) - (line.picked_qty || 0)),
+        },
+      ])));
     } catch (err) {
-      setWork(null);
-      setFeedback({ type: 'error', message: err?.message || 'Could not read the pick list.' });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const allocate = async () => {
-    if (!work) return;
-    setBusy(true);
-    setFeedback(null);
-    try {
-      const res = await allocateOrder(work.order_id);
-      await refresh();
-      setStep(2);
-      const created = num(res.created);
-      setFeedback({
-        type: 'ok',
-        message: created
-          ? `Route fixed: ${created} bin${created === 1 ? '' : 's'} allocated. Walk the shelf list below.`
-          : 'Already allocated. The existing route was kept.',
-      });
-    } catch (err) {
-      const body = err?.body;
-      const short = Array.isArray(body?.short_lines) ? body.short_lines : [];
+      setPickLines([]);
+      setPickMeta(null);
       setFeedback({
         type: 'error',
-        message: short.length
-          ? `${body.error} ${short
-              .map((s) => `${s.sku_code} needs ${s.needed}, ${s.available} shelved`)
-              .join('; ')}`
-          : body?.error || err?.message || 'Could not allocate this order.',
+        message: err.message || 'Could not load pick allocation lines.',
       });
     } finally {
       setBusy(false);
     }
   };
 
-  /** True when no line has a route, so the order cannot be picked at all. */
-  const needsAllocation = useMemo(
-    () => lines.length > 0 && !lines.some((l) => l.allocated),
-    [lines]
-  );
+  const closeOrder = () => {
+    setSelectedOrder(null);
+    setPickLines([]);
+    setPickMeta(null);
+    setPickDrafts({});
+  };
 
-  /** The bin to expect next: the first outstanding line's shelf. */
-  const expectedBin = useMemo(() => {
-    const line = lines.find((l) => num(l.outstanding) > 0);
-    return line ? { location_id: line.bin_location_id, label: line.bin } : null;
-  }, [lines]);
-
-  /** Every shelf the route touches, in walk order, for the route summary. */
-  const route = useMemo(() => {
-    const seen = new Map();
-    for (const line of lines) {
-      for (const bin of line.bins || []) {
-        if (!bin.allocated) continue;
-        const prev = seen.get(bin.location_id) || { ...bin, lines: 0, outstanding: 0 };
-        prev.lines += 1;
-        prev.outstanding += num(bin.outstanding);
-        seen.set(bin.location_id, prev);
-      }
+  const executePick = async (line) => {
+    if (!selectedOrder) return;
+    const draft = pickDrafts[line.line_id] || {};
+    const qty = parseInt(draft.qty, 10) || 0;
+    if (!draft.binScan?.trim()) {
+      setFeedback({ type: 'error', message: 'Scan the shelf bin for this line first.' });
+      return;
     }
-    return [...seen.values()];
-  }, [lines]);
-
-  /* ── phase 1: the operator has to be standing at the right shelf ── */
-  const onScanBin = useCallback(
-    async (raw) => {
-      const value = String(raw || '').trim();
-      setFeedback(null);
-      setBusy(true);
-      try {
-        const matches = await resolveStoreBin(storeCode, value);
-        if (matches.length !== 1) {
-          setFeedback({
-            type: 'error',
-            message:
-              `"${raw}" matched ${matches.length} bins at ${storeCode}. ` +
-              'Scan the full label printed on the shelf edge.',
-          });
-          return;
-        }
-        const found = matches[0];
-
-        if (!expectedBin) {
-          setFeedback({
-            type: 'error',
-            message: 'Every line on this order is already picked. Nothing to scan.',
-          });
-          return;
-        }
-        if (found.location_id !== expectedBin.location_id) {
-          setFeedback({
-            type: 'error',
-            message:
-              `Wrong bin. ${expectedBin.label} holds the next item you need. ` +
-              `You scanned ${found.label}.`,
-          });
-          return;
-        }
-
-        setConfirmedBin(found);
-        setStep(2);
-        setScanText('');
-        setFeedback({ type: 'ok', message: `Bin ${found.label} confirmed. Scan the items.` });
-      } catch (err) {
-        setFeedback({
-          type: 'error',
-          message: err?.body?.error || err?.message || 'Could not read that bin.',
-        });
-      } finally {
-        setBusy(false);
-      }
-    },
-    [storeCode, expectedBin]
-  );
-
-  /* ── phase 2: one scan = one unit off the shelf ── */
-  const onScanItem = useCallback(
-    async (raw) => {
-      const value = norm(raw);
-      setFeedback(null);
-      setScanText('');
-
-      if (!confirmedBin) {
-        setFeedback({ type: 'error', message: 'Scan the bin before scanning items.' });
-        return;
-      }
-      const sku = skuIndex?.skuFor(value);
-      if (!sku) {
-        setFeedback({
-          type: 'error',
-          message: `"${raw}" is not a known SKU. Scan a product from this order, or type its SKU code.`,
-        });
-        return;
-      }
-
-      // Only lines this bin is actually allocated to, and only while that
-      // allocation still owes units. A lot split across two shelves appears on
-      // both, so a line is matched through its `bins` list rather than through a
-      // single `bin_location_id` — which is only the *next* stop on its route.
-      const line = lines.find(
-        (l) => String(l.sku) === String(sku.sku_id)
-          && num(l.outstanding) > 0
-          && (l.bins || []).some(
-            (b) => b.location_id === confirmedBin.location_id
-              && b.allocated && num(b.outstanding) > 0
-          )
-      );
-      if (!line) {
-        const elsewhere = lines.find(
-          (l) => String(l.sku) === String(sku.sku_id) && num(l.outstanding) > 0
-        );
-        setFeedback({
-          type: 'error',
-          message: elsewhere
-            ? `${sku.sku_code} is in bin ${elsewhere.bin}, not ${confirmedBin.label}. ` +
-              `Scan bin ${elsewhere.bin} first.`
-            : `${sku.sku_code} is not on this order, or it is already fully picked. ` +
-              'Set it aside — it does not belong in this tote.',
-        });
-        return;
-      }
-
-      setBusy(true);
-      try {
-        const res = await postApi('/ds-ops/pick-line', {
-          order_id: work.order_id,
-          line_id: line.line_id,
-          bin_location_id: confirmedBin.location_id,
-          qty: 1,
-          // One id per physical scan: the server treats a repeat of the same id
-          // as a retry, so a dropped response cannot take two units off the
-          // shelf.
-          scan_id: newScanId(),
-        });
-
-        // Re-read rather than patching the line locally. On a split lot the next
-        // bin is a server-side decision, and guessing it here is how the picker
-        // ends up sent to a shelf the order is not allocated to.
-        const next = await refresh();
-
-        const left = num(res.outstanding);
-        const nextBin = next?.lines?.find((l) => num(l.outstanding) > 0);
-        if (left > 0) {
-          setFeedback({
-            type: 'ok',
-            message: `${sku.sku_code} — ${left} more to go from this bin.`,
-          });
-        } else if (nextBin) {
-          setConfirmedBin(null);
-          setStep(3);
-          setFeedback({
-            type: 'ok',
-            message: next.lines.every((l) => num(l.outstanding) === 0)
-              ? `${sku.sku_code} complete. This order is fully picked.`
-              : `${sku.sku_code} complete. Next: bin ${nextBin.bin}.`,
-          });
-        } else {
-          setConfirmedBin(null);
-          setStep(4);
-          setFeedback({
-            type: 'ok',
-            message: `${sku.sku_code} complete. Every line is picked — complete the pick.`,
-          });
-        }
-      } catch (err) {
-        const msg = err?.body?.error || err?.message || 'Could not record that scan.';
-        setFeedback({ type: 'error', message: msg });
-        // A 409 means the server and this screen disagree about the line, so
-        // re-read rather than keep offering a stale bin.
-        if (err?.status === 409) {
-          try { await refresh(); } catch { /* the error above is the useful one */ }
-        }
-      } finally {
-        setBusy(false);
-      }
-    },
-    [confirmedBin, lines, skuIndex, work, refresh]
-  );
-
-  const onScan = confirmedBin ? onScanItem : onScanBin;
-
-  const dropOut = async () => {
-    if (!work) return;
+    if (!draft.productBarcode?.trim()) {
+      setFeedback({ type: 'error', message: `Scan the product barcode or SKU code for ${line.sku_code}.` });
+      return;
+    }
+    if (qty <= 0) {
+      setFeedback({ type: 'error', message: 'Enter a quantity greater than zero.' });
+      return;
+    }
     setBusy(true);
     setFeedback(null);
+    const scanId = draft.scanId || crypto.randomUUID();
+    setPickDrafts(prev => ({
+      ...prev,
+      [line.line_id]: { ...prev[line.line_id], scanId },
+    }));
     try {
-      const res = await postApi('/ds-ops/pick-abandon', {
-        order_id: work.order_id,
-        reason: 'picker dropped out',
-      });
-      await refresh();
-      setConfirmedBin(null);
-      setStep(1);
-
-      const returned = num(res.units_returned);
-      if (!returned && res.nothing_to_revert) {
-        setFeedback({ type: 'hint', message: res.message });
+      const binMatches = await resolveStoreBin(storeCode, draft.binScan.trim());
+      if (binMatches.length !== 1) {
+        setFeedback({
+          type: 'error',
+          message: binMatches.length
+            ? `The scanned bin matched ${binMatches.length} locations. Scan a unique shelf label.`
+            : `No shelf bin at ${storeCode} matches "${draft.binScan.trim()}".`,
+        });
         return;
       }
+      const result = await pickLine({
+        orderId: selectedOrder.order_id,
+        lineId: line.line_id,
+        binLocationId: binMatches[0].location_id,
+        productBarcode: draft.productBarcode.trim(),
+        qty,
+        scanId,
+      });
       setFeedback({
-        type: returned ? 'ok' : 'error',
-        message: res.message
-          + (res.skipped?.length
-            ? ` ${res.skipped.length} line(s) need a recount: ${res.skipped
-                .map((s) => `${s.sku_code} (${s.reason})`).join('; ')}`
-            : ''),
+        type: 'success',
+        message: result?.already_applied
+          ? `Already applied: ${result.picked_qty} picked, ${result.outstanding} outstanding.`
+          : `Picked ${qty} unit(s) of ${line.sku_code}. Outstanding: ${result?.outstanding ?? '—'}.`,
       });
-      toast.success(
-        'Dropped out',
-        `${returned} unit${returned === 1 ? '' : 's'} back on the shelf.`
-      );
+      const payload = await loadPickLines(selectedOrder.order_id);
+      setPickLines(payload.lines || []);
+      setPickMeta(payload);
+      setPickDrafts(Object.fromEntries((payload.lines || []).map(next => [
+        next.line_id,
+        {
+          binScan: '',
+          productBarcode: '',
+          qty: next.outstanding ?? Math.max(0, (next.qty || 0) - (next.picked_qty || 0)),
+        },
+      ])));
+      reload();
     } catch (err) {
-      const msg = err?.body?.error || err?.message || 'Could not drop out.';
-      setFeedback({ type: 'error', message: msg });
+      setFeedback({ type: 'error', message: err.message || 'Pick failed.' });
     } finally {
       setBusy(false);
     }
   };
 
-  const complete = async () => {
-    if (!work) return;
+  const completeOrderPick = async () => {
+    if (!selectedOrder) return;
     setBusy(true);
+    setFeedback(null);
     try {
-      const res = await postApi('/ds-ops/order-action', {
-        order_id: work.order_id,
-        action: 'COMPLETE_PICK',
-        // A real iam User uuid: the backend looks it up to close out this
-        // operator's open PickTasks for this order. A display name matches
-        // nothing, so the real user_id is sent.
-        picker: user?.user_id || '',
+      await completePick(selectedOrder.order_id);
+      // The chart keeps the order on the floor after the last scan: the next
+      // step is carrying it to the rack, not closing the screen.
+      setSelectedOrder((prev) => (prev ? { ...prev, status: 'PICKED' } : prev));
+      setFeedback({
+        type: 'success',
+        message: `${selectedOrder.order_no} is picked. Carry the tote to the rack and confirm the drop.`,
       });
-      toast.success(
-        `Order ${work.order_no} picked`,
-        res?.message || 'Every unit is off the shelf. Pack it on the Packing screen.'
-      );
-      setWork(null);
-      setConfirmedBin(null);
-      setStep(0);
-      setScanText('');
-      setFeedback(null);
-      await reload({ quiet: true });
+      reload();
     } catch (err) {
-      const msg = err?.body?.error || err?.message || 'Could not complete the pick.';
-      setFeedback({ type: 'error', message: msg });
-      toast.error('Pick not completed', msg);
-      // The server is the authority on what is still short, so re-read rather
-      // than guess from the copy on screen.
-      try { await refresh(); } catch { /* keep the server's message */ }
+      setFeedback({ type: 'error', message: err.message || 'Could not complete pick.' });
     } finally {
       setBusy(false);
     }
   };
 
-  const close = () => {
-    setWork(null);
-    setConfirmedBin(null);
-    setScanText('');
+  const confirmRackDrop = async () => {
+    if (!selectedOrder) return;
+    setBusy(true);
     setFeedback(null);
-    setStep(0);
+    try {
+      const result = await rackDrop(selectedOrder.order_id, rackLocation);
+      setFeedback({
+        type: 'success',
+        message: result?.already_dropped
+          ? `${selectedOrder.order_no} was already dropped at ${result.rack_location}.`
+          : `${selectedOrder.order_no} dropped at ${result.rack_location}. Packing can take it now.`,
+      });
+      setSelectedOrder(null);
+      setPickLines([]);
+      setPickMeta(null);
+      setPickDrafts({});
+      reload();
+    } catch (err) {
+      setFeedback({ type: 'error', message: err.message || 'Could not confirm rack drop.' });
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const pickedUnits = lines.reduce((t, l) => t + num(l.picked_qty), 0);
-  const neededUnits = lines.reduce((t, l) => t + num(l.qty), 0);
-  const done = lines.filter((l) => num(l.outstanding) === 0).length;
-  const anyPicked = pickedUnits > 0;
+  const filteredOrders = useMemo(() => {
+    return orders.filter((o) => {
+      if (statusFilter !== 'ALL' && o.status !== statusFilter) return false;
+      if (!filterQuery) return true;
+      const q = filterQuery.toLowerCase();
+      return (
+        String(o.order_no || '').toLowerCase().includes(q) ||
+        String(o.customer_name || '').toLowerCase().includes(q)
+      );
+    });
+  }, [orders, statusFilter, filterQuery]);
+
+  const outstandingTotal = pickMeta?.outstanding_total
+    ?? pickLines.reduce((sum, line) => sum + (line.outstanding || 0), 0);
 
   return (
-    <>
-      <WorkflowStepper steps={STEPS} current={step} dataTestId="ds-pick-stepper" />
-
-      <div className="wf-panel">
-        <div className="wf-panel__header">
-          <div>
-            <div className="wf-panel__title"><ClipboardList size={17} /> Pick queue</div>
-            <div className="wf-panel__hint">
-              {queue.length} order{queue.length === 1 ? '' : 's'} at <StoreBadge />
-            </div>
+    <div style={{ paddingBottom: 24 }}>
+      <div className="screen-header">
+        <div>
+          <div className="screen-title">
+            <span>DARK STORE ORDER PICKING</span>
+            <span className="screen-count-tag">{orders.length} orders</span>
           </div>
-          <div className="wf-panel__actions">
-            {loading && <span className="scan-feedback scan-feedback--hint">Loading…</span>}
-            <button className="btn-secondary" onClick={() => reload()} disabled={loading} data-testid="ds-pick-refresh">
-              <RefreshCw size={14} /> Refresh
-            </button>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+            Allocation worklist for this store. Picks are executed in the Zippzo Operations mobile app.
           </div>
         </div>
 
-        {error && (
-          <div className="form-group">
-            <div className="scan-feedback scan-feedback--error" data-testid="ds-pick-queue-error">
-              <ClipboardList size={14} /> {error}
-            </div>
-          </div>
-        )}
-
-        {queue.length === 0 && !error ? (
-          <div className="wf-empty" data-testid="ds-pick-empty">
-            <ClipboardList size={40} className="wf-empty__icon" />
-            <div className="wf-empty__title">Pick queue is clear</div>
-            <div className="wf-empty__text">
-              No orders are waiting to be picked at {storeCode}. New orders appear here as
-              soon as they are confirmed for this store.
-            </div>
-          </div>
-        ) : (
-          <div className="form-group">
-            <div className="table-container">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Order</th>
-                    <th>Placed</th>
-                    <th>Payment</th>
-                    <th>Total</th>
-                    <th>Status</th>
-                    <th>Notes</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody data-testid="ds-pick-queue">
-                  {queue.map((o) => {
-                    const blocked = !COMPLETABLE.has(o.status);
-                    return (
-                      <tr key={o.order_id} data-testid={`ds-pick-order-${o.order_no}`}>
-                        <td className="mono-num">{o.order_no}</td>
-                        <td>{o.placed_at ? new Date(o.placed_at).toLocaleString() : '—'}</td>
-                        <td>{o.payment_status}</td>
-                        <td className="mono-num">₹{num(o.grand_total).toLocaleString('en-IN')}</td>
-                        <td>
-                          <StatusBadge status={o.status} dataTestId={`ds-pick-status-${o.order_no}`} />
-                        </td>
-                        <td>
-                          {blocked && BLOCKED_REASON[o.status] ? (
-                            <div className="scan-feedback scan-feedback--hint">
-                              {BLOCKED_REASON[o.status]}
-                            </div>
-                          ) : '—'}
-                        </td>
-                        <td>
-                          <button
-                            className="scan-btn"
-                            style={{ minHeight: 34, fontSize: 12 }}
-                            onClick={() => openOrder(o)}
-                            disabled={busy}
-                            data-testid={`ds-pick-open-${o.order_no}`}
-                          >
-                            {blocked ? 'Inspect' : 'Pick'}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <div className="screen-actions">
+          <button className="btn-ui neutral" onClick={() => reload()} disabled={loading}>
+            <RefreshCw size={12} className={loading ? 'spin' : ''} />
+            <span>Sync Orders</span>
+          </button>
+        </div>
       </div>
 
-      {work && (
-        <div className="wf-panel" data-testid="ds-pick-work">
-          <div className="wf-panel__header">
+      {!selectedOrder && (
+        <div
+          className="scan-feedback"
+          style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}
+        >
+          <Smartphone size={14} />
+          <span>
+            Scan the allocated shelf bin for each line. Floor accounts execute
+            from the Operations mobile app; console supervisors may scan here.
+          </span>
+        </div>
+      )}
+
+      {error && (
+        <div className="scan-feedback scan-feedback--error" style={{ marginBottom: 12 }}>
+          <AlertTriangle size={14} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {feedback && (
+        <div
+          style={{
+            padding: '10px 14px',
+            marginBottom: 16,
+            borderRadius: 'var(--radius-sm)',
+            fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: feedback.type === 'error' ? 'var(--danger-bg)' : 'var(--success-bg)',
+            color: feedback.type === 'error' ? 'var(--danger)' : 'var(--success)',
+            border: `1px solid ${feedback.type === 'error' ? 'var(--danger-border)' : 'var(--success-border)'}`,
+          }}
+        >
+          {feedback.type === 'error' ? <AlertTriangle size={15} /> : <Check size={15} />}
+          <span style={{ flex: 1 }}>{feedback.message}</span>
+          <button
+            type="button"
+            className="btn-ui neutral"
+            style={{ padding: '2px 6px', fontSize: 11 }}
+            onClick={() => setFeedback(null)}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {selectedOrder ? (
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: 16, marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, borderBottom: '1px solid var(--border-color)', paddingBottom: 12 }}>
             <div>
-              <div className="wf-panel__title">
-                Picking <span className="mono-num">{work.order_no}</span>
-              </div>
-              <div className="wf-panel__hint">
-                {pickedUnits} of {neededUnits} unit{neededUnits === 1 ? '' : 's'} off the shelf
-                {` · ${done} of ${lines.length} line${lines.length === 1 ? '' : 's'} complete`}
+              <strong style={{ fontSize: 15, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                PICK WORKLIST: {selectedOrder.order_no}
+              </strong>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                Status: {selectedOrder.status}
+                {' · '}
+                Lines: {pickLines.length}
+                {' · '}
+                Outstanding units: {outstandingTotal}
+                {pickMeta?.pickable === false && pickMeta?.blocked_reason
+                  ? ` · Blocked: ${pickMeta.blocked_reason}`
+                  : ''}
               </div>
             </div>
-            <div className="wf-panel__actions">
-              <button className="btn-secondary" onClick={close} disabled={busy} data-testid="ds-pick-close">
-                <X size={14} /> Close
+            <div style={{ display: 'flex', gap: 8 }}>
+              {['PICKED', 'RACK_DROPPED'].includes(selectedOrder.status) ? null : (
+                <button
+                  type="button"
+                  className="btn-ui primary"
+                  onClick={completeOrderPick}
+                  disabled={busy}
+                >
+                  Complete Pick
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-ui neutral"
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const payload = await loadPickLines(selectedOrder.order_id);
+                    setPickLines(payload.lines || []);
+                    setPickMeta(payload);
+                  } catch (err) {
+                    setFeedback({
+                      type: 'error',
+                      message: err.message || 'Could not refresh the worklist.',
+                    });
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                disabled={busy}
+              >
+                <RefreshCw size={12} className={busy ? 'spin' : ''} />
+                <span>Refresh Worklist</span>
+              </button>
+              <button
+                type="button"
+                className="btn-ui neutral"
+                onClick={closeOrder}
+              >
+                Back to Order Queue
               </button>
             </div>
           </div>
 
-          {work.pickable === false && (
-            <div className="scan-feedback scan-feedback--error" style={{ marginBottom: 12 }} data-testid="ds-pick-blocked">
-              <Lock size={14} />
-              <span>{work.blocked_reason || `This order is ${work.status}.`}</span>
-            </div>
-          )}
-
-          {needsAllocation && (
-            <div
-              className="scan-feedback scan-feedback--error"
-              style={{ marginBottom: 12 }}
-              data-testid="ds-pick-needs-allocation"
-            >
-              <MapPin size={14} />
-              <span>
-                This order has no shelf route, so no bin scan will be accepted.
-                Allocate it first — the server reserves nothing here, it only fixes
-                which shelf each line comes from.
-              </span>
+          {['PICKED', 'RACK_DROPPED'].includes(selectedOrder.status) && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+              padding: 14, marginBottom: 16, borderRadius: 'var(--radius-sm)',
+              background: 'var(--bg-surface-2, rgba(0,0,0,0.02))',
+              border: '1px solid var(--border-color)',
+            }}>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <strong style={{ fontSize: 13 }}>Rack Drop</strong>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  Carry the picked units to the packing rack, then record the rack
+                  label. The pack station seals the tote and raises the rider job.
+                </div>
+              </div>
+              <input
+                type="text"
+                className="table-filter-input"
+                style={{ width: 150 }}
+                aria-label="Rack location"
+                placeholder="Rack label"
+                value={rackLocation}
+                onChange={(e) => setRackLocation(e.target.value)}
+              />
               <button
-                className="scan-btn"
-                style={{ minHeight: 30, fontSize: 12, marginLeft: 8 }}
-                onClick={allocate}
-                disabled={busy || work.pickable === false}
-                data-testid="ds-pick-allocate"
+                type="button"
+                className="btn-ui primary"
+                disabled={busy || !rackLocation.trim()}
+                onClick={confirmRackDrop}
               >
-                {busy ? 'Allocating…' : 'Allocate route'}
+                <Check size={12} /> <span>Confirm Rack Drop</span>
               </button>
             </div>
           )}
 
-          {route.length > 0 && (
-            <div
-              className="scan-feedback scan-feedback--hint"
-              style={{ marginBottom: 12 }}
-              data-testid="ds-pick-route"
-            >
-              <MapPin size={14} />
-              <span>
-                Route:{' '}
-                {route.map((b, i) => (
-                  <span key={b.location_id}>
-                    {i > 0 && ' → '}
-                    <strong>{b.label}</strong> ({num(b.outstanding)} left)
-                  </span>
-                ))}
-              </span>
-            </div>
-          )}
-
-          <ScanInput
-            label={confirmedBin
-              ? `Scan items from bin ${confirmedBin.label}`
-              : `Scan the bin for ${expectedBin?.label || 'the next item'}`}
-            placeholder={confirmedBin
-              ? 'Scan a product barcode — each scan takes one unit'
-              : 'Scan the bin label printed on the shelf edge'}
-            value={scanText}
-            onChange={setScanText}
-            onScan={onScan}
-            busy={busy}
-            feedback={feedback}
-            disabled={lines.length === 0 || work.pickable === false || needsAllocation}
-            dataTestId={confirmedBin ? 'ds-pick-item-scan' : 'ds-pick-bin-scan'}
-          >
-            {confirmedBin && (
-              <div
-                className="scan-feedback scan-feedback--hint"
-                style={{ marginTop: 8 }}
-                data-testid="ds-pick-bin-confirmed"
-              >
-                <MapPin size={14} /> Standing at {confirmedBin.label}. Scan an item, or{' '}
-                <button
-                  type="button"
-                  className="scan-btn scan-btn--ghost"
-                  style={{ minHeight: 26, fontSize: 11 }}
-                  onClick={() => { setConfirmedBin(null); setStep(1); }}
-                  disabled={busy}
-                  data-testid="ds-pick-change-bin"
-                >
-                  change bin
-                </button>
-              </div>
-            )}
-          </ScanInput>
-
-          {lines.length === 0 ? (
-            <div className="wf-empty" data-testid="ds-pick-no-lines">
-              <ClipboardList size={40} className="wf-empty__icon" />
-              <div className="wf-empty__title">This order has no lines</div>
-              <div className="wf-empty__text">
-                Nothing to pick was recorded against {work.order_no}.
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="form-group" style={{ marginTop: 12 }}>
-                <div className="table-container">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Product</th>
-                        <th>SKU / EAN</th>
-                        <th>Qty</th>
-                        <th>Bin</th>
-                        <th>State</th>
-                      </tr>
-                    </thead>
-                    <tbody data-testid="ds-pick-lines">
-                      {lines.map((l, i) => {
-                        const sku = skuIndex?.byId.get(String(l.sku));
-                        const outstanding = num(l.outstanding);
-                        const active =
-                          !!confirmedBin && l.bin_location_id === confirmedBin.location_id;
-                        const split = (l.bins || []).filter((b) => b.allocated).length > 1;
-                        const state = outstanding === 0 ? 'done' : active ? 'active' : 'pending';
-                        return (
-                          <tr
-                            key={l.line_id}
-                            data-testid={`ds-pick-line-${i}`}
-                            data-state={state}
+          <table className="wms-table">
+            <thead>
+              <tr>
+                <th>SHELF LOCATION</th>
+                <th>ITEM NAME / SKU</th>
+                <th>ORDERED QTY</th>
+                <th>PICKED QTY</th>
+                <th>OUTSTANDING</th>
+                <th>STATUS</th>
+                <th>SCAN BIN / PRODUCT / QTY</th>
+                <th style={{ textAlign: 'right' }}>ACTION</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pickLines.length > 0 ? (
+                pickLines.map((line) => {
+                  const outstanding = line.outstanding
+                    ?? Math.max(0, (line.qty || 0) - (line.picked_qty || 0));
+                  return (
+                    <tr key={line.line_id}>
+                      <td>
+                        {line.bin ? (
+                          <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                            {line.bin}
+                          </strong>
+                        ) : (
+                          <span style={{ color: 'var(--danger)', fontSize: 11 }}>
+                            <MapPin size={11} /> No shelf holds this lot
+                          </span>
+                        )}
+                        {line.allocated === false && line.bin && (
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                            not allocated to this order
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <strong>{line.product_name || line.sku_code}</strong>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                          {line.sku_code}
+                        </div>
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>{line.qty ?? '—'}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{line.picked_qty ?? 0}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>{outstanding}</td>
+                      <td>
+                        <StatusBadge status={outstanding === 0 ? 'PICKED' : (line.status || 'PENDING')} />
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            className="table-filter-input"
+                            style={{ width: 130 }}
+                            aria-label={`Scan shelf bin for ${line.sku_code}`}
+                            placeholder="Scan bin"
+                            value={pickDrafts[line.line_id]?.binScan || ''}
+                            onChange={(e) => setPickDrafts(prev => ({
+                              ...prev, [line.line_id]: { ...(prev[line.line_id] || {}), binScan: e.target.value },
+                            }))}
+                          />
+                          <input
+                            type="text"
+                            className="table-filter-input"
+                            style={{ width: 140 }}
+                            aria-label={`Scan product barcode for ${line.sku_code}`}
+                            placeholder="Scan product"
+                            value={pickDrafts[line.line_id]?.productBarcode || ''}
+                            onChange={(e) => setPickDrafts(prev => ({
+                              ...prev, [line.line_id]: { ...(prev[line.line_id] || {}), productBarcode: e.target.value },
+                            }))}
+                          />
+                          <input
+                            type="number"
+                            className="table-filter-input"
+                            style={{ width: 64 }}
+                            min="1"
+                            max={outstanding || 1}
+                            value={pickDrafts[line.line_id]?.qty ?? outstanding}
+                            onChange={(e) => setPickDrafts(prev => ({
+                              ...prev,
+                              [line.line_id]: { ...(prev[line.line_id] || {}), qty: e.target.value },
+                            }))}
+                          />
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        {outstanding === 0 ? (
+                          <span style={{ fontSize: 11, color: '#48a968', fontFamily: 'var(--font-mono)' }}>Done</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-ui primary"
+                            style={{ padding: '3px 10px', fontSize: 11 }}
+                            disabled={busy}
+                            onClick={() => executePick(line)}
                           >
-                            <td data-testid={`ds-pick-line-${i}-name`}>
-                              {sku?.name || 'Unknown product'}
-                            </td>
-                            <td className="mono-num" data-testid={`ds-pick-line-${i}-sku`}>
-                              {l.sku_code || sku?.sku_code || '—'}
-                              {sku?.ean ? (
-                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                  EAN {sku.ean}
-                                </div>
-                              ) : null}
-                            </td>
-                            <td className="mono-num" data-testid={`ds-pick-line-${i}-qty`}>
-                              {num(l.picked_qty)} / {num(l.qty)}
-                            </td>
-                            <td data-testid={`ds-pick-line-bin-${i}`}>
-                              {l.bin ? (
-                                <>
-                                  Bin <strong>{l.bin}</strong>
-                                  {split && (
-                                    <> · split across {(l.bins || []).filter((b) => b.allocated).length} bins</>
-                                  )}
-                                  {' · '}{num(l.available_qty)} on the shelf
-                                </>
-                              ) : (
-                                'Not shelved in any bin at this store — this line needs a putaway before it can be picked.'
-                              )}
-                            </td>
-                            <td>
-                              {outstanding === 0 ? 'Done' : active ? 'Active' : 'Pending'}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="scan-feedback scan-feedback--hint" style={{ marginBottom: 12 }} data-testid="ds-pick-server-authoritative">
-                Counts come from the server. Every scan writes the pick to the stock
-                ledger and to the order line together, so a reload shows the same numbers.
-              </div>
-
-              {outstandingTotal > 0 && (
-                <div className="scan-feedback scan-feedback--error" style={{ marginBottom: 12 }} data-testid="ds-pick-outstanding">
-                  <AlertTriangle size={14} />
-                  <span>
-                    Still to pick: {outstandingTotal} unit{outstandingTotal === 1 ? '' : 's'} across{' '}
-                    {lines.filter((l) => num(l.outstanding) > 0).length} line(s).
-                    The order cannot be completed until these are scanned.
-                  </span>
-                </div>
+                            Pick
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
+                    No pick allocation lines loaded for this order.
+                  </td>
+                </tr>
               )}
+            </tbody>
+          </table>
 
-              <div className="wf-panel__actions">
-                <button
-                  className="scan-btn"
-                  onClick={complete}
-                  disabled={busy || outstandingTotal > 0 || work.pickable === false || needsAllocation}
-                  data-testid="ds-pick-complete"
-                >
-                  <Check size={16} /> {busy ? 'Posting…' : 'Complete pick'}
-                </button>
-                <button
-                  className="btn-secondary"
-                  onClick={dropOut}
-                  disabled={busy || !anyPicked}
-                  data-testid="ds-pick-drop-out"
-                >
-                  <Undo2 size={14} /> Drop out
-                </button>
-              </div>
-
-              <div className="scan-feedback scan-feedback--hint" style={{ marginTop: 12 }} data-testid="ds-pick-next-step">
-                Completing the pick marks the units as off the shelf. They still have to be
-                sealed into a tote on the Packing screen, which is what tells a rider where
-                to collect them.
-              </div>
-            </>
-          )}
+          <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Smartphone size={12} />
+            <span>Scan the shelf bin and matching product barcode (or SKU code) before recording a pick.</span>
+          </div>
         </div>
+      ) : (
+        <>
+          <div className="status-tabs">
+            {['ALL', ...ORDER_QUEUE_STATUSES].map((st) => (
+              <button
+                key={st}
+                className={`status-tab ${statusFilter === st ? 'active' : ''}`}
+                onClick={() => setStatusFilter(st)}
+              >
+                {st === 'ALL'
+                  ? `All Orders (${orders.length})`
+                  : `${st} (${orders.filter(o => o.status === st).length})`}
+              </button>
+            ))}
+          </div>
+
+          <div className="table-filter-row">
+            <input
+              type="text"
+              className="table-filter-input"
+              placeholder="Filter order number or customer..."
+              value={filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+            />
+            <span className="table-record-count">Showing {filteredOrders.length} of {orders.length} orders</span>
+          </div>
+
+          <div className="wms-table-wrap">
+            <table className="wms-table">
+              <thead>
+                <tr>
+                  <th>ORDER NUMBER</th>
+                  <th>ITEMS</th>
+                  <th>TOTAL VALUE</th>
+                  <th>PLACED TIME</th>
+                  <th>STATUS</th>
+                  <th style={{ textAlign: 'right' }}>ACTION</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredOrders.length > 0 ? (
+                  filteredOrders.map((o) => (
+                    <tr key={o.order_id}>
+                      <td>
+                        <div>
+                          <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                            {o.order_no}
+                          </strong>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{o.customer_name || 'Customer'}</div>
+                        </div>
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>{o.total_items ?? '—'} SKUs</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>₹{parseFloat(o.total_amount || 0).toFixed(2)}</td>
+                      <td>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                          {o.placed_at ? new Date(o.placed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        </span>
+                      </td>
+                      <td>
+                        <StatusBadge status={o.status} />
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          type="button"
+                          className="btn-ui primary"
+                          style={{ padding: '3px 10px', fontSize: 11 }}
+                          onClick={() => openOrder(o)}
+                          disabled={busy}
+                        >
+                          <ClipboardList size={12} />
+                          <span>Open Pick List</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                      No customer orders pending pick.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
-    </>
+    </div>
   );
 }
 
 export default function OrderPickingView() {
-  const { siteId, storeCode } = useDarkStore();
-
+  const { siteId } = useDarkStore();
   return (
     <StoreGate>
-      {siteId && <OrderQueue siteId={siteId} storeCode={storeCode} />}
+      <Picker siteId={siteId} />
     </StoreGate>
   );
 }

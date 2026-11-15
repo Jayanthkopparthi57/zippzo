@@ -1,318 +1,270 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  PackageCheck, ScanLine, Truck, Check, X, AlertTriangle, Package,
-} from 'lucide-react';
-import StoreGate, { StoreBadge } from './StoreGate';
-import ScanInput from '../../components/ui/ScanInput';
-import WorkflowStepper from '../../components/ui/WorkflowStepper';
+import { Check, X, AlertTriangle, RefreshCw } from 'lucide-react';
+import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
-import { useAuth } from '../../context/AuthContext';
-import { postApi } from '../../api/client';
-import { useDarkStore, useAsyncData, dsIncomingLpns, num, clockOf } from './useDarkStore';
-
-/**
- * Receive replenishment totes from the mother hub.
- *
- * Receipt is custody, not availability: `POST /ds-ops/receive-lpn` moves the
- * stock into the LPN container and flips the tote to RECEIVED. It is still not
- * pickable until ShelfPutawayView breaks it down onto pick-face bins, so this
- * screen deliberately stops at "in our custody".
- *
- * The scan resolves against the inbound queue, because a tote that is not on
- * this store's inbound list has not been dispatched here and accepting it on
- * the operator's word would put stock in the store with no hub-side paperwork
- * behind it.
- */
-
-const STEPS = [
-  { key: 'queue', title: 'Awaiting arrival', description: 'Totes the hub has dispatched to this store' },
-  { key: 'scan', title: 'Scan the tote', description: 'Scan the LPN label on the cage or tote' },
-  { key: 'confirm', title: 'Confirm custody', description: 'Check the seal, then take it in' },
-];
+import { useDarkStore, useAsyncData, dsIncomingLpns, receiveLpn } from './useDarkStore';
 
 function norm(v) {
   return String(v || '').trim().toUpperCase();
 }
 
-function Receipt({ storeCode, storeName, operatorName }) {
+function Receipt({ storeCode, storeName }) {
   const toast = useToast();
-  const { data: queue, error, reload } = useAsyncData(
+  const { data: queue, error: error, loading, reload } = useAsyncData(
     () => dsIncomingLpns(storeCode),
     [storeCode],
-    { pollMs: 60000 }
+    { pollMs: 30000 }
   );
 
-  const [step, setStep] = useState(0);
-  const [scanText, setScanText] = useState('');
+  const [selectedTote, setSelectedTote] = useState(null);
+  const [seal, setSeal] = useState('');
   const [feedback, setFeedback] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [tote, setTote] = useState(null);
-  const [seal, setSeal] = useState('');
+  const [filterQuery, setFilterQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
 
   const rows = useMemo(() => queue || [], [queue]);
 
-  // Scans arrive as a bare barcode, so accept either the printed LPN barcode or
-  // the internal lpn_id: operators read both off the same label in practice.
-  const onScan = useCallback(
-    (raw) => {
-      const value = norm(raw);
+  const onConfirmReceipt = useCallback(
+    async (toteToReceive) => {
+      const target = toteToReceive || selectedTote;
+      if (!target) return;
+      setBusy(true);
       setFeedback(null);
-      if (!value) {
-        setFeedback({ type: 'error', message: 'Scan a tote label first.' });
-        return;
-      }
-      const hit = rows.find((r) => norm(r.barcode) === value || norm(r.id) === value);
-      if (!hit) {
+      try {
+        const res = await receiveLpn(
+          target.barcode || target.lpn_id || target.id,
+          storeCode,
+          seal.trim() || target.seal_number || ''
+        );
+        toast.show(`Tote ${target.barcode || target.id} received into custody`, 'success');
+        setFeedback({
+          type: 'success',
+          message: `Received ${target.barcode || target.id}. ${(res?.stock_moved || []).length} item lines added to store stock.`,
+        });
+        setSelectedTote(null);
+        setSeal('');
+        reload();
+      } catch (err) {
         setFeedback({
           type: 'error',
-          message:
-            `No inbound tote matches "${raw}". It is not on this store's inbound ` +
-            'list — check the label, or that the hub dispatched it here.',
+          message: err.message || 'Failed to accept tote. Please check status.',
         });
-        return;
+      } finally {
+        setBusy(false);
       }
-      setTote(hit);
-      setScanText('');
-      setStep(2);
     },
-    [rows]
+    [selectedTote, storeCode, seal, toast, reload]
   );
 
-  const receive = async () => {
-    if (!tote) return;
-    setBusy(true);
-    try {
-      const res = await postApi('/ds-ops/receive-lpn', {
-        barcode: tote.barcode,
-        seal_number: seal.trim(),
-        // Recorded as the movement's actor_id so the ledger names who took
-        // custody. Blank is allowed; a wrong-but-plausible name is not.
-        received_by: operatorName || '',
-        store_code: storeCode,
-      });
-      const units = (res?.stock_moved || []).reduce((t, m) => t + num(m.qty), 0);
-      toast.success(
-        `Tote ${res?.lpn_barcode || tote.barcode} received`,
-        units
-          ? `${units} unit${units === 1 ? '' : 's'} now in ${storeCode}'s custody. Next: shelf putaway.`
-          : 'Received with no stock movement. Check the manifest before shelving.'
+  const filteredRows = useMemo(() => {
+    return rows.filter(r => {
+      if (statusFilter !== 'ALL' && norm(r.status) !== statusFilter) return false;
+      if (!filterQuery) return true;
+      const q = filterQuery.toLowerCase();
+      return (
+        String(r.barcode || '').toLowerCase().includes(q) ||
+        String(r.lpn_id || r.id || '').toLowerCase().includes(q) ||
+        String(r.source_name || r.source || '').toLowerCase().includes(q)
       );
-      setTote(null);
-      setSeal('');
-      setStep(0);
-      setFeedback(null);
-      await reload({ quiet: true });
-    } catch (err) {
-      // A failed receipt must never be reported as success.
-      const msg = err?.body?.error || err?.message || 'Receipt failed.';
-      setFeedback({ type: 'error', message: msg });
-      toast.error('Receipt failed', msg);
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
+  }, [rows, statusFilter, filterQuery]);
 
-  const reset = () => {
-    setTote(null);
-    setSeal('');
-    setScanText('');
-    setFeedback(null);
-    setStep(0);
-  };
-
-  const inboundUnits = rows.reduce((t, r) => t + num(r.total_units), 0);
+  const pendingCount = rows.filter(r => norm(r.status) === 'IN_TRANSIT' || norm(r.status) === 'DISPATCHED' || norm(r.status) === 'SHIPPED').length;
+  const receivedCount = rows.filter(r => norm(r.status) === 'RECEIVED').length;
 
   return (
-    <>
-      <WorkflowStepper steps={STEPS} current={step} dataTestId="ds-receipt-stepper" />
-
-      <div className="wf-panel">
-        <div className="wf-panel__header">
-          <div>
-            <div className="wf-panel__title"><Truck size={17} /> Inbound from Mother Hub</div>
-            <div className="wf-panel__hint">
-              {rows.length} tote{rows.length === 1 ? '' : 's'} in transit ·{' '}
-              {inboundUnits} unit{inboundUnits === 1 ? '' : 's'} expected
-            </div>
+    <div style={{ paddingBottom: 24 }}>
+      {/* Header */}
+      <div className="screen-header">
+        <div>
+          <div className="screen-title">
+            <span>INBOUND TOTE RECEIPTS (LPN)</span>
+            <span className="screen-count-tag">{filteredRows.length} records</span>
           </div>
-          <div className="wf-panel__actions">
-            <span className="scan-feedback scan-feedback--hint">
-              <ScanLine size={13} /> <Truck size={13} />
-            </span>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+            Receive mother hub replenishment totes directly into store custody without scanning.
           </div>
         </div>
 
-        {error && (
-          <div className="form-group">
-            <div className="scan-feedback scan-feedback--error" data-testid="ds-receipt-queue-error">
-              <AlertTriangle size={14} /> {error}
-            </div>
-          </div>
-        )}
-
-        {rows.length === 0 && !error ? (
-          <div className="wf-empty" data-testid="ds-receipt-empty">
-            <PackageCheck size={40} className="wf-empty__icon" />
-            <div className="wf-empty__title">Nothing inbound</div>
-            <div className="wf-empty__text">
-              The hub has not dispatched any totes to {storeName || storeCode}. Totes
-              appear here the moment a transfer order is marked in transit.
-            </div>
-          </div>
-        ) : (
-          rows.length > 0 && (
-            <div className="form-group">
-              <div className="table-container">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Tote</th>
-                      <th>From</th>
-                      <th>Lines</th>
-                      <th>Units</th>
-                      <th>Type</th>
-                      <th>Built</th>
-                      <th>Status</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody data-testid="ds-receipt-queue">
-                    {rows.map((r) => (
-                      <tr key={r.id}>
-                        <td className="mono-num">{r.barcode}</td>
-                        <td>{r.mother_hub || 'UNKNOWN'}</td>
-                        <td className="mono-num">{num(r.item_count)}</td>
-                        <td className="mono-num">{num(r.total_units)}</td>
-                        <td>{r.lpn_type}</td>
-                        <td>{r.created_at ? clockOf(r.created_at) : '—'}</td>
-                        <td>
-                          <StatusBadge status={r.status} dataTestId={`ds-inbound-status-${r.barcode}`} />
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="scan-btn"
-                            style={{ minHeight: 34, fontSize: 12 }}
-                            data-testid={`ds-inbound-tote-${r.barcode}`}
-                            onClick={() => {
-                              setTote(r);
-                              setStep(2);
-                              setFeedback(null);
-                            }}
-                          >
-                            Select
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )
-        )}
+        <div className="screen-actions">
+          <button className="btn-ui neutral" onClick={() => reload()} disabled={loading}>
+            <RefreshCw size={12} className={loading ? 'spin' : ''} />
+            <span>Sync Receipts</span>
+          </button>
+        </div>
       </div>
 
-      <div className="wf-panel">
-        <div className="wf-panel__header">
-          <div>
-            <div className="wf-panel__title"><ScanLine size={17} /> Receive a tote</div>
-            <div className="wf-panel__hint">
-              Scan the label on the tote, or pick it from the queue above
-            </div>
-          </div>
+      {/* KPI Cards */}
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 16 }}>
+        <div className="kpi-card teal">
+          <div className="kpi-label">Incoming Totes</div>
+          <div className="kpi-value">{rows.length}</div>
+          <div className="kpi-sub">From mother warehouse</div>
         </div>
+        <div className="kpi-card amber">
+          <div className="kpi-label">Awaiting Receipt</div>
+          <div className="kpi-value">{pendingCount}</div>
+          <div className="kpi-sub">Ready to acknowledge</div>
+        </div>
+        <div className="kpi-card green">
+          <div className="kpi-label">Received in Store</div>
+          <div className="kpi-value">{receivedCount}</div>
+          <div className="kpi-sub">Ready for shelf putaway</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Active Store</div>
+          <div className="kpi-value" style={{ fontSize: 18, color: 'var(--accent)' }}>{storeCode}</div>
+          <div className="kpi-sub">{storeName || 'Dark Store RJY'}</div>
+        </div>
+      </div>
 
-        <ScanInput
-          label="Scan the inbound tote"
-          placeholder="Scan an LPN label, or type its barcode"
-          value={scanText}
-          onChange={setScanText}
-          onScan={onScan}
-          busy={busy}
-          feedback={feedback}
-          disabled={!rows.length}
-          dataTestId="ds-receipt-scan"
+      {feedback && (
+        <div
+          style={{
+            padding: '10px 14px',
+            marginBottom: 16,
+            borderRadius: 'var(--radius-sm)',
+            fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: feedback.type === 'error' ? 'var(--danger-bg)' : 'var(--success-bg)',
+            color: feedback.type === 'error' ? 'var(--danger)' : 'var(--success)',
+            border: `1px solid ${feedback.type === 'error' ? 'var(--danger-border)' : 'var(--success-border)'}`,
+          }}
+        >
+          {feedback.type === 'error' ? <AlertTriangle size={15} /> : <Check size={15} />}
+          <span style={{ flex: 1 }}>{feedback.message}</span>
+          <button
+            type="button"
+            className="btn-ui neutral"
+            style={{ padding: '2px 6px', fontSize: 11 }}
+            onClick={() => setFeedback(null)}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {/* Status Filter Tabs */}
+      <div className="status-tabs">
+        {['ALL', 'IN_TRANSIT', 'DISPATCHED', 'SHIPPED', 'RECEIVED'].map(st => (
+          <button
+            key={st}
+            className={`status-tab ${statusFilter === st ? 'active' : ''}`}
+            onClick={() => setStatusFilter(st)}
+          >
+            {st === 'ALL' ? `All Totes (${rows.length})` : `${st.replace(/_/g, ' ')} (${rows.filter(r => norm(r.status) === st).length})`}
+          </button>
+        ))}
+      </div>
+
+      {/* Filter Row */}
+      <div className="table-filter-row">
+        <input
+          type="text"
+          className="table-filter-input"
+          placeholder="Filter tote barcode or source..."
+          value={filterQuery}
+          onChange={e => setFilterQuery(e.target.value)}
         />
-
-        {tote && (
-          <>
-            <div className="form-group">
-              <div className="entity-card entity-card--active" data-testid="ds-receipt-tote">
-                <div className="entity-card__thumb"><Package size={22} /></div>
-                <div className="entity-card__body">
-                  <div className="entity-card__title mono-num">{tote.barcode}</div>
-                  <div className="entity-card__meta">
-                    <span>From <strong>{tote.mother_hub || 'UNKNOWN'}</strong></span>
-                    <span>Lines <strong>{num(tote.item_count)}</strong></span>
-                    <span>Units <strong>{num(tote.total_units)}</strong></span>
-                  </div>
-                </div>
-                <div className="entity-card__actions">
-                  <StatusBadge status={tote.status} />
-                </div>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="scan-field-label" htmlFor="ds-receipt-seal">
-                Seal number
-              </label>
-              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                <input
-                  id="ds-receipt-seal"
-                  data-testid="ds-receipt-seal"
-                  className="scan-input"
-                  style={{ minHeight: 44, fontSize: 15 }}
-                  value={seal}
-                  onChange={(e) => setSeal(e.target.value)}
-                  placeholder="Scan or type the seal number"
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  className="scan-btn"
-                  onClick={receive}
-                  disabled={busy}
-                  data-testid="ds-receipt-confirm"
-                >
-                  {busy ? 'Receiving…' : 'Receive into store'}
-                </button>
-              </div>
-              <div className="scan-feedback scan-feedback--hint" style={{ marginTop: 8 }}>
-                Taking custody parks the stock in the tote. It becomes pickable only
-                after shelf putaway.
-              </div>
-            </div>
-
-            <div className="wf-panel__actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={reset}
-                disabled={busy}
-                data-testid="ds-receipt-clear"
-              >
-                <X size={14} /> Clear
-              </button>
-            </div>
-          </>
-        )}
+        <span className="table-record-count">Showing {filteredRows.length} of {rows.length} totes</span>
       </div>
-    </>
+
+      {/* Totes Table */}
+      <div className="wms-table-wrap">
+        <table className="wms-table">
+          <thead>
+            <tr>
+              <th>TOTE BARCODE / LPN</th>
+              <th>SOURCE HUB</th>
+              <th>SEAL NUMBER</th>
+              <th>UNITS / ITEMS</th>
+              <th>DISPATCH TIME</th>
+              <th>STATUS</th>
+              <th style={{ textAlign: 'right' }}>ACTION</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRows.length > 0 ? (
+              filteredRows.map(row => {
+                const isReceived = norm(row.status) === 'RECEIVED';
+                return (
+                  <tr key={row.lpn_id || row.id || row.barcode}>
+                    <td>
+                      <div>
+                        <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                          {row.barcode || row.lpn_id || row.id}
+                        </strong>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                          LPN: {String(row.lpn_id || row.id || '').slice(0, 12)}
+                        </div>
+                      </div>
+                    </td>
+                    <td>{row.source_name || row.source || 'Central Hub HYD080M'}</td>
+                    <td>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                        {row.seal_code || row.seal || '—'}
+                      </span>
+                    </td>
+                    <td>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                        {row.item_count ?? row.qty ?? '—'} units
+                      </span>
+                    </td>
+                    <td>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                        {row.dispatched_at ? new Date(row.dispatched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </span>
+                    </td>
+                    <td>
+                      <StatusBadge status={row.status || 'IN_TRANSIT'} />
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {!isReceived ? (
+                        <button
+                          type="button"
+                          className="btn-ui primary"
+                          style={{ padding: '3px 10px', fontSize: 11 }}
+                          disabled={busy}
+                          onClick={() => {
+                            setSelectedTote(row);
+                            onConfirmReceipt(row);
+                          }}
+                        >
+                          <Check size={12} />
+                          <span>Receive Tote</span>
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: 11, color: 'var(--success)', fontFamily: 'var(--font-mono)' }}>
+                          ✓ In Custody
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
+            ) : (
+              <tr>
+                <td colSpan={7} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                  No replenishment totes found in this queue.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
 export default function LpnReceiptView() {
-  const { storeCode, storeName } = useDarkStore();
-  const { user } = useAuth();
-
+  const { storeCode, storeName, operatorName } = useDarkStore();
   return (
     <StoreGate>
-      {storeCode && (
-        <Receipt storeCode={storeCode} storeName={storeName} operatorName={user?.full_name} />
-      )}
+      <Receipt storeCode={storeCode} storeName={storeName} operatorName={operatorName} />
     </StoreGate>
   );
 }

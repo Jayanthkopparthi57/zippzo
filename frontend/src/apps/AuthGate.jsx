@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangle, ExternalLink, LogOut } from 'lucide-react';
 import LoginView from '../views/auth/LoginView';
+import ShopperAccessView from '../views/shopper/ShopperAccessView';
 import { useAuth } from '../context/AuthContext';
 import { APPS } from './registry';
 
@@ -107,6 +108,6 @@ export default function AuthGate({ appKey, children }) {
       />
     );
   }
-  if (!user) return <LoginView />;
+  if (!user) return appKey === 'shopper' ? <ShopperAccessView /> : <LoginView />;
   return children;
 }

@@ -107,11 +107,48 @@ class RiderEarnings(models.Model):
     delivery_fee = models.DecimalField(max_digits=10, decimal_places=2)
     tips = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     status = models.CharField(max_length=20, default='PENDING')
+    #: The payout run that settled this row. NULL while PENDING, so finance can
+    #: always answer "which transfer paid this delivery" without a second table.
+    payout = models.ForeignKey(
+        'RiderPayout', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='earnings')
+    paid_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'rider_earnings'
         ordering = ['-created_at']
         unique_together = [('order', 'rider')]
+
+
+class RiderPayout(models.Model):
+    """One counted transfer to one rider: the statement finance hands over.
+
+    Earnings are only ever settled by a payout run. Keeping the run as its own
+    row (rather than flipping ``status`` in place) is what makes the rider's
+    statement reproducible: the amount, the number of deliveries and the
+    reference all exist even after the orders themselves age out of view.
+    """
+    STATUS_CHOICES = [('PAID', 'Paid'), ('VOID', 'Void')]
+    payout_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    rider = models.ForeignKey(
+        'delivery.RiderProfile', on_delete=models.CASCADE, related_name='payouts')
+    site = models.CharField(max_length=50, blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    earnings_count = models.PositiveIntegerField(default=0)
+    period_start = models.DateTimeField(null=True, blank=True)
+    period_end = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PAID')
+    reference = models.CharField(max_length=80, blank=True)
+    created_by = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'rider_payouts'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Payout {self.payout_id} · {self.rider_id} · {self.amount}'
+
 
 
 # What checkout charges for delivery when the store has no rule of its own.
@@ -134,6 +171,7 @@ class DeliveryPricingRule(models.Model):
                                 related_name='delivery_pricing_rule')
     base_fee = models.DecimalField(max_digits=10, decimal_places=2,
                                    default=DEFAULT_DELIVERY_FEE)
+    promise_minutes = models.PositiveIntegerField(default=15)
     # A quick-commerce lever every store runs: free delivery above a basket
     # value. 0 means "never free", which keeps existing rows and the flat
     # default behaving exactly as before.

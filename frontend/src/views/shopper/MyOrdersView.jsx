@@ -56,6 +56,113 @@ function seenWords(iso) {
   return new Date(iso).toLocaleTimeString();
 }
 
+const LEAFLET_CSS = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css';
+const LEAFLET_JS = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+
+/**
+ * Embedded OpenStreetMap map (Leaflet). The rider's pin moves with every
+ * tracking poll. OSM needs no API key; if the CDN or tiles fail we degrade
+ * to the "open in Google Maps" link below the frame instead of a void.
+ */
+function RiderMap({ rider, destination }) {
+  const ref = React.useRef(null);
+  const mapRef = React.useRef(null);
+  const riderRef = React.useRef(null);
+  const destRef = React.useRef(null);
+  const lineRef = React.useRef(null);
+  const errorRef = React.useRef(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const ensureLeaflet = () => new Promise((resolve, reject) => {
+      if (window.L) return resolve();
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = LEAFLET_CSS;
+      document.head.appendChild(link);
+      const script = document.createElement('script');
+      script.src = LEAFLET_JS;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('map failed to load'));
+      document.head.appendChild(script);
+    });
+    ensureLeaflet().then(() => {
+      if (cancelled || !ref.current) return;
+      const L = window.L;
+      if (!mapRef.current) {
+        const map = L.map(ref.current, { zoomControl: true, attributionControl: false, scrollWheelZoom: false });
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 })
+          .on('tileerror', () => { if (errorRef.current) errorRef.current.style.display = 'block'; })
+          .addTo(map);
+        mapRef.current = map;
+        destRef.current = L.marker([destination.lat, destination.lng], {
+          icon: L.divIcon({
+            className: 'map-dot',
+            html: '<div style="width:24px;height:24px;border-radius:50% 50% 50% 2px;background:#6d4aff;border:2px solid #fff;transform:rotate(-45deg);box-shadow:0 1px 5px rgba(0,0,0,.35)"></div>',
+            iconSize: [24, 24], iconAnchor: [12, 20],
+          }),
+        }).addTo(map);
+        riderRef.current = L.marker([rider.lat, rider.lng], {
+          icon: L.divIcon({
+            className: 'map-dot',
+            html: '<div style="width:14px;height:14px;border-radius:50%;background:#6d4aff;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>',
+            iconSize: [14, 14], iconAnchor: [7, 7],
+          }),
+        }).addTo(map);
+        lineRef.current = L.polyline([[rider.lat, rider.lng], [destination.lat, destination.lng]], {
+          color: '#6d4aff', weight: 3, dashArray: '6 8', opacity: 0.85,
+        }).addTo(map);
+        map.fitBounds(L.latLngBounds([[rider.lat, rider.lng], [destination.lat, destination.lng]]).pad(0.35));
+      } else {
+        riderRef.current.setLatLng([rider.lat, rider.lng]);
+        lineRef.current.setLatLngs([[rider.lat, rider.lng], [destination.lat, destination.lng]]);
+      }
+    }).catch(() => {
+      if (errorRef.current) errorRef.current.style.display = 'block';
+    });
+    return () => { cancelled = true; };
+  }, [rider.lat, rider.lng, destination.lat, destination.lng]);
+
+  return (
+    <div className="shop-tracking-map__canvaswrap">
+      <div ref={ref} className="shop-tracking-map__canvas" data-testid="tracking-leaflet" aria-label="Live rider position on map" />
+      <div ref={errorRef} className="shop-tracking-map__note" style={{ display: 'none' }}>
+        Map tiles unavailable — use the Google Maps link below.
+      </div>
+    </div>
+  );
+}
+
+function RiderLocationMap({ tracking }) {
+  const rider = tracking.location;
+  const destination = tracking.destination;
+  if (!rider || !destination) return null;
+  if ([rider, destination].some((point) =>
+    point.lat == null || point.lng == null || point.lat === '' || point.lng === ''
+    || !Number.isFinite(Number(point.lat)) || !Number.isFinite(Number(point.lng))
+    || Math.abs(Number(point.lat)) > 90 || Math.abs(Number(point.lng)) > 180
+  )) return null;
+  const rLat = Number(rider.lat), rLng = Number(rider.lng);
+  const dLat = Number(destination.lat), dLng = Number(destination.lng);
+  const rPos = { lat: rLat, lng: rLng };
+  const dPos = { lat: dLat, lng: dLng };
+  const origin = `${rLat},${rLng}`;
+  const target = `${dLat},${dLng}`;
+  const mapUrl = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(target)}&travelmode=driving`;
+
+  return (
+    <div className="shop-tracking-map" data-testid="tracking-map">
+      <RiderMap rider={rPos} destination={dPos} />
+      <a className="shop-tracking-map__link" href={mapUrl} target="_blank" rel="noreferrer">
+        <MapPin size={16} /> Open rider route in Google Maps <ChevronRight size={16} />
+      </a>
+      <div className="shop-tracking-map__note">
+        Rider's latest position ping — the map refreshes with each poll.
+      </div>
+    </div>
+  );
+}
+
 export default function MyOrdersView() {  const { openTab } = useTabs();
   const [orders, setOrders] = useState([]);
   const [addresses, setAddresses] = useState([]);
@@ -123,6 +230,18 @@ export default function MyOrdersView() {  const { openTab } = useTabs();
     if (didLoad.current) return;
     didLoad.current = true;
     load();
+  }, [load]);
+
+  // Order lifecycle notifications arrive over the authenticated event socket.
+  // Refresh when a suspended mobile app returns to the foreground as recovery.
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden) load(); };
+    window.addEventListener('zippzo:live-event', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('zippzo:live-event', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
   }, [load]);
 
   const openDetail = useCallback(async (orderId) => {
@@ -278,8 +397,10 @@ export default function MyOrdersView() {  const { openTab } = useTabs();
 
       {rows.map(o => (
         <div key={o.order_id} className="shop-ordercard">
-          <div
+          <button
+            type="button"
             className="shop-ordercard__head"
+            aria-expanded={openId === o.order_id}
             onClick={() => openId === o.order_id ? setOpenId(null) : openDetail(o.order_id)}>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -296,12 +417,12 @@ export default function MyOrdersView() {  const { openTab } = useTabs();
             </div>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
               <span className="shop-ordercard__total">₹{num(o.grand_total).toFixed(2)}</span>
-              <ChevronRight size={17} style={{
+              <ChevronRight size={17} aria-hidden="true" style={{
                 color: openId === o.order_id ? 'var(--shop-accent)' : 'var(--shop-ink-3)',
                 transform: openId === o.order_id ? 'rotate(90deg)' : 'none', transition: 'transform .15s',
               }} />
             </div>
-          </div>
+          </button>
 
           {openId === o.order_id && (
             <div className="shop-ordercard__body">
@@ -357,7 +478,7 @@ export default function MyOrdersView() {  const { openTab } = useTabs();
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       {tracking.eta_minutes != null && (
                         <div data-testid="tracking-eta" style={{ fontSize: 17, fontWeight: 800 }}>
-                          {tracking.eta_minutes} min
+                          About {tracking.eta_minutes} min
                         </div>
                       )}
                       {tracking.distance_km != null && (
@@ -378,6 +499,9 @@ export default function MyOrdersView() {  const { openTab } = useTabs();
                         : `Live position · updated ${seenWords(tracking.updated_at)}`)
                       : 'The rider has not shared a position yet.'}
                   </div>
+                  {tracking.location && tracking.destination && (
+                    <RiderLocationMap tracking={tracking} />
+                  )}
                 </div>
               )}
 

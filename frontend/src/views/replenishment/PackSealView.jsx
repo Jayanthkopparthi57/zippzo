@@ -4,8 +4,6 @@ import {
   Printer, XCircle, Building2, CheckCircle2, Plus, ShieldCheck,
 } from 'lucide-react';
 import ScanInput from '../../components/ui/ScanInput';
-import WorkflowStepper from '../../components/ui/WorkflowStepper';
-import ProgressRing from '../../components/ui/ProgressRing';
 import StatusBadge from '../../components/ui/StatusBadge';
 import ToteLabel from '../../components/ui/ToteLabel';
 import { useToast } from '../../components/ui/Toast';
@@ -31,12 +29,6 @@ import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../ap
  * and the receiving dark store actually care about: "is the right thing in the
  * tote", not "which of the four lots did the picker grab".
  */
-const STEPS = [
-  { key: 'order', title: 'Select Order', description: 'Choose a picked transfer ready to pack' },
-  { key: 'tote', title: 'Create Tote', description: 'Mint the LPN that will carry the stock' },
-  { key: 'scan', title: 'Scan Products', description: 'Scan each unit into the tote' },
-  { key: 'verify', title: 'Verify & Seal', description: 'Check contents, then print the label' },
-];
 
 /**
  * Transfer states whose picks are already done, so the stock is physically at
@@ -507,13 +499,12 @@ export default function PackSealView() {
   if (!order) {
     return (
       <div>
-        <WorkflowStepper steps={STEPS} current={0} dataTestId="pack-stepper" />
 
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title">
-                <Package size={17} /> Pack Queue
+              <div className="wf-peek">
+ Pack Queue
               </div>
               <div className="wf-panel__hint">
                 {loading ? 'Loading transfers…' : `${orders.length} transfer${orders.length === 1 ? '' : 's'} ready to pack`}
@@ -527,7 +518,7 @@ export default function PackSealView() {
           </div>
 
           <ScanInput
-            label="Step 1 · Scan or enter the transfer"
+            label="Scan or enter the transfer"
             placeholder="Transfer id, or pick one from the queue"
             value={scanText}
             onChange={setScanText}
@@ -600,13 +591,12 @@ export default function PackSealView() {
   /* ── Order open: create the tote, scan, verify ── */
   return (
     <div>
-      <WorkflowStepper steps={STEPS} current={step} dataTestId="pack-stepper" />
 
       <div className="wf-split">
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><ScanLine size={17} /> Scan</div>
+              <div className="wf-peek"> Scan</div>
               <div className="wf-panel__hint">
                 Transfer {String(order.transfer_id).slice(0, 8)}
                 {tote ? ` · ${tote.lpn_id}` : ''}
@@ -636,7 +626,7 @@ export default function PackSealView() {
           {step >= 2 && (
             <ScanInput
               key="pack-unit"
-              label={`Step 2 · Scan each unit (${packedTotal} of ${expectedTotal})`}
+              label={`Scan each unit (${packedTotal} of ${expectedTotal})`}
               placeholder="Scan a product barcode — accepted or rejected"
               value={scanText}
               onChange={setScanText}
@@ -715,8 +705,8 @@ export default function PackSealView() {
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title">
-                <Boxes size={17} /> {tote ? tote.lpn_id : 'Expected contents'}
+              <div className="wf-peek">
+ {tote ? tote.lpn_id : 'Expected contents'}
               </div>
               <div className="wf-panel__hint">
                 {srcSite?.code || '?'} → {destSite?.code || '?'}
@@ -724,13 +714,9 @@ export default function PackSealView() {
               </div>
             </div>
             {lines.length > 0 && (
-            <ProgressRing
-              value={packedTotal}
-                total={expectedTotal}
-                label={`${packedTotal} of ${expectedTotal}`}
-                sublabel="units packed"
-                dataTestId="pack-progress"
-              />
+              <span className="mono-num" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {packedTotal} of {expectedTotal}
+              </span>
             )}
           </div>
 

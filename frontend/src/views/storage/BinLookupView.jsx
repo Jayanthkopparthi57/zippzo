@@ -125,7 +125,7 @@ export default function BinLookupView() {
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div>
-            <div className="wf-panel__title"><ScanLine size={17} /> Bin Lookup</div>
+            <div className="wf-peek"> Bin Lookup</div>
             <div className="wf-panel__hint">
               Scan a bin barcode or type a bin code to see everything held in it
             </div>
@@ -217,7 +217,7 @@ export default function BinLookupView() {
         <div className="wf-panel" data-testid="bin-lookup-result">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><MapPin size={17} /> {binLabel(bin) || bin.barcode}</div>
+              <div className="wf-peek"> {binLabel(bin) || bin.barcode}</div>
               <div className="wf-panel__hint mono-num" data-testid="bin-lookup-location">
                 {locationId}
               </div>

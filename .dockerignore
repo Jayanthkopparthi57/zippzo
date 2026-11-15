@@ -1,0 +1,15 @@
+.git
+.env
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+frontend/node_modules
+frontend/dist
+frontend/dist-native
+frontend/android/.gradle
+frontend/android/app/build
+staticfiles
+media
+*.sqlite3

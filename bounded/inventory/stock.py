@@ -109,6 +109,15 @@ def apply_stock(*, site, sku, lot, qty, movement_type, ref_type, ref_id,
 
     idem = _key(movement_type, ref_type, ref_id, sku, lot, site, direction,
                 container, container_ref)
+
+    # Lock the site's audit chain first. This serialises every movement for a
+    # site, so the idempotency check below cannot race another request into
+    # writing the same key and the sequence number is allocated once. The old
+    # order (balance lock, then chain lock) could deadlock two concurrent moves
+    # that touched different balance rows on the same site.
+    chain, _ = StockMovementsChain.objects.select_for_update().get_or_create(
+        site=site, defaults={'head_seq': 0, 'head_hash': None})
+
     if not force and StockMovement.objects.filter(idempotency_key=idem).exists():
         return False
 
@@ -143,10 +152,6 @@ def apply_stock(*, site, sku, lot, qty, movement_type, ref_type, ref_id,
 
     bal.save(update_fields=['qty', 'updated_at'])
 
-    # Serialise the audit chain per site so two concurrent movements can never
-    # be handed the same sequence number, and so the chain links properly.
-    chain, _ = StockMovementsChain.objects.select_for_update().get_or_create(
-        site=site, defaults={'head_seq': 0, 'head_hash': None})
     seq = chain.head_seq + 1
 
     mv = StockMovement(

@@ -30,6 +30,7 @@ from bounded.catalog.models import InventoryLot, Listing, Sku
 from bounded.iam.models import User
 from bounded.inventory.models import StockBalance
 from bounded.network.models import Location, Site
+from bounded.routing.models import DeliveryArea
 from bounded.orders.models import Customer, CustomerAddress
 
 CUSTOMERS = '/api/orders/customers/'
@@ -130,11 +131,11 @@ class CheckoutSiteTypeTests(TestCase):
         # the live estate holds. It was the one checkout refused.
         cls.ds_estate = Site.objects.create(
             code='DS-ESTATE', site_type='DS', name='Estate Dark Store',
-            address='estate road')
+            address='estate road', status='ACTIVE', is_accepting_orders=True)
         # The legacy spelling every fixture used, which checkout did accept.
         cls.ds_legacy = Site.objects.create(
             code='DS-LEGACY', site_type='DARK_STORE', name='Legacy Dark Store',
-            address='legacy road')
+            address='legacy road', status='ACTIVE', is_accepting_orders=True)
         cls.warehouse = Site.objects.create(
             code='WH-ESTATE', site_type='MH', name='Mother Hub',
             address='hub road')
@@ -143,6 +144,7 @@ class CheckoutSiteTypeTests(TestCase):
         # tested is the site type and never a missing shelf.
         for site in (cls.ds_estate, cls.ds_legacy):
             cls._stock(site)
+            DeliveryArea.objects.create(site=site, pincode='560001', band='CORE')
         cls._estate_listing = Listing.objects.get(site=cls.ds_estate)
 
     @classmethod
@@ -200,8 +202,8 @@ class CheckoutSiteTypeTests(TestCase):
             'payment_method': 'COD',
         }, format='json')
 
-        self.assertEqual(400, response.status_code, response.data)
-        self.assertIn('not a dark store', str(response.data.get('error', '')))
+        self.assertEqual(409, response.status_code, response.data)
+        self.assertIn('dark store', str(response.data.get('error', '')))
         self.assertEqual(0, Customer.objects.get(user=self.shopper)
                          .orders.count())
 

@@ -40,7 +40,7 @@ const ORDER_STATUS_BADGE = (s) => {
 export default function DashboardView() {
   const { openTab } = useTabs();
   const { facility, facilitiesList } = useAuth();
-  const [siteCode, setSiteCode] = useState('');
+  const [siteCode, setSiteCode] = useState(() => (facility?.code ? String(facility.code).toUpperCase() : ''));
   const [overview, setOverview] = useState(null);
   const [orders, setOrders] = useState([]);
   const [putaways, setPutaways] = useState([]);

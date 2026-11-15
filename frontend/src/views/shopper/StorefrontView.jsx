@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, X, Plus, Minus, Trash2, MapPin, Clock, ChevronRight, ChevronLeft,
-  ShoppingBasket, Package, Percent, Truck, CreditCard, Smartphone, Banknote,
+  ShoppingBasket, Package, Percent, Truck, Smartphone, Banknote,
   Check, Star, Heart, AlertTriangle, RefreshCw, Store, Tag, ArrowRight,
   Apple, Milk, Cookie, CupSoda, Soup, SprayCan, Baby, Croissant, Pill, Wheat,
+  LocateFixed,
 } from 'lucide-react';
 import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../context/AuthContext';
+import { describeError } from '../../api/client';
 import {
   storefront, placeOrder, myOrders, myAddresses, saveAddress,
   setDefaultAddress, removeAddress, activeCoupons, skuReviews, postReview,
-  asList, num,
+  deliveryCoverage, cashfreePaymentStatus, asList, num,
 } from '../darkstore/useDarkStore';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -48,6 +50,41 @@ const FALLBACK_IMG = (name) => {
   return CAT_TINT[h % 6];
 };
 
+async function openCashfreeCheckout(paymentSessionId, environment) {
+  if (!window.Cashfree) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Could not load Cashfree checkout.'));
+      document.head.appendChild(script);
+    });
+  }
+  if (!window.Cashfree) throw new Error('Cashfree checkout is unavailable in this browser.');
+  const cashfree = window.Cashfree({ mode: environment === 'production' ? 'production' : 'sandbox' });
+  return cashfree.checkout({ paymentSessionId, redirectTarget: '_modal' });
+}
+
+function distanceKm(from, to) {
+  if ([from?.geo_lat, from?.geo_lng, to?.geo_lat, to?.geo_lng]
+    .some((value) => value == null || value === '')) return null;
+  const lat1 = Number(from?.geo_lat);
+  const lng1 = Number(from?.geo_lng);
+  const lat2 = Number(to?.geo_lat);
+  const lng2 = Number(to?.geo_lng);
+  if (![lat1, lng1, lat2, lng2].every(Number.isFinite)
+      || Math.abs(lat1) > 90 || Math.abs(lat2) > 90
+      || Math.abs(lng1) > 180 || Math.abs(lng2) > 180) return null;
+  const radians = (degrees) => degrees * Math.PI / 180;
+  const dLat = radians(lat2 - lat1);
+  const dLng = radians(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(dLng / 2) ** 2;
+  const bounded = Math.min(1, Math.max(0, a));
+  return 6371 * 2 * Math.atan2(Math.sqrt(bounded), Math.sqrt(1 - bounded));
+}
+
 function ProductImg({ item, className }) {
   const [broken, setBroken] = useState(false);
   if (!item.image || broken) {
@@ -76,6 +113,7 @@ function ProductCard({ item, qty, onAdd, onInc, onDec, onOpen }) {
   const off = item.on_offer && Number(item.mrp) > Number(item.price);
   const pct = off ? Math.round((1 - Number(item.price) / Number(item.mrp)) * 100) : 0;
   const low = item.available > 0 && item.available <= 5;
+  const unitPrice = item.weight_g && Number(item.weight_g) > 0 ? Number(item.price) / (Number(item.weight_g) / 100) : null;
   return (
     <article className="shop-pcard" data-testid="product-card">
       <div className="shop-pcard__imgwrap" onClick={() => onOpen(item)}>
@@ -84,16 +122,15 @@ function ProductCard({ item, qty, onAdd, onInc, onDec, onOpen }) {
         {low && <span className="shop-pcard__low">Only {item.available} left</span>}
       </div>
       <div className="shop-pcard__body">
-        <span className="shop-pcard__time"><Clock size={10} /> 10 MINS</span>
         <span className="shop-pcard__name" onClick={() => onOpen(item)}>{item.name}</span>
         <span className="shop-pcard__pack">{item.pack_size}</span>
         <div className="shop-pcard__pricerow">
           <span className="shop-pcard__price" data-testid="product-price">{rupees(item.price)}</span>
           {off && <span className="shop-pcard__mrp">{rupees(item.mrp)}</span>}
         </div>
+        {unitPrice != null && <span className="shop-pcard__unit">{rupees(unitPrice)} / 100g</span>}
       </div>
       <div className="shop-pcard__foot">
-        <span className="shop-pcard__unit">{item.pack_size}</span>
         {qty > 0 ? (
           <div className="shop-step">
             <button onClick={() => onDec(item)} aria-label="Remove one">
@@ -116,8 +153,9 @@ function ProductCard({ item, qty, onAdd, onInc, onDec, onOpen }) {
 
 /* ── product detail sheet ────────────────────────────────────────────────── */
 
-function ProductSheet({ item, onClose, qty, onAdd }) {
+function ProductSheet({ item, onClose, qty, onAdd, promiseMinutes = 15 }) {
   const [reviews, setReviews] = useState([]);
+  const [imageIndex, setImageIndex] = useState(0);
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
@@ -142,22 +180,45 @@ function ProductSheet({ item, onClose, qty, onAdd }) {
         <button className="shop-sheet__close" onClick={onClose} aria-label="Close">
           <X size={16} />
         </button>
-        <ProductImg item={item} className="shop-sheet__img" />
+        <ProductImg item={{ ...item, image: (item.images || [])[imageIndex] || item.image }} className="shop-sheet__img" />
+        {(item.images || []).length > 1 && (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 6 }}>
+            {(item.images || []).map((url, index) => (
+              <button
+                  key={`${url}-${index}`}
+                  type="button"
+                  onClick={() => setImageIndex(index)}
+                  style={{ border: imageIndex === index ? '2px solid var(--shop-primary)' : '1px solid var(--shop-border)', borderRadius: 8, padding: 2, background: 'transparent' }}
+                  aria-label={`Show photo ${index + 1}`}
+                >
+                  <img src={url} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, display: 'block' }} />
+                </button>
+            ))}
+          </div>
+        )}
         <div className="shop-sheet__brand">{item.brand || item.category}</div>
         <h2 className="shop-sheet__name">{item.name}</h2>
         <div className="shop-sheet__pack">{item.pack_size} · {item.category}</div>
-        <div className="shop-pcard__time" style={{ marginBottom: 10 }}>
-          <Clock size={11} /> Delivery in 10 minutes
+          <div className="shop-sheet__eta">
+          <Clock size={11} /> Delivery in {promiseMinutes || 10} minutes
         </div>
         <div className="shop-sheet__pricerow">
           <span className="shop-sheet__price" data-testid="product-price">{rupees(item.price)}</span>
           {off && <span className="shop-sheet__mrp">{rupees(item.mrp)}</span>}
           {off && <span className="shop-sheet__save">SAVE {rupees(Number(item.mrp) - Number(item.price))}</span>}
         </div>
-        <p className="shop-sheet__desc">
-          {item.brand ? `${item.brand} · ` : ''}{item.name} ({item.pack_size}).
-          Freshly packed at your nearest dark store and delivered in minutes.
-        </p>
+        {item.description && <p className="shop-sheet__desc">{item.description}</p>}
+        {(item.ingredients || item.allergens || item.storage_notes || (item.nutrition_facts && Object.keys(item.nutrition_facts).length)) && (
+          <div style={{ display: 'grid', gap: 8, marginTop: 8, fontSize: 13 }}>
+            {item.ingredients && <div><strong>Ingredients:</strong> {item.ingredients}</div>}
+            {item.allergens && <div><strong>Allergens:</strong> {item.allergens}</div>}
+            {item.storage_notes && <div><strong>Storage:</strong> {item.storage_notes}</div>}
+            {item.nutrition_facts && Object.keys(item.nutrition_facts).length > 0 && (
+              <div><strong>Nutrition:</strong> {Object.entries(item.nutrition_facts).map(([key, value]) => `${key}: ${value}`).join(' · ')}</div>
+            )}
+            {item.weight_g && <div><strong>Net weight:</strong> {Number(item.weight_g) / 1000} kg</div>}
+          </div>
+        )}
         <button className="btn btn-primary btn-block" data-testid="product-add"
           onClick={() => { onAdd(item); onClose(); }} disabled={item.available <= 0}>
           {qty > 0 ? `In basket (${qty}) · Add more` : 'ADD TO BASKET'}
@@ -213,6 +274,7 @@ function ProductSheet({ item, onClose, qty, onAdd }) {
 /* ── receipt screen ──────────────────────────────────────────────────────── */
 
 function ReceiptScreen({ placed, onDone }) {
+  const paidOnline = placed.payment_method === 'Cashfree' || placed.payment_method === 'CASHFREE';
   return (
     <div className="view-container">
       <header className="view-header">
@@ -220,7 +282,11 @@ function ReceiptScreen({ placed, onDone }) {
           <h1 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Check size={22} color="var(--shop-ok)" /> Order placed!
           </h1>
-          <p className="view-subtitle">Arriving in about 10 minutes. Pay {rupees(placed.grand_total)} on delivery.</p>
+          <p className="view-subtitle">
+            {paidOnline
+              ? `Payment of ${rupees(placed.grand_total)} received. Track delivery in My Orders.`
+              : `Arriving in about ${placed.promise_minutes || 10} minutes. Pay ${rupees(placed.grand_total)} on delivery.`}
+          </p>
         </div>
         <button className="btn btn-secondary" onClick={onDone}>Order something else</button>
       </header>
@@ -256,10 +322,20 @@ function ReceiptScreen({ placed, onDone }) {
               <td colSpan={2} style={{ color: 'var(--shop-ink-3)' }}>Subtotal</td>
               <td style={{ textAlign: 'right' }}>{rupees(placed.subtotal)}</td>
             </tr>
-            {Number(placed.discount) > 0 && (
+            {Number(placed.coupon_discount ?? placed.discount) > 0 && (
               <tr>
-                <td colSpan={2} style={{ color: 'var(--shop-ok)' }}>Coupon {placed.coupon_code}</td>
-                <td style={{ textAlign: 'right', color: 'var(--shop-ok)' }}>−{rupees(placed.discount)}</td>
+                <td colSpan={2} style={{ color: 'var(--shop-ok)' }}>
+                  {placed.coupon_code ? `Coupon ${placed.coupon_code}` : 'Coupon savings'}
+                </td>
+                <td style={{ textAlign: 'right', color: 'var(--shop-ok)' }}>
+                  −{rupees(placed.coupon_discount ?? placed.discount)}
+                </td>
+              </tr>
+            )}
+            {Number(placed.combo_discount) > 0 && (
+              <tr>
+                <td colSpan={2} style={{ color: 'var(--shop-ok)' }}>Combo savings</td>
+                <td style={{ textAlign: 'right', color: 'var(--shop-ok)' }}>−{rupees(placed.combo_discount)}</td>
               </tr>
             )}
             <tr>
@@ -267,7 +343,7 @@ function ReceiptScreen({ placed, onDone }) {
               <td style={{ textAlign: 'right' }}>{rupees(placed.delivery_fee)}</td>
             </tr>
             <tr style={{ fontWeight: 700, borderTop: '2px solid var(--shop-line)' }}>
-              <td colSpan={2}>To pay on delivery</td>
+              <td colSpan={2}>{paidOnline ? 'Paid online' : 'To pay on delivery'}</td>
               <td style={{ textAlign: 'right', color: 'var(--shop-accent)', fontFamily: 'var(--font-display)' }}>
                 {rupees(placed.grand_total)}
               </td>
@@ -291,95 +367,196 @@ function ReceiptScreen({ placed, onDone }) {
 /* ── main storefront ─────────────────────────────────────────────────────── */
 
 export default function ShopperStorefrontView() {
-  const { user, facilitiesList } = useAuth();
-  const stores = facilitiesList?.dark_stores || [];
+  const { user } = useAuth();
   const [picked, setPicked] = useState('');
-  const siteCode = useMemo(() => {
-    if (picked && stores.some((s) => s.code === picked)) return picked;
-    return stores[0]?.code || '';
-  }, [picked, stores]);
 
   if (!user) {
     return <div className="alert alert-error">Sign in to order.</div>;
   }
-  return (
-    <StorefrontScreen siteCode={siteCode} stores={stores} picked={siteCode} onPick={setPicked} />
-  );
+  return <StorefrontScreen siteCode={picked} onPick={setPicked} />;
 }
 
-function StorefrontScreen({ siteCode, stores, picked, onPick }) {
-  const { toast } = useToast();
+function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
+  const toast = useToast();
+  const { user } = useAuth();
+  const basketStorageKey = `zippzo:basket:${user?.user_id || 'guest'}`;
   const [shop, setShop] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [nearbyCoordinates, setNearbyCoordinates] = useState(null);
+  const [useCurrentLocation, setUseCurrentLocation] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const [locationError, setLocationError] = useState('');
   const [loadError, setLoadError] = useState(null);
   const [basket, setBasket] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('zippzo:basket') || '{}'); } catch { return {}; }
+    try { return JSON.parse(localStorage.getItem(basketStorageKey) || '{}'); } catch { return {}; }
   });
   const [addresses, setAddresses] = useState([]);
   const [addressId, setAddressId] = useState('');
+  const [manualPincode, setManualPincode] = useState('');
+  const [coveredStores, setCoveredStores] = useState([]);
+  const [coverageLoading, setCoverageLoading] = useState(false);
+  const [coverageChecked, setCoverageChecked] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [placed, setPlaced] = useState(null);
+  const [pendingPayment, setPendingPayment] = useState(null);
   const [refusal, setRefusal] = useState(null);
   const [coupons, setCoupons] = useState([]);
   const [appliedCoupon, setAppliedCoupon] = useState(null);
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
   const [payMethod, setPayMethod] = useState('COD');
-  const [slot, setSlot] = useState('Express · 10 mins');
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState('');
   const [cartOpen, setCartOpen] = useState(false);
   const [sheetItem, setSheetItem] = useState(null);
   const [showAddrPanel, setShowAddrPanel] = useState(false);
-  const [addrDraft, setAddrDraft] = useState({ label: 'Home', line1: '', city: '', pincode: '' });
+  const [addrDraft, setAddrDraft] = useState({ label: 'Home', line1: '', city: '', pincode: '', geo_lat: null, geo_lng: null });
   const [addrBusy, setAddrBusy] = useState(false);
   const [addrErr, setAddrErr] = useState('');
+  const [addrGeoBusy, setAddrGeoBusy] = useState(false);
+  const [addrGeoStatus, setAddrGeoStatus] = useState('');
   const searchRef = useRef(null);
   // StrictMode remounts in dev; guard so each loader fires once per key.
   const shopLoadedFor = useRef(null);
+  const shopRequestSequence = useRef(0);
   const addrLoaded = useRef(false);
+  const basketStore = useRef('');
 
-  // The address the shelf is asked about. Empty while no address is selected,
-  // which is also the "store has no pincode list" case: it stays permissive.
+  // A shelf is never loaded until the shopper has a delivery pincode and a
+  // dark store has explicitly published coverage for it.
   const addressPincode = useMemo(() => {
     const chosen = addresses.find((a) => a.address_id === addressId);
     return (chosen?.pincode || '').trim();
   }, [addresses, addressId]);
+  const deliveryPincode = addressPincode || manualPincode.trim();
+  useEffect(() => {
+    let active = true;
+    setCoverageChecked(false);
+    setCoveredStores([]);
+    if (!/^\d{6}$/.test(deliveryPincode)) {
+      setCoverageLoading(false);
+      return () => { active = false; };
+    }
+    setCoverageLoading(true);
+    setLocationError('');
+    deliveryCoverage(deliveryPincode)
+      .then((response) => {
+        if (!active) return;
+        const matches = Array.isArray(response?.sites) ? response.sites : [];
+        setCoveredStores(matches);
+        setCoverageChecked(true);
+      })
+      .catch((error) => {
+        if (active) {
+          setCoveredStores([]);
+          setCoverageChecked(true);
+          setLocationError(error.message || 'Could not check delivery coverage.');
+        }
+      })
+      .finally(() => { if (active) setCoverageLoading(false); });
+    return () => { active = false; };
+  }, [deliveryPincode]);
+  const deliveryAddress = addresses.find((a) => a.address_id === addressId)
+    || addresses.find((a) => a.is_default)
+    || addresses[0]
+    || null;
+  const distanceOrigin = !useCurrentLocation
+    && deliveryAddress?.geo_lat != null && deliveryAddress?.geo_lng != null
+    ? deliveryAddress
+    : nearbyCoordinates;
+  const nearestStore = useMemo(() => {
+    if (!distanceOrigin) return null;
+    return coveredStores
+      .map((store) => ({ store, distance: distanceKm(distanceOrigin, store) }))
+      .filter((entry) => entry.distance !== null)
+      .sort((a, b) => a.distance - b.distance)[0]?.store || null;
+  }, [distanceOrigin, coveredStores]);
+  const siteCode = (coveredStores.some((store) => store.code === requestedSiteCode)
+    ? requestedSiteCode : '') || nearestStore?.code || coveredStores[0]?.code || '';
+  const storeDistance = distanceKm(distanceOrigin,
+    coveredStores.find((store) => store.code === siteCode));
+  const usingNearestStore = Boolean(nearestStore?.code === siteCode && storeDistance !== null);
 
   const loadShop = useCallback((force = false) => {
-    if (!siteCode) return;
+    // A shopper with no published store has no shelf to ask about. Say so
+    // instead of leaving the loading placeholder up forever: siteCode arrives
+    // asynchronously with the store directory, so this clears itself as soon
+    // as a store is resolvable.
+    if (!siteCode) {
+      shopRequestSequence.current += 1;
+      shopLoadedFor.current = null;
+      setShop(null);
+      setLoading(coverageLoading);
+      setLoadError(coverageLoading || !coverageChecked
+        ? null
+        : (deliveryPincode
+          ? `No active dark store currently delivers to ${deliveryPincode}.`
+          : 'Enter your delivery pincode to see products available near you.'));
+      return;
+    }
     // The shelf itself answers "do you deliver here", so the address is part
     // of the cache key: switching address must not keep the old answer.
-    const key = `${siteCode}|${addressPincode}`;
+    const key = `${siteCode}|${deliveryPincode}`;
     if (!force && shopLoadedFor.current === key) return;
     shopLoadedFor.current = key;
+    const requestSequence = ++shopRequestSequence.current;
     setLoading(true); setLoadError(null);
-    storefront(siteCode, '', addressPincode)
-      .then((d) => setShop(d))
-      .catch((e) => setLoadError(e.message || 'The shelf could not be loaded.'))
-      .finally(() => setLoading(false));
-  }, [siteCode, addressPincode]);
+    setShop(null);
+    storefront(siteCode, '', deliveryPincode)
+      .then((d) => {
+        if (requestSequence === shopRequestSequence.current) setShop(d);
+      })
+      .catch((e) => {
+        if (requestSequence !== shopRequestSequence.current) return;
+        // The key was claimed before the request went out. Release it on
+        // failure, otherwise one dropped read is cached as "this store has
+        // nothing" and Refresh is the only thing that can ever clear it.
+        shopLoadedFor.current = null;
+        setLoadError(e.message || 'The shelf could not be loaded.');
+      })
+      .finally(() => {
+        if (requestSequence === shopRequestSequence.current) setLoading(false);
+      });
+  }, [siteCode, deliveryPincode, coverageChecked, coverageLoading]);
 
-  const loadAddresses = useCallback(() => {
-    if (addrLoaded.current) return;
+  const loadAddresses = useCallback((force = false) => {
+    if (addrLoaded.current && !force) return;
     addrLoaded.current = true;
-    myAddresses().then((rows) => {
+    return myAddresses().then((rows) => {
       const list = asList(rows, 'addresses') || [];
       setAddresses(list);
-      setAddressId((prev) => prev || (list.find((a) => a.is_default) || list[0])?.address_id || '');
-    }).catch(() => { addrLoaded.current = false; });
+      setAddressId((prev) => (list.some((a) => a.address_id === prev)
+        ? prev : (list.find((a) => a.is_default) || list[0])?.address_id || ''));
+      const preferred = list.find((a) => a.is_default) || list[0];
+      if (preferred?.pincode) setManualPincode(preferred.pincode);
+    }).catch((error) => {
+      addrLoaded.current = false;
+      if (force) throw error;
+    });
   }, []);
 
   useEffect(() => { loadShop(); }, [loadShop]);
   useEffect(() => { loadAddresses(); }, [loadAddresses]);
   useEffect(() => {
-    activeCoupons().then((r) => setCoupons(asList(r, 'coupons') || [])).catch(() => setCoupons([]));
-  }, []);
+    setAppliedCoupon(null);
+    setCouponError('');
+    let active = true;
+    activeCoupons(siteCode)
+      .then((r) => {
+        if (active) setCoupons(asList(r, 'coupons') || []);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setCoupons([]);
+        if (siteCode) toast.error('Offers unavailable', describeError(error));
+      });
+    return () => { active = false; };
+  }, [siteCode, toast]);
 
   // persist the basket across tab switches and page reloads
   useEffect(() => {
-    try { localStorage.setItem('zippzo:basket', JSON.stringify(basket)); } catch { /* private mode */ }
-  }, [basket]);
+    try { localStorage.setItem(basketStorageKey, JSON.stringify(basket)); } catch { /* private mode */ }
+  }, [basket, basketStorageKey]);
 
   // reorder from MyOrders pushes items in, then jumps to the Shop tab
   useEffect(() => {
@@ -393,6 +570,7 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
   }, []);
 
   const items = useMemo(() => shop?.items || [], [shop]);
+  const comboOffers = useMemo(() => shop?.combo_offers || [], [shop]);
   const byId = useMemo(() => Object.fromEntries(items.map((i) => [i.sku_id, i])), [items]);
 
   const categories = useMemo(() => {
@@ -431,13 +609,39 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
     .map(([skuId, q]) => ({ item: byId[skuId], qty: q }))
     .filter((l) => l.item);
   const subtotal = lines.reduce((s, l) => s + Number(l.item.price) * l.qty, 0);
-  const discount = appliedCoupon ? Math.min(
+  const requestedCouponDiscount = appliedCoupon && subtotal >= Number(appliedCoupon.min_order) ? Math.min(
     appliedCoupon.discount_type === 'FLAT'
       ? Number(appliedCoupon.discount_value)
       : subtotal * Number(appliedCoupon.discount_value) / 100,
     appliedCoupon.max_discount ? Number(appliedCoupon.max_discount) : Infinity,
     subtotal,
   ) : 0;
+  const comboSavings = useMemo(() => {
+    const remaining = Object.fromEntries(lines.map((line) => [line.item.sku_id, line.qty]));
+    const candidates = comboOffers.filter((offer) => offer.items.length > 0).map((offer) => ({
+      offer,
+      count: Math.min(...offer.items.map((item) =>
+        Math.floor((remaining[item.sku_id] || 0) / item.quantity))),
+    })).sort((a, b) => Number(b.offer.savings) - Number(a.offer.savings)
+      || String(a.offer.offer_id).localeCompare(String(b.offer.offer_id)));
+    const applied = [];
+    candidates.forEach(({ offer, count }) => {
+      if (count < 1) return;
+      offer.items.forEach((item) => {
+        remaining[item.sku_id] = (remaining[item.sku_id] || 0) - item.quantity * count;
+      });
+      applied.push({ offer, count, savings: Number(offer.savings) * count });
+    });
+    const rawTotal = applied.reduce((sum, item) => sum + item.savings, 0);
+    return {
+      offers: applied,
+      total: Math.min(rawTotal, subtotal),
+    };
+  }, [comboOffers, lines, subtotal]);
+  const discount = Math.min(
+    requestedCouponDiscount,
+    Math.max(0, subtotal - comboSavings.total),
+  );
   // The store's own rule, including the "free above ₹X" waiver. The server
   // recomputes this at checkout; showing the same arithmetic here means the
   // amount on the button is the amount charged.
@@ -446,8 +650,17 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
   const feeWaived = freeAbove > 0 && subtotal >= freeAbove;
   const fee = feeWaived ? 0 : (Number.isFinite(deliveryFee) ? deliveryFee : 20);
   const serviceable = shop?.serviceable !== false;
-  const total = Math.max(0, subtotal - discount) + fee;
+  const total = Math.max(0, subtotal - discount - comboSavings.total) + fee;
   const basketCount = lines.reduce((s, l) => s + l.qty, 0);
+  useEffect(() => {
+    if (!siteCode) return;
+    if (basketStore.current && basketStore.current !== siteCode && basketCount > 0) {
+      setBasket({});
+      setAppliedCoupon(null);
+      toast.error('Basket cleared', 'Your delivery area uses a different dark store, so we cleared items and prices from the previous store.');
+    }
+    basketStore.current = siteCode;
+  }, [siteCode, basketCount, toast]);
 
   const add = (item) => {
     setBasket((b) => ({ ...b, [item.sku_id]: Math.min((b[item.sku_id] || 0) + 1, item.available) }));
@@ -462,6 +675,21 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
       if (n <= 0) delete next[item.sku_id]; else next[item.sku_id] = n;
       return next;
     });
+  };
+
+  const addCombo = (offer) => {
+    const next = { ...basket };
+    for (const component of offer.items) {
+      const current = Number(next[component.sku_id] || 0);
+      const item = byId[component.sku_id];
+      if (!item || current + component.quantity > item.available) {
+        toast.error('Combo stock changed', `${component.name} does not have enough stock for this combo.`);
+        return;
+      }
+      next[component.sku_id] = current + component.quantity;
+    }
+    setBasket(next);
+    toast.success(`${offer.title} added to your basket`);
   };
 
   const applyCoupon = () => {
@@ -485,7 +713,14 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
       return;
     }
     if (!addressId) { setShowAddrPanel(true); return; }
+    if (!addr?.pincode || addr.pincode.trim() !== deliveryPincode) {
+      setRefusal('Choose or add a delivery address with the same pincode used to load this store’s products.');
+      setShowAddrPanel(true);
+      setCartOpen(true);
+      return;
+    }
     setPlacing(true); setRefusal(null);
+    let onlineOrderCreated = null;
     try {
       const res = await placeOrder({
         site: siteCode,
@@ -493,15 +728,69 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
         items: lines.map((l) => ({ sku_id: l.item.sku_id, qty: l.qty })),
         payment_method: payMethod,
         coupon_code: appliedCoupon?.code || '',
-        delivery_slot: slot,
       });
-      setPlaced(res);
-      setBasket({});
-      setAppliedCoupon(null);
-      setCartOpen(false);
+      if (payMethod === 'CASHFREE') {
+        onlineOrderCreated = res;
+        const provider = res.cashfree;
+        if (!res.payment_required || !provider?.payment_session_id) {
+          throw new Error('Cashfree did not return a payment session. Contact support before retrying.');
+        }
+        // Keep the full server receipt while payment is pending. The shopper
+        // may close the provider sheet and verify later, so a successful
+        // delayed verification must still have its real totals and line items.
+        setPendingPayment({ ...res, orderId: res.order_id, orderNo: res.order_no });
+        await openCashfreeCheckout(provider.payment_session_id, provider.environment);
+        const verified = await cashfreePaymentStatus(res.order_id);
+        if (verified.payment_status !== 'CAPTURED') {
+          if (verified.payment_status === 'FAILED') {
+            setPendingPayment(null);
+            setRefusal('Cashfree could not complete the payment. Your basket is still here; you can try again or choose Cash on Delivery.');
+          } else {
+            setRefusal('Payment is still being confirmed. Check its status below before placing another order.');
+          }
+        } else {
+          setBasket({});
+          setAppliedCoupon(null);
+          setPlaced({ ...res, payment_method: 'Cashfree', status: 'CONFIRMED' });
+          setPendingPayment(null);
+          setCartOpen(false);
+        }
+      } else {
+        setPlaced(res);
+        setBasket({});
+        setAppliedCoupon(null);
+        setCartOpen(false);
+      }
     } catch (e) {
-      setRefusal(e.message || 'The order could not be placed.');
-      toast(e.message || 'The order could not be placed.', 'error');
+      const message = onlineOrderCreated
+        ? `Payment for ${onlineOrderCreated.order_no || 'your order'} did not finish. The order is saved as pending; check its status before trying again.`
+        : (e.message || 'The order could not be placed.');
+      setRefusal(message);
+      toast.error(onlineOrderCreated ? 'Payment needs confirmation' : 'Order could not be placed', message);
+    }
+    setPlacing(false);
+  };
+
+  const refreshPendingPayment = async () => {
+    if (!pendingPayment?.orderId) return;
+    setPlacing(true);
+    try {
+      const verified = await cashfreePaymentStatus(pendingPayment.orderId);
+      if (verified.payment_status === 'CAPTURED') {
+        setPlaced({ ...pendingPayment, payment_method: 'Cashfree', status: 'CONFIRMED' });
+        setPendingPayment(null);
+        setBasket({});
+        setAppliedCoupon(null);
+        setCartOpen(false);
+        setRefusal(null);
+      } else if (verified.payment_status === 'FAILED') {
+        setPendingPayment(null);
+        setRefusal('Payment failed. Your basket is still here; you can try again or choose Cash on Delivery.');
+      } else {
+        setRefusal('Payment is still pending confirmation. Please check again shortly.');
+      }
+    } catch (e) {
+      setRefusal(e.message || 'Could not verify payment status. Try again shortly.');
     }
     setPlacing(false);
   };
@@ -513,10 +802,13 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
         label: addrDraft.label || 'Home',
         line1: addrDraft.line1, city: addrDraft.city,
         pincode: addrDraft.pincode, is_default: addresses.length === 0,
+        geo_lat: addrDraft.geo_lat, geo_lng: addrDraft.geo_lng,
+        geocode_confidence: addrDraft.geo_lat != null ? 'GPS' : null,
       });
-      toast('Address saved', 'success');
-      setAddrDraft({ label: 'Home', line1: '', city: '', pincode: '' });
-      loadAddresses();
+      toast.success('Address saved');
+      setAddrDraft({ label: 'Home', line1: '', city: '', pincode: '', geo_lat: null, geo_lng: null });
+      setAddrGeoStatus('');
+      await loadAddresses(true);
       setShowAddrPanel(false);
       window.dispatchEvent(new Event('zippzo:addresses-changed'));
       if (created?.address_id) setAddressId(created.address_id);
@@ -524,6 +816,67 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
       setAddrErr(e.message || 'Could not save that address.');
     }
     setAddrBusy(false);
+  };
+
+  const updateCheckoutAddress = async (action) => {
+    setAddrBusy(true);
+    setAddrErr('');
+    try {
+      await action();
+      await loadAddresses(true);
+    } catch (error) {
+      setAddrErr(error.message || 'Could not update that address.');
+    } finally {
+      setAddrBusy(false);
+    }
+  };
+
+  const pinCheckoutAddress = () => {
+    if (!navigator.geolocation) {
+      setAddrGeoStatus('Location is not available on this device.');
+      return;
+    }
+    setAddrGeoBusy(true);
+    setAddrGeoStatus('');
+    navigator.geolocation.getCurrentPosition(({ coords }) => {
+      setAddrDraft((draft) => ({ ...draft, geo_lat: coords.latitude, geo_lng: coords.longitude }));
+      setAddrGeoStatus('Map pin added from this device.');
+      setAddrGeoBusy(false);
+    }, () => {
+      setAddrGeoStatus('Could not get your location. Check permission or continue without a map pin.');
+      setAddrGeoBusy(false);
+    }, { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 });
+  };
+
+  const locateNearbyStore = () => {
+    if (!navigator.geolocation) {
+      setLocationError('Location is not available on this device. Choose a store from the list instead.');
+      return;
+    }
+    setLocating(true);
+    setLocationError('');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const currentPosition = { geo_lat: coords.latitude, geo_lng: coords.longitude };
+        setNearbyCoordinates(currentPosition);
+        setUseCurrentLocation(true);
+        const closest = coveredStores
+          .map((store) => ({ store, distance: distanceKm(currentPosition, store) }))
+          .filter((entry) => entry.distance !== null)
+          .sort((a, b) => a.distance - b.distance)[0]?.store;
+        if (closest && basketCount === 0) onPick(closest.code);
+        else if (closest) setLocationError('Nearest eligible store found. Your current store is unchanged so your basket stays intact.');
+        else setLocationError('No covered store has coordinates. Products are still limited to stores serving your pincode.');
+        setLocating(false);
+      },
+      (error) => {
+        setLocationError(error.code === error.PERMISSION_DENIED
+          ? 'Location permission was not granted. Choose a store from the list instead.'
+          : 'Could not determine your location. Please try again or choose a store.');
+        setLocating(false);
+      },
+      { enableHighAccuracy: false, maximumAge: 300000, timeout: 10000 },
+    );
   };
 
   /* receipt */
@@ -535,16 +888,14 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
 
   /* ── cart panel (shared desktop sidebar / mobile sheet) ── */
   const cartPanel = (
-    <aside className={`shop-cart-panel ${cartOpen ? 'shop-cart--open' : ''}`}
-      style={{
-        background: 'var(--shop-surface)', border: '1px solid var(--shop-line)',
-        borderRadius: 'var(--shop-radius-lg)', padding: 16,
-        position: 'sticky', top: 'calc(var(--shop-topbar-h) + 16px)',
-        maxHeight: 'calc(100dvh - var(--shop-topbar-h) - 32px)',
-        display: 'flex', flexDirection: 'column',
-      }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700 }}>
+    <>
+      {cartOpen && (
+        <div className="shop-cart-backdrop" aria-hidden="true"
+          onClick={() => setCartOpen(false)} />
+      )}
+    <aside className={`shop-cart-panel ${cartOpen ? 'shop-cart--open' : ''}`}>
+      <div className="shop-cart-panel__head">
+        <h2>
           My Basket <span style={{ color: 'var(--shop-ink-3)', fontWeight: 500 }}>({basketCount})</span>
         </h2>
         <button className="shop-sheet__close" style={{ position: 'static' }}
@@ -561,27 +912,28 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
         </div>
       ) : (
         <>
-          <ul data-testid="basket-lines" style={{ listStyle: 'none', margin: 0, padding: 0, overflowY: 'auto', flex: 1 }}>
+          <ul className="shop-cart-lines" data-testid="basket-lines">
             {lines.map((l) => (
-              <li key={l.item.sku_id} data-testid="basket-line"
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--shop-line)' }}>
+              <li key={l.item.sku_id} className="shop-cart-line" data-testid="basket-line">
                 <ProductImg item={l.item} className="shop-cart-line__img" />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{l.item.name}</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--shop-ink-3)' }}>
-                    {l.item.pack_size} ×{l.qty}
-                  </div>
+                <div className="shop-cart-line__body">
+                  <span className="shop-cart-line__name">{l.item.name}</span>
+                  <span className="shop-cart-line__unit">
+                    {l.item.pack_size ? `${l.item.pack_size} · ` : ''}{rupees(l.item.price)} each
+                  </span>
                 </div>
-                <span data-testid="basket-line-total" style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>
-                  {rupees(Number(l.item.price) * l.qty)}
-                </span>
-                <div className="shop-step" style={{ height: 26 }}>
-                  <button style={{ width: 26, height: 26 }} onClick={() => dec(l.item)} aria-label="Less">
-                    {l.qty === 1 ? <Trash2 size={12} /> : <Minus size={12} />}
-                  </button>
-                  <span className="shop-step__qty" style={{ minWidth: 18, fontSize: 12 }}>{l.qty}</span>
-                  <button style={{ width: 26, height: 26 }} onClick={() => inc(l.item)}
-                    disabled={l.qty >= l.item.available} aria-label="More"><Plus size={12} /></button>
+                <div className="shop-cart-line__side">
+                  <span className="shop-cart-line__total" data-testid="basket-line-total">
+                    {rupees(Number(l.item.price) * l.qty)}
+                  </span>
+                  <div className="shop-step shop-step--sm">
+                    <button onClick={() => dec(l.item)} aria-label="Less">
+                      {l.qty === 1 ? <Trash2 size={12} /> : <Minus size={12} />}
+                    </button>
+                    <span className="shop-step__qty">{l.qty}</span>
+                    <button onClick={() => inc(l.item)}
+                      disabled={l.qty >= l.item.available} aria-label="More"><Plus size={12} /></button>
+                  </div>
                 </div>
               </li>
             ))}
@@ -596,8 +948,14 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
               </div>
               {discount > 0 && (
                 <div className="shop-bill__row shop-bill__row--discount">
-                  <span>Coupon {appliedCoupon.code}</span>
+                  <span>Coupon {appliedCoupon?.code || 'savings'}</span>
                   <span className="num">−{rupees(discount)}</span>
+                </div>
+              )}
+              {comboSavings.total > 0 && (
+                <div className="shop-bill__row shop-bill__row--discount">
+                  <span>Combo deals</span>
+                  <span className="num">−{rupees(comboSavings.total)}</span>
                 </div>
               )}
               <div className="shop-bill__row">
@@ -632,7 +990,9 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
                 background: 'var(--shop-ok-soft)', borderRadius: 8, padding: '8px 12px' }}>
                 <Tag size={14} color="var(--shop-ok)" />
                 <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--shop-ok)' }}>
-                  {appliedCoupon.code} applied · −{rupees(discount)}
+                  {subtotal < Number(appliedCoupon.min_order)
+                    ? `${appliedCoupon.code} needs ${rupees(Number(appliedCoupon.min_order) - subtotal)} more`
+                    : `${appliedCoupon.code} applied · −${rupees(discount)}`}
                 </span>
                 <button onClick={() => setAppliedCoupon(null)}
                   style={{ marginLeft: 'auto', background: 'none', border: 0, color: 'var(--shop-ok)', cursor: 'pointer' }}>
@@ -650,12 +1010,12 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
               <div className="shop-choice-grid">
                 {[
                   { id: 'COD', icon: Banknote, title: 'Cash on Delivery', sub: 'Pay the rider when it arrives' },
-                  { id: 'UPI', icon: Smartphone, title: 'UPI', sub: 'GPay, PhonePe, Paytm' },
-                  { id: 'CARD', icon: CreditCard, title: 'Card', sub: 'Credit / debit at delivery' },
+                  { id: 'CASHFREE', icon: Smartphone, title: 'UPI or Card', sub: 'Secure checkout by Cashfree' },
                 ].map((p) => {
                   const Icon = p.icon;
                   return (
-                    <button key={p.id} className="shop-choice" aria-pressed={payMethod === p.id}
+                    <button key={p.id} className="shop-choice"
+                      aria-pressed={payMethod === p.id}
                       onClick={() => setPayMethod(p.id)}>
                       <span className="shop-choice__icon"><Icon size={18} /></span>
                       <span className="shop-choice__body">
@@ -669,20 +1029,9 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
               </div>
             </div>
 
-            {/* slot */}
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Delivery slot</div>
-              <div className="shop-choice-grid">
-                {['Express · 10 mins', 'Within 30 mins', 'Schedule · tonight'].map((s) => (
-                  <button key={s} className="shop-choice" aria-pressed={slot === s} onClick={() => setSlot(s)}>
-                    <span className="shop-choice__icon"><Clock size={18} /></span>
-                    <span className="shop-choice__body">
-                      <span className="shop-choice__title">{s}</span>
-                    </span>
-                    <Check size={16} className="shop-choice__tick" />
-                  </button>
-                ))}
-              </div>
+            <div className="shop-note" style={{ marginTop: 14 }}>
+              <Clock size={16} />
+              <span>Estimated delivery: about {shop?.promise_minutes || 10} minutes</span>
             </div>
 
             {/* address */}
@@ -716,9 +1065,9 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
                       </div>
                       <div className="shop-addr-card__actions">
                         {!a.is_default && (
-                          <button onClick={() => setDefaultAddress(a.address_id).then(loadAddresses)}>Default</button>
+                      <button disabled={addrBusy} onClick={() => updateCheckoutAddress(() => setDefaultAddress(a.address_id))}>Default</button>
                         )}
-                        <button onClick={() => removeAddress(a.address_id).then(loadAddresses)}>Remove</button>
+                        <button disabled={addrBusy} onClick={() => updateCheckoutAddress(() => removeAddress(a.address_id))}>Remove</button>
                       </div>
                     </div>
                   ))}
@@ -735,6 +1084,11 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
                           onChange={(e) => setAddrDraft((d) => ({ ...d, pincode: e.target.value }))}
                           style={{ border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13 }} />
                       </div>
+                      <button type="button" className="shop-btn shop-btn--ghost" style={{ marginTop: 8 }}
+                        onClick={pinCheckoutAddress} disabled={addrGeoBusy}>
+                        <LocateFixed size={14} /> {addrGeoBusy ? 'Finding location…' : 'Use current location for map pin'}
+                      </button>
+                      {addrGeoStatus && <div role="status" className="shop-address-pin-status">{addrGeoStatus}</div>}
                       {addrErr && <div style={{ fontSize: 12, color: 'var(--shop-bad)', marginTop: 6 }}>{addrErr}</div>}
                       <button className="btn btn-primary btn-block" style={{ marginTop: 10 }}
                         onClick={saveAddr} disabled={addrBusy || !addrDraft.line1 || !addrDraft.city || !addrDraft.pincode}>
@@ -755,6 +1109,16 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
               )}
             </div>
 
+            {pendingPayment && (
+              <div className="alert" style={{ marginTop: 12, fontSize: 12.5 }}>
+                Payment for {pendingPayment.orderNo || 'your order'} is awaiting confirmation.
+                <button className="btn btn-secondary" style={{ marginLeft: 8 }}
+                  onClick={refreshPendingPayment} disabled={placing}>
+                  {placing ? 'Checking…' : 'Check payment status'}
+                </button>
+              </div>
+            )}
+
             {refusal && (
               <div className="alert alert-error" style={{ marginTop: 12, fontSize: 12.5 }}>
                 <AlertTriangle size={14} /> {refusal}
@@ -763,26 +1127,45 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
 
             <button className="btn btn-primary btn-block" style={{ marginTop: 14 }}
               data-testid="place-order" onClick={submit}
-              disabled={placing || lines.length === 0 || !addressId || !serviceable}>
+              disabled={placing || Boolean(pendingPayment) || lines.length === 0 || !addressId || !serviceable}>
               {placing ? 'Placing…' : `Place order · ${rupees(total)}`}
             </button>
           </div>
         </>
       )}
     </aside>
+    </>
   );
 
   /* ── main ── */
   return (
-    <div className="view-container">
+    <div className="view-container shop-cart-layout">
+      <div className="shop-cart-main">
+      <div className="shop-location-check">
+        <MapPin size={18} color="var(--shop-accent)" />
+        <div style={{ flex: '1 1 180px' }}>
+          <strong style={{ display: 'block', fontSize: 13 }}>Delivering to</strong>
+          <span style={{ fontSize: 12, color: 'var(--shop-ink-3)' }}>
+            {deliveryAddress ? `${deliveryAddress.label || 'Saved address'} · ${addressPincode || 'add pincode'}` : 'Enter your pincode to check nearby dark stores'}
+          </span>
+        </div>
+        {!addressPincode && (
+          <input aria-label="Delivery pincode" inputMode="numeric" maxLength={6}
+            value={manualPincode}
+            onChange={(event) => setManualPincode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+            placeholder="6-digit pincode" className="shop-location-check__pincode" />
+        )}
+        {addressPincode && <button className="shop-location-check__change" onClick={() => { setShowAddrPanel(true); setCartOpen(true); }}>Change address</button>}
+        {!addressPincode && <span aria-live="polite" style={{ fontSize: 12, color: 'var(--shop-ink-3)' }}>{coverageLoading ? 'Checking service area…' : coverageChecked ? `${coveredStores.length} serving store${coveredStores.length === 1 ? '' : 's'}` : 'Enter a valid 6-digit pincode'}</span>}
+      </div>
       {/* store row */}
-      <div className="shop-storerow">
-        {stores.length > 1 ? (
+      {siteCode && <div className="shop-storerow">
+        {coveredStores.length > 1 ? (
           <label className="shop-chip" htmlFor="shop-select">
             <Store size={14} />
-            <select id="shop-select" value={picked}
+          <select id="shop-select" value={siteCode}
               onChange={(e) => { setCat(''); setQuery(''); onPick(e.target.value); }}>
-              {stores.map((s) => (
+              {coveredStores.map((s) => (
                 <option key={s.code} value={s.code}>{s.name || s.code}</option>
               ))}
             </select>
@@ -790,14 +1173,25 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
         ) : (
           <span className="shop-chip"><Store size={14} /> {shop?.name || siteCode}</span>
         )}
+        {usingNearestStore && (
+          <span className="shop-chip shop-chip--nearest" data-testid="nearest-store">
+            <MapPin size={14} /> Nearest · {storeDistance.toFixed(1)} km
+          </span>
+        )}
         <span className="shop-chip shop-chip--quiet">
           <Truck size={14} /> {fee > 0 ? `${rupees(fee)} delivery` : 'Free delivery'}
         </span>
         <button className="shop-refresh" onClick={() => loadShop(true)} disabled={loading}>
           <RefreshCw size={14} /> Refresh
         </button>
-      </div>
+        <button className="shop-location" onClick={locateNearbyStore} disabled={locating}>
+          <LocateFixed size={14} /> {locating ? 'Locating…' : 'Find nearby store'}
+        </button>
+      </div>}
 
+      {locationError && (
+        <div className="shop-location-error" role="status">{locationError}</div>
+      )}
       {loadError && (
         <div className="alert alert-error" style={{ marginBottom: 14 }}>
           <AlertTriangle size={16} /> {loadError}
@@ -815,14 +1209,43 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
         </div>
       )}
 
+      {!siteCode && !coverageLoading && coverageChecked && (
+        <div className="alert alert-error" role="status" style={{ marginBottom: 14 }}>
+          <AlertTriangle size={16} />
+          {deliveryPincode
+            ? `Delivery is not available to ${deliveryPincode} yet. No products are shown because no dark store is serving this pincode.`
+            : 'Add or select a delivery address with a pincode to check which dark stores can serve you.'}
+        </div>
+      )}
+
       {/* delivery banner */}
-      <div className="shop-banner">
+      {siteCode && <div className="shop-banner">
         <div className="shop-banner__icon"><Truck size={22} /></div>
         <div>
-          <div className="shop-banner__title">Delivery in 10 minutes</div>
-          <div className="shop-banner__sub">Fresh groceries from {shop?.name || 'your nearest dark store'}</div>
+          <div className="shop-banner__title">Groceries delivered in {shop?.promise_minutes || 10} minutes</div>
+          <div className="shop-banner__sub">Fresh produce, dairy and daily essentials from {shop?.name || 'your nearest dark store'}</div>
         </div>
-      </div>
+      </div>}
+
+      {(shop?.banners || []).length > 0 && (
+        <div className="shop-promos">
+          {(shop.banners || []).map((banner) => (
+            <button key={banner.sku_id} type="button" className="shop-promo"
+              onClick={() => setCat(banner.subtitle || '')}>
+              {banner.image ? (
+                <img src={banner.image} alt="" className="shop-promo__img" />
+              ) : (
+                <span className="shop-promo__icon"><Tag size={20} /></span>
+              )}
+              <span className="shop-promo__body">
+                <span className="shop-promo__title">{banner.title}</span>
+                {banner.subtitle && <span className="shop-promo__sub">{banner.subtitle}</span>}
+              </span>
+              <ChevronRight size={16} className="shop-promo__arrow" />
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* search */}
       <div className="shop-search">
@@ -835,25 +1258,7 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
         )}
       </div>
 
-      {/* offers */}
-      {coupons.length > 0 && (
-        <div className="shop-offers">
-          {coupons.map((c, i) => {
-            const tint = ['shop-offer--violet', 'shop-offer--green', 'shop-offer--amber'][i % 3];
-            return (
-              <div key={c.coupon_id} className={`shop-offer ${tint}`}>
-                <span className="shop-offer__code">{c.code}</span>
-                <span className="shop-offer__desc">{c.description || c.title}</span>
-                {Number(c.min_order) > 0 && (
-                  <span className="shop-offer__min">Min order {rupees(c.min_order)}</span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* category rail */}
+      {/* category rail — above the offers so the shelf is one tap away */}
       {categories.length > 1 && (
         <div className="shop-cats">
           <button className="shop-cat" aria-pressed={cat === ''} onClick={() => setCat('')}>
@@ -874,11 +1279,67 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
         </div>
       )}
 
+      {/* offers */}
+      {(coupons.length > 0 || comboOffers.length > 0) && (
+        <div className="shop-offers">
+          {coupons.map((c, i) => {
+            const tint = ['shop-offer--violet', 'shop-offer--green', 'shop-offer--amber'][i % 3];
+            return (
+              <div key={c.coupon_id} className={`shop-offer ${tint}`}>
+                <span className="shop-offer__code">{c.code}</span>
+                <span className="shop-offer__desc">{c.description || c.title}</span>
+                {Number(c.min_order) > 0 && (
+                  <span className="shop-offer__min">Min order {rupees(c.min_order)}</span>
+                )}
+              </div>
+            );
+          })}
+          {comboOffers.map((offer, i) => {
+            const tint = ['shop-offer--violet', 'shop-offer--green', 'shop-offer--amber'][i % 3];
+            return (
+              <article key={offer.offer_id} className={`shop-offer shop-combo-offer ${tint}`}>
+                <span className="shop-offer__code">{offer.title}</span>
+                <span className="shop-offer__desc">{offer.description
+                  || offer.items.map((item) => `${item.quantity} × ${item.name}`).join(' + ')}</span>
+                <div className="shop-combo-offer__products">
+                  {offer.items.map((item) => (
+                    <figure key={item.sku_id} className="shop-combo-offer__product">
+                      <ProductImg
+                        item={{ name: item.name, image: item.image, category: '' }}
+                        className="shop-combo-offer__image"
+                      />
+                      <figcaption>{item.name}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+                <span className="shop-offer__min">
+                  Combo {rupees(offer.fixed_price)} · Save {rupees(offer.savings)}
+                </span>
+                <button type="button" className="shop-combo-offer__add" onClick={() => addCombo(offer)}>
+                  Add combo
+                </button>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
       {/* shelf */}
-      <div className="shop-cart-layout">
-        <div>
+      <div className="shop-cart-shelf">
           {loading ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--shop-ink-3)' }}>Loading the shelf…</div>
+          ) : loadError ? (
+            /* A failed read is not an empty shelf. Saying "nothing on its
+               shelves" here made a dropped connection look like a store
+               with no stock, and nothing on the screen could retry it. */
+            <div className="shop-empty-card" data-testid="storefront-error">
+              <AlertTriangle size={36} />
+              <div className="shop-empty-card__title">The shelf could not be loaded</div>
+              <div className="shop-empty-card__sub">{loadError}</div>
+              <button className="shop-empty-card__cta" onClick={() => loadShop(true)}>
+                Try again
+              </button>
+            </div>
           ) : items.length === 0 ? (
             <div className="shop-empty-card" data-testid="storefront-empty">
               <Package size={36} />
@@ -898,7 +1359,9 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
               <section key={name} className="shop-section">
                 <div className="shop-section__head">
                   <h2 className="shop-section__title">{name}</h2>
-                  <span className="shop-section__meta">{list.length} item{list.length === 1 ? '' : 's'}</span>
+                  {list.length > 1 && (
+                    <span className="shop-section__meta">{list.length} items</span>
+                  )}
                 </div>
                 <div className="shop-grid">
                   {list.map((item) => (
@@ -910,19 +1373,19 @@ function StorefrontScreen({ siteCode, stores, picked, onPick }) {
               </section>
             ))
           )}
-        </div>
-
-        {cartPanel}
       </div>
+      </div>
+
+      {cartPanel}
 
       {/* mobile cart bar */}
       {basketCount > 0 && !cartOpen && (
         <button className="shop-cartbar" onClick={() => setCartOpen(true)} aria-label="Open basket">
           <span className="shop-cartbar__left">
             <span className="shop-cartbar__count">{basketCount} item{basketCount === 1 ? '' : 's'} · {rupees(total)}</span>
-            <span className="shop-cartbar__total">View basket</span>
+            <span className="shop-cartbar__total">Plus delivery{freeAbove > 0 && !feeWaived ? ` · free above ${rupees(freeAbove)}` : ''}</span>
           </span>
-          <span className="shop-cartbar__cta">View basket <ArrowRight size={16} /></span>
+          <span className="shop-cartbar__cta">View basket <ArrowRight size={15} /></span>
         </button>
       )}
 

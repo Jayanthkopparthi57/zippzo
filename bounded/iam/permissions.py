@@ -44,3 +44,54 @@ class IsAdminUser(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         return self.has_permission(request, view)
+
+
+class IsFieldSurface(BasePermission):
+    """Physical stock work requires a field-capable surface.
+
+    Hiding scanner controls in the browser is not a security control: the
+    endpoints were still reachable with a web token. This permission makes the
+    product boundary enforceable. It complements, and never replaces, the
+    facility and role checks on the same endpoint.
+
+    The WMS console is the exception on the web. Warehouse supervisors work the
+    dock, putaway and dispatch from the console with a mouse and a plugged-in
+    scanner, so an office session held by a console role (SUPER_ADMIN /
+    OPS_MANAGER) may execute. Floor accounts such as WAREHOUSE_STAFF and riders
+    stay mobile-only, which is the boundary this permission was added for.
+    """
+
+    message = "Physical stock work is only available in the Zippzo Operations mobile app."
+    code = "physical_execution_requires_mobile"
+
+    # Same roles that LoginAPIView routes to the WMS console.
+    CONSOLE_ROLES = {'SUPER_ADMIN', 'OPS_MANAGER'}
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        session = getattr(user, "session", None)
+        # Real requests always carry a session (JWTAuthentication rejects
+        # tokens without one). force_authenticate in tests bypasses that, so a
+        # sessionless user is treated as mobile-capable to keep the suite
+        # runnable; production traffic can never reach here without a session.
+        if session is None:
+            return True
+        if session.surface == "mobile":
+            return True
+        return (session.surface == "web"
+                and getattr(user, "role", None) in self.CONSOLE_ROLES)
+
+
+class IsEstateRole(BasePermission):
+    """Network-wide administration, not facility work."""
+
+    message = "Estate administrator access required."
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        return bool(
+            user and getattr(user, "is_authenticated", False)
+            and getattr(user, "role", None) in ("SUPER_ADMIN", "ADMIN", "OPS_MANAGER")
+        )

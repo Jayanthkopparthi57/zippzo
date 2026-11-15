@@ -52,7 +52,12 @@ class CoverageView(APIView):
         if not (len(pincode) == 6 and pincode.isdigit()):
             return Response({'error': 'A pincode is exactly 6 digits.'}, status=400)
 
-        rows = DeliveryArea.sites_for(pincode)
+        rows = [
+            row for row in DeliveryArea.sites_for(pincode)
+            if row.site.site_type in ('DS', 'DARK_STORE')
+            and row.site.status == 'ACTIVE'
+            and row.site.is_accepting_orders
+        ]
         sites = [
             {
                 'site_id': str(row.site_id),
@@ -61,6 +66,8 @@ class CoverageView(APIView):
                 'band': row.band,
                 'delivery_fee': str(resolve_delivery_fee(row.site)),
                 'is_accepting_orders': row.site.is_accepting_orders,
+                'geo_lat': str(row.site.geo_lat) if row.site.geo_lat is not None else None,
+                'geo_lng': str(row.site.geo_lng) if row.site.geo_lng is not None else None,
             }
             for row in rows
         ]

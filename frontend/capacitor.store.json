@@ -1,6 +1,6 @@
 {
-  "appId": "com.zippzo.app",
-  "appName": "Zippzo Store",
+  "appId": "com.zippzo.wms",
+  "appName": "Zippzo WMS",
   "webDir": "dist-native",
   "server": {
     "androidScheme": "https"

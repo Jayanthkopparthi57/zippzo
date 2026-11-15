@@ -6,6 +6,9 @@ import { fetchApi, postApi, describeError } from '../api/client';
 const EMPTY = Symbol('empty');
 
 export default function InventoryView({ initialTab = 'positions' }) {
+  const isFloorApp = typeof window !== 'undefined' && (
+    document.documentElement.dataset.surface === 'app' || window.Capacitor?.isNativePlatform?.() === true
+  );
   const [activeSubtab, setActiveSubtab] = useState(initialTab);
   const [positions, setPositions] = useState([]);
   const [movements, setMovements] = useState([]);
@@ -175,8 +178,8 @@ export default function InventoryView({ initialTab = 'positions' }) {
           title="Live Stock Positions"
           subtitle="Every StockBalance row, joined to SKU, lot and bin. Counts come straight from the ledger."
           searchPlaceholder="Search SKU, batch, bin..."
-          onAdd={() => openRelocationModal()}
-          addLabel="Relocate Stock"
+          onAdd={isFloorApp ? () => openRelocationModal() : undefined}
+          addLabel={isFloorApp ? 'Relocate Stock' : undefined}
           columns={[
             { header: 'Site', key: 'site', render: r => <span className="code-cell">{r.site}</span> },
             { header: 'Container', key: 'container', render: r => (
@@ -199,7 +202,7 @@ export default function InventoryView({ initialTab = 'positions' }) {
             { header: 'Sellable', key: 'sellable', align: 'center', render: r => (
               <span className={`badge ${r.sellable ? 'badge-success' : 'badge-default'}`}>{r.sellable ? 'Yes' : 'No'}</span>
             )},
-            { header: 'Action', render: r => (
+            ...(isFloorApp ? [{ header: 'Action', render: r => (
               <button
                 className="btn-secondary"
                 style={{ fontSize: 11, padding: '2px 8px' }}
@@ -209,7 +212,7 @@ export default function InventoryView({ initialTab = 'positions' }) {
               >
                 <ArrowRightLeft size={12} /> Relocate
               </button>
-            )}
+            )}] : [])
           ]}
           data={positions}
         />
@@ -288,7 +291,7 @@ export default function InventoryView({ initialTab = 'positions' }) {
         />
       )}
 
-      {showMoveModal && (
+      {isFloorApp && showMoveModal && (
         <div className="modal-overlay" onClick={() => setShowMoveModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 640, width: '90vw' }}>
             <div className="modal-header">

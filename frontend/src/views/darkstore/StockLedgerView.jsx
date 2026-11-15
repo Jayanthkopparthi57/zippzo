@@ -108,7 +108,7 @@ function Ledger({ siteId, storeCode }) {
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div>
-            <div className="wf-panel__title"><History size={17} /> Stock Ledger</div>
+            <div className="wf-peek"> Stock Ledger</div>
             <div className="wf-panel__hint">
               Every balance change at <StoreBadge />
             </div>
@@ -194,7 +194,7 @@ function Ledger({ siteId, storeCode }) {
         <div className="wf-panel" data-testid="ds-ledger-staged">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><Timer size={17} /> Waiting for a rider</div>
+              <div className="wf-peek"> Waiting for a rider</div>
               <div className="wf-panel__hint">
                 Packed and staged, oldest first
               </div>

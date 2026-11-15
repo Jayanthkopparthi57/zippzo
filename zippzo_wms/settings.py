@@ -57,6 +57,18 @@ if not SECRET_KEY or SECRET_KEY in _INSECURE_SECRET_KEYS:
 
 DEBUG = _env_bool('DEBUG', True)
 
+# Never enable in production. In development the automated UI suite needs a
+# deterministic way to obtain the one-time code without an SMS provider; when
+# this is on and DJANGO_ENV is not `production`, the login response includes
+# `dev_otp`.
+OTP_DEV_ECHO = _env_bool('OTP_DEV_ECHO', False) and not IS_PRODUCTION
+
+# Estate roles (SUPER_ADMIN / ADMIN / OPS_MANAGER) may sign in with password
+# only when an operator explicitly opts out of the second factor. It is on by
+# default and can never be disabled in production: an admin password alone must
+# not open the whole estate. Field employees always require an OTP.
+IAM_ADMIN_OTP_REQUIRED = _env_bool('IAM_ADMIN_OTP_REQUIRED', True) or IS_PRODUCTION
+
 if IS_PRODUCTION:
     ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS')
     if not ALLOWED_HOSTS:
@@ -68,6 +80,9 @@ else:
     ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
+    # Daphne's runserver integration is needed for local development to serve
+    # the ASGI application (including Channels WebSockets) via manage.py.
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -87,15 +102,19 @@ INSTALLED_APPS = [
     'bounded.notifications',
     'bounded.holds',
     'bounded.network',
+    'bounded.masterdata',
     'bounded.catalog',
     'bounded.supply',
     'bounded.inventory',
+    'bounded.counting',
     'bounded.routing',
     'bounded.ds_ops',
     'bounded.fulfilment',
     'bounded.orders',
+    'bounded.transport',
     'bounded.delivery',
     'bounded.lastmile',
+    'bounded.workforce',
     'bounded.money',
     'bounded.reverse',
 ]
@@ -186,21 +205,26 @@ def _database_from_url(url):
 
 
 _database_url = os.environ.get('DATABASE_URL', '').strip()
+_db_engine = os.environ.get('DB_ENGINE', 'django.db.backends.postgresql')
+_is_postgres = 'postgresql' in _db_engine or (_database_url.startswith('postgres') if _database_url else False)
+
 DATABASES = {
     'default': (
         _database_from_url(_database_url) if _database_url else {
-            'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.postgresql'),
+            'ENGINE': _db_engine,
             'NAME': os.environ.get('DB_NAME', 'neondb'),
             'USER': os.environ.get('DB_USER', 'neondb_owner'),
             'PASSWORD': os.environ.get('DB_PASSWORD', ''),
             'HOST': os.environ.get('DB_HOST', ''),
             'PORT': os.environ.get('DB_PORT', '5432'),
-            'OPTIONS': _db_options(),
-            # Neon's pooled endpoint drops connections without warning. Django
-            # would keep handing the dead one back, so a single blip failed every
-            # query that followed it - in the test suite, every later setUpClass.
-            # Check the connection before borrowing it and reconnect instead.
-            'CONN_HEALTH_CHECKS': True,
+            **({
+                'OPTIONS': _db_options(),
+                # Neon's pooled endpoint drops connections without warning. Django
+                # would keep handing the dead one back, so a single blip failed every
+                # query that followed it - in the test suite, every later setUpClass.
+                # Check the connection before borrowing it and reconnect instead.
+                'CONN_HEALTH_CHECKS': True,
+            } if _is_postgres else {}),
         }
     )
 }
@@ -225,6 +249,19 @@ STATICFILES_DIRS = [path for path in _static_dirs if path.exists()]
 # helpers return an empty list when DEBUG is False, so the deployed SPA used to
 # 404 on every JavaScript and stylesheet request.
 WHITENOISE_ROOT = BASE_DIR / 'frontend' / 'dist'
+# Let WhiteNoise answer `/` with the built index.html instead of Django's
+# TemplateView. With DEBUG off the cached template loader keeps the first
+# index.html it read, so `/` kept pointing at asset hashes a later Vite build
+# had renamed. WhiteNoise resolves the same file the other entry points
+# (darkstore.html, rider.html, ...) already come from.
+WHITENOISE_INDEX_FILE = True
+# WhiteNoise walks the directory once at import and serves that snapshot, so a
+# Vite rebuild that renames hashed assets 404s until the process restarts. With
+# autorefresh on it re-resolves the path per request, which is what a local
+# `npm run build` loop needs. Defaults to DEBUG so production keeps the cached
+# snapshot; the local .env runs DEBUG=False, so set WHITENOISE_AUTOREFRESH=True
+# in the shell when serving a freshly built dist from Django.
+WHITENOISE_AUTOREFRESH = _env_bool('WHITENOISE_AUTOREFRESH', DEBUG)
 STORAGES = {
     'default': {
         'BACKEND': 'django.core.files.storage.FileSystemStorage',
@@ -318,12 +355,17 @@ SPECTACULAR_SETTINGS = {
 
 # Redis
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+# A single-process local development server can opt into in-memory Channels
+# when Redis is unavailable. Deployments keep Redis as the default so events
+# are shared across web and worker processes.
 CHANNEL_LAYERS = {
     'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            'hosts': [REDIS_URL],
-        },
+        'BACKEND': (
+            'channels.layers.InMemoryChannelLayer'
+            if _env_bool('CHANNELS_IN_MEMORY', False)
+            else 'channels_redis.core.RedisChannelLayer'
+        ),
+        **({} if _env_bool('CHANNELS_IN_MEMORY', False) else {'CONFIG': {'hosts': [REDIS_URL]}}),
     },
 }
 
@@ -346,3 +388,33 @@ if EMAIL_USER and EMAIL_PASS:
 else:
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
     DEFAULT_FROM_EMAIL = 'auth@zippzo.com'
+
+# OTP delivery. Keep this as a dotted path: importing staff_auth while Django
+# is still loading settings can touch models before the app registry is ready,
+# silently leaving the sender unset. staff_auth resolves the path at delivery
+# time, after Django setup has completed.
+IAM_OTP_SENDER = (
+    'bounded.iam.staff_auth.send_otp_email'
+    if EMAIL_USER and EMAIL_PASS
+    else None
+)
+
+# Cashfree credentials are server-only. The local .env file is gitignored;
+# never expose either value in an API response or mobile/web build.
+CASHFREE_APP_ID = os.environ.get('CASHFREE_APP_ID', '').strip()
+CASHFREE_SECRET_KEY = os.environ.get('CASHFREE_SECRET_KEY', '').strip()
+CASHFREE_ENV = os.environ.get('CASHFREE_ENV', 'sandbox').strip().lower()
+CASHFREE_API_VERSION = os.environ.get('CASHFREE_API_VERSION', '2025-01-01').strip()
+
+# Out-of-app notification channels. Every provider is optional: when a value is
+# empty the channel reports "skipped" and the in-app inbox still works.
+FCM_SERVER_KEY = os.environ.get('FCM_SERVER_KEY', '').strip()
+SMS_PROVIDER = os.environ.get('SMS_PROVIDER', '').strip().lower()
+SMS_TWILIO_ACCOUNT_SID = os.environ.get('SMS_TWILIO_ACCOUNT_SID', '').strip()
+SMS_TWILIO_AUTH_TOKEN = os.environ.get('SMS_TWILIO_AUTH_TOKEN', '').strip()
+SMS_TWILIO_FROM = os.environ.get('SMS_TWILIO_FROM', '').strip()
+SMS_GATEWAY_URL = os.environ.get('SMS_GATEWAY_URL', '').strip()
+SMS_GATEWAY_KEY = os.environ.get('SMS_GATEWAY_KEY', '').strip()
+SMS_GATEWAY_SENDER = os.environ.get('SMS_GATEWAY_SENDER', 'ZIPPZO').strip()
+SMS_MSG91_AUTHKEY = os.environ.get('SMS_MSG91_AUTHKEY', '').strip()
+SMS_MSG91_TEMPLATE_ID = os.environ.get('SMS_MSG91_TEMPLATE_ID', '').strip()

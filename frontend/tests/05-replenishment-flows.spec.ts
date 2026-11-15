@@ -71,7 +71,6 @@ test.describe('replenishment + storage views — real flows', () => {
 
     // ---- CreateOrderView: lane + real stock load ----
     await openTab(page, 'create-orders');
-    await expect(page.locator('[data-testid="co-stepper"]')).toBeVisible();
     await expect(page.locator('[data-testid="co-refs-error"]')).toHaveCount(0, LONG);
     await expect(page.locator('[data-testid="co-source"]')).toHaveValue(/[0-9a-f-]{36}/i, LONG);
     await expect(page.locator('[data-testid="co-dest"]')).toHaveValue(/[0-9a-f-]{36}/i, LONG);
@@ -80,7 +79,6 @@ test.describe('replenishment + storage views — real flows', () => {
 
     // ---- PackSealView: the queue must load without a load error ----
     await openTab(page, 'pack-seal');
-    await expect(page.locator('[data-testid="pack-stepper"]')).toBeVisible();
     await expect(page.locator('[data-testid="pack-load-error"]')).toHaveCount(0, LONG);
     await expect(page.locator('[data-testid="pack-queue"], [data-testid="pack-empty"]').first()).toBeVisible(LONG);
 

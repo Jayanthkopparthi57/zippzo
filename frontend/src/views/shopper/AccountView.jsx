@@ -4,7 +4,7 @@ import { fetchApi, describeError } from '../../api/client';
 import {
   myAddresses, saveAddress, setDefaultAddress, removeAddress, asList
 } from '../darkstore/useDarkStore';
-import { User, MapPin, Plus, Star, Trash2, AlertCircle, LogOut } from 'lucide-react';
+import { User, MapPin, Plus, Star, Trash2, AlertCircle, LogOut, LocateFixed } from 'lucide-react';
 
 const CUSTOMERS = '/orders/customers/';
 
@@ -27,8 +27,10 @@ export default function AccountView() {
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState(null);
+  const [geoBusy, setGeoBusy] = useState(false);
+  const [geoStatus, setGeoStatus] = useState('');
   const [draft, setDraft] = useState({
-    label: 'Home', line1: '', line2: '', city: '', pincode: '',
+    label: 'Home', line1: '', line2: '', city: '', pincode: '', geo_lat: null, geo_lng: null,
   });
 
   const load = useCallback(async () => {
@@ -76,10 +78,31 @@ export default function AccountView() {
   };
 
   const add = () => act(async () => {
-    await saveAddress(draft);
+    await saveAddress({
+      ...draft,
+      geocode_confidence: draft.geo_lat != null ? 'GPS' : null,
+    });
     setAdding(false);
-    setDraft({ label: 'Home', line1: '', line2: '', city: '', pincode: '' });
+    setDraft({ label: 'Home', line1: '', line2: '', city: '', pincode: '', geo_lat: null, geo_lng: null });
+    setGeoStatus('');
   });
+
+  const pinAddress = () => {
+    if (!navigator.geolocation) {
+      setGeoStatus('Location is not available on this device.');
+      return;
+    }
+    setGeoBusy(true);
+    setGeoStatus('');
+    navigator.geolocation.getCurrentPosition(({ coords }) => {
+      setDraft((current) => ({ ...current, geo_lat: coords.latitude, geo_lng: coords.longitude }));
+      setGeoStatus('Map pin added from this device.');
+      setGeoBusy(false);
+    }, () => {
+      setGeoStatus('Could not get your location. Check permission or continue without a map pin.');
+      setGeoBusy(false);
+    }, { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 });
+  };
 
   const makeDefault = (id) => act(() => setDefaultAddress(id));
 
@@ -164,6 +187,12 @@ export default function AccountView() {
                        onChange={e => setDraft({ ...draft, pincode: e.target.value.replace(/\D/g, '').slice(0, 6) })} />
               </div>
             </div>
+
+            <button type="button" className="shop-btn shop-btn--ghost" style={{ marginTop: 8 }}
+              onClick={pinAddress} disabled={geoBusy || busy}>
+              <LocateFixed size={14} /> {geoBusy ? 'Finding location…' : 'Use current location for map pin'}
+            </button>
+            {geoStatus && <div role="status" className="shop-address-pin-status">{geoStatus}</div>}
 
             {formError && <div className="shop-err-text">{formError}</div>}
 

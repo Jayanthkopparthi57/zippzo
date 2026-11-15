@@ -1,0 +1,11 @@
+{
+  "appId": "com.zippzo.wms",
+  "appName": "Zippzo WMS",
+  "webDir": "dist-ios",
+  "server": {
+    "androidScheme": "https"
+  },
+  "ios": {
+    "contentInset": "automatic"
+  }
+}

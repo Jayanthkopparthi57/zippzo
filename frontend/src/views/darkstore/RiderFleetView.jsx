@@ -15,7 +15,8 @@ import StoreGate, { StoreBadge } from './StoreGate';
 import {
   useDarkStore, useAsyncData, asList, num, secondsSince,
 } from './useDarkStore';
-import { fetchApi } from '../../api/client';
+import { fetchApi, postApi } from '../../api/client';
+import { useToast } from '../../components/ui/Toast';
 
 const RIDERS = '/delivery/rider-profiles/';
 const ACTIVE_TASK_STATES = 'ACCEPTED,AT_DS,PICKED_UP,EN_ROUTE,ARRIVED,POD_PENDING';
@@ -34,11 +35,21 @@ export default function RiderFleetView() {
 
   const { data: allRiders, error: riderError, loading, reload } = useAsyncData(
     () => (siteId
-      ? fetchApi(`${RIDERS}?page_size=200`).then((r) => asList(r, RIDERS))
+      ? fetchApi(`/delivery/admin/riders?site=${encodeURIComponent(storeCode)}`).then((r) => asList(r, '/delivery/admin/riders'))
       : Promise.resolve([])),
-    [siteId],
+    [siteId, storeCode],
     { pollMs: 30000 },
   );
+  const toast = useToast();
+  const reviewKyc = async (row, kycStatus) => {
+    try {
+      await postApi('/delivery/admin/riders/', { rider_id: row.rider_id, kyc_status: kycStatus });
+      toast.success('KYC updated', `${row.name}: ${kycStatus}`);
+      await reload({ quiet: true });
+    } catch (error) {
+      toast.error('KYC not updated', error.message || 'Validation refused the change.');
+    }
+  };
 
   const { data: tasks } = useAsyncData(
     () => (siteId
@@ -51,10 +62,8 @@ export default function RiderFleetView() {
     { pollMs: 30000 },
   );
 
-  // Admins read every rider in the estate; the board itself is this store's.
-  const riders = (allRiders || []).filter(
-    (r) => !r.current_site_code || r.current_site_code === storeCode,
-  );
+  // The admin board is already scoped to this store by the site query.
+  const riders = allRiders || [];
 
   const jobsByRider = {};
   (tasks || []).forEach((t) => {
@@ -68,8 +77,8 @@ export default function RiderFleetView() {
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title">
-                <Bike size={17} /> Rider fleet
+              <div className="wf-peek">
+ Rider fleet
               </div>
               <div className="wf-panel__hint">
                 Riders based at <StoreBadge />
@@ -106,9 +115,12 @@ export default function RiderFleetView() {
                     <th>Rider</th>
                     <th>Vehicle</th>
                     <th>Open jobs</th>
+                    <th>Deliveries today</th>
+                    <th>Earnings today</th>
                     <th>Last seen</th>
                     <th>Position</th>
                     <th>State</th>
+                    <th>KYC</th>
                   </tr>
                 </thead>
                 <tbody data-testid="rf-table">
@@ -126,8 +138,10 @@ export default function RiderFleetView() {
                           {r.vehicle_type}{r.vehicle_number ? ` · ${r.vehicle_number}` : ''}
                         </td>
                         <td data-testid={`rf-jobs-${r.rider_id}`}>
-                          {jobs === 0 ? 'No open job' : `${jobs} open job${jobs === 1 ? '' : 's'}`}
+                          {jobs === 0 ? r.active_jobs || 'No open job' : `${jobs} open job${jobs === 1 ? '' : 's'}`}
                         </td>
+                        <td className="mono-num">{r.delivered_today ?? 0}</td>
+                        <td className="mono-num">₹{num(r.earnings_today)}</td>
                         <td data-testid={`rf-lastseen-${r.rider_id}`}>
                           Last seen {ago(r.last_seen_at)}
                         </td>
@@ -147,6 +161,14 @@ export default function RiderFleetView() {
                             {r.is_online ? <Wifi size={11} /> : <WifiOff size={11} />}
                             {r.is_online ? ' Online' : ' Offline'}
                           </span>
+                        </td>
+                        <td>
+                          <div>{r.kyc_document_type || 'KYC doc'}: {r.kyc_document_url ? <a href={r.kyc_document_url} target="_blank" rel="noreferrer">View</a> : 'not provided'}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.kyc_status}</div>
+                          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                            <button type="button" className="btn-ui neutral" style={{ padding: '2px 6px', fontSize: 11 }} onClick={() => reviewKyc(r, 'VERIFIED')}>Verify</button>
+                            <button type="button" className="btn-ui neutral" style={{ padding: '2px 6px', fontSize: 11 }} onClick={() => reviewKyc(r, 'REJECTED')}>Reject</button>
+                          </div>
                         </td>
                       </tr>
                     );

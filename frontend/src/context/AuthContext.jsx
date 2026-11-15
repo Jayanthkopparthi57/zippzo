@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { fetchApi, postApi, setAuthToken, getAuthToken, describeError } from '../api/client';
+import { Capacitor } from '@capacitor/core';
+import {
+  fetchApi, postApi, setAuthToken, getAuthToken, describeError, liveEventsUrl, ApiError,
+} from '../api/client';
 import { APP, APPS } from '../apps/registry';
 
 const AuthContext = createContext();
@@ -7,9 +10,15 @@ const AuthContext = createContext();
 const STORAGE_KEY_USER = 'zippzo_auth_user';
 const STORAGE_KEY_FACILITY = 'zippzo_auth_facility';
 const STORAGE_KEY_MODE = 'zippzo_auth_app_mode';
+const STORAGE_KEY_REFRESH = 'zippzo_refresh_token';
+
+function getLoginSurface() {
+  const declaredAppSurface = typeof document !== 'undefined'
+    && document.documentElement?.dataset?.surface === 'app';
+  return Capacitor.isNativePlatform() || declaredAppSurface ? 'mobile' : 'web';
+}
 
 // Roles the backend routes to the WMS console (see iam.views.LoginAPIView).
-const WMS_ROLES = ['SUPER_ADMIN', 'OPS_MANAGER', 'WAREHOUSE_STAFF'];
 const ADMIN_ROLES = ['SUPER_ADMIN', 'OPS_MANAGER'];
 
 function readStorage(key, fallback) {
@@ -27,23 +36,14 @@ function readStorage(key, fallback) {
 // because those view modules are not in its chunk, and a shopper bundle cannot
 // reach the store console for the same reason.
 //
-// DARK_STORE is a retired mode — the store screens are a section of the store
-// app selected by which facility the operator has picked — so an older backend
-// still answering target_app='DARK_STORE' is normalised to 'WMS'.
-const RETIRED_MODES = { DARK_STORE: 'WMS' };
-
-function normaliseMode(raw) {
-  return RETIRED_MODES[raw] || raw || null;
-}
-
 /**
  * Backend `user` is {user_id,email,full_name,role,status}.
- * Views render `name`/`avatar`/`is_admin`, so derive them here from the real
- * payload instead of inventing a different identity client-side.
+ * Views render `name`/`avatar`/`is_admin`/`is_super_admin`, so derive them here.
  */
-function normaliseUser(raw) {
+function normaliseUser(raw, allowedApps = raw?.allowed_apps || []) {
   if (!raw) return null;
   const fullName = raw.full_name || raw.name || '';
+  const isSuperAdmin = raw.role === 'SUPER_ADMIN' || raw.is_super_admin === true;
   return {
     user_id: raw.user_id,
     email: raw.email || '',
@@ -51,14 +51,10 @@ function normaliseUser(raw) {
     name: fullName || raw.email || 'Operator',
     role: raw.role || 'CUSTOMER',
     status: raw.status || 'ACTIVE',
-    is_admin: ADMIN_ROLES.includes(raw.role),
-    can_access_warehouse: WMS_ROLES.includes(raw.role),
-    // The dark store screens live inside the WMS shell, but they expose bin
-    // locations, shelf counts and pick queues, so they are limited to the same
-    // WMS roles that reach the warehouse console. Customers/riders were
-    // previously given `true` here, which let any signed-in shopper walk into
-    // the store screens through switchFacility().
-    can_access_dark_store: WMS_ROLES.includes(raw.role),
+    is_admin: ADMIN_ROLES.includes(raw.role) || isSuperAdmin,
+    is_super_admin: isSuperAdmin,
+    can_access_warehouse: isSuperAdmin || allowedApps.includes('WMS') || raw.can_access_warehouse === true,
+    can_access_dark_store: isSuperAdmin || allowedApps.includes('DARK_STORE') || raw.can_access_dark_store === true,
     avatar: (fullName || raw.email || 'Z').trim().charAt(0).toUpperCase(),
   };
 }
@@ -74,66 +70,141 @@ function splitSites(sites) {
 
 export function AuthProvider({ appKey = APP.key, children }) {
   const appMeta = APPS[appKey] || APP;
-  const [user, setUser] = useState(() => normaliseUser(readStorage(STORAGE_KEY_USER, null)));
+  // Never trust a browser-cached user before `/iam/auth/me` validates the
+  // session. Rendering the shell from cached state caused it to fire protected
+  // API requests with revoked/expired tokens during the validation window.
+  const [user, setUser] = useState(null);
   const [facility, setFacility] = useState(() => readStorage(STORAGE_KEY_FACILITY, null));
   // The console is the one this bundle was built as. It never changes.
   const appMode = appMeta.targetApp;
-  // Set when a login answered with a target_app for a different application,
-  // e.g. a rider account typed into the store app. The token is dropped and
-  // the user is told which app their account belongs to.
   const [appMismatch, setAppMismatch] = useState(null);
   const [facilitiesList, setFacilitiesList] = useState({
     warehouses: [],
     dark_stores: [],
     all_facilities: [],
   });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(getAuthToken()));
   const [routeNotice, setRouteNotice] = useState(null);
+
+  // Realtime is an enhancement over the durable notification inbox. If the
+  // socket or Redis is unavailable, the product screens keep their API polling.
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!user?.user_id || !token || typeof WebSocket === 'undefined') return undefined;
+    let socket;
+    let timer;
+    let closed = false;
+    let retryMs = 1000;
+    const connect = () => {
+      if (closed) return;
+      socket = new WebSocket(liveEventsUrl(), ['zippzo.events.v1', `auth.${token}`]);
+      socket.onopen = () => {
+        retryMs = 1000;
+        // Broadcast reconnection so open views catch up on missed events immediately
+        window.dispatchEvent(new CustomEvent('zippzo:live-event', {
+          detail: { type: 'reconnected', at: new Date().toISOString() }
+        }));
+      };
+      socket.onmessage = (message) => {
+        try {
+          const detail = JSON.parse(message.data);
+          window.dispatchEvent(new CustomEvent('zippzo:live-event', { detail }));
+        } catch { /* Ignore malformed frames and keep the connection alive. */ }
+      };
+      socket.onclose = () => {
+        if (closed) return;
+        timer = setTimeout(connect, retryMs);
+        retryMs = Math.min(retryMs * 2, 30000);
+      };
+      socket.onerror = () => socket?.close();
+    };
+    connect();
+
+    // Fast reconnect when the device comes back online
+    const onOnline = () => {
+      if (closed) return;
+      clearTimeout(timer);
+      retryMs = 1000;
+      if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+        connect();
+      }
+    };
+    window.addEventListener('online', onOnline);
+
+    return () => {
+      closed = true;
+      clearTimeout(timer);
+      window.removeEventListener('online', onOnline);
+      socket?.close(1000, 'session ended');
+    };
+  }, [user?.user_id]);
 
   // Drop the in-memory session and everything persisted for it.
   const clearSession = () => {
+    const refresh = localStorage.getItem(STORAGE_KEY_REFRESH);
+    if (refresh) {
+      // Best effort: revoke the server session. The local state is cleared
+      // regardless so a failed network call cannot strand the operator.
+      postApi('/iam/auth/logout', { refresh_token: refresh }).catch(() => {});
+    }
     setAuthToken(null);
     setUser(null);
     setFacility(null);
     localStorage.removeItem(STORAGE_KEY_USER);
     localStorage.removeItem(STORAGE_KEY_FACILITY);
     localStorage.removeItem(STORAGE_KEY_MODE);
+    localStorage.removeItem(STORAGE_KEY_REFRESH);
   };
 
-  // Whether the selected facility is a dark store drives the sidebar sections.
-  // The facility object that arrives in the login payload does not always carry
-  // site_type, so fall back to the directory loaded from /network/overview.
-  const isDarkStore = facility?.site_type
-    ? facility.site_type === 'DS'
-    : (facilitiesList.all_facilities || []).find(s => s.code === facility?.code)?.site_type === 'DS';
+  const isDarkStore = appMeta.targetApp === 'DARK_STORE' || (
+    facility?.site_type
+      ? facility.site_type === 'DS'
+      : (facilitiesList.all_facilities || []).find(s => s.code === facility?.code)?.site_type === 'DS'
+  );
 
-  // Real sites only — no built-in fallback list.
-  //
-  // /network/sites/ is admin-only, so every DARK_STORE operator (CUSTOMER,
-  // RIDER) got a 403 here, leaving the facility list empty and the dark store
-  // console permanently stuck on "Loading the site directory...".
-  // /network/overview is the authenticated-but-not-admin facility directory,
-  // and it is the one that returns the real dark store list.
   const loadFacilities = useCallback(async () => {
     try {
       const res = await fetchApi('/network/overview');
-      // all_facilities already carries site_type. The per-bucket lists are
-      // only a fallback, and switchFacility() keys the app mode off
-      // site_type, so stamp it on if the bucket came without it.
       const list = Array.isArray(res?.all_facilities)
         ? res.all_facilities
         : [
             ...(res?.warehouses ?? []).map(s => ({ ...s, site_type: 'MH' })),
             ...(res?.dark_stores ?? []).map(s => ({ ...s, site_type: 'DS' })),
           ];
-      setFacilitiesList(splitSites(list));
+      const expectedType = appMeta.targetApp === 'DARK_STORE'
+        ? 'DS'
+        : appMeta.targetApp === 'WMS' ? 'MH' : null;
+      const productSites = expectedType
+        ? list.filter(site => site.site_type === expectedType)
+        : list;
+      setFacilitiesList(splitSites(productSites));
+
+      // Auto-assign a primary facility if none is selected, preferring the
+      // site type this console is built for: the WMS shell opens on a mother
+      // hub (its hub sections) and the dark-store bundle on a store. Falling
+      // back to list[0] used to hand the WMS shell a dark store whenever the
+      // directory happened to be ordered that way, which swapped the whole
+      // sidebar for store-ops sections.
+      if (productSites.length > 0) {
+        const preferred = productSites[0];
+        setFacility(prev => {
+          if (!prev || !productSites.some(s => s.code === prev.code)) {
+            localStorage.setItem(STORAGE_KEY_FACILITY, JSON.stringify(preferred));
+            return preferred;
+          }
+          return prev;
+        });
+      } else {
+        setFacility(null);
+        localStorage.removeItem(STORAGE_KEY_FACILITY);
+      }
       return list;
     } catch (err) {
       console.error('Could not load sites from backend:', describeError(err));
       setFacilitiesList({ warehouses: [], dark_stores: [], all_facilities: [] });
       return [];
     }
-  }, []);
+  }, [appMeta.targetApp]);
 
   // Validate a restored token against the real user list before trusting the session.
   useEffect(() => {
@@ -143,97 +214,168 @@ export function AuthProvider({ appKey = APP.key, children }) {
       setUser(null);
       return;
     }
-    // The three web entries share one origin, so they share localStorage: a
-    // token restored here may belong to a different application. Drop it and
-    // send that user to their own entry point instead of rendering an empty
-    // console.
-    if (normaliseMode(localStorage.getItem(STORAGE_KEY_MODE)) !== appMeta.targetApp) {
-      clearSession();
-      setAppMismatch({ expected: appMeta, actualKey: normaliseMode(localStorage.getItem(STORAGE_KEY_MODE)) });
-      return;
+    const savedMode = localStorage.getItem(STORAGE_KEY_MODE);
+    if (savedMode && savedMode !== appMeta.targetApp) {
+      // Allow switching between apps if user has multi-app permissions, but don't force clear unless invalid
     }
     setLoading(true);
-    // `/iam/auth/me` answers for the token's own account. The old check called
-    // /iam/users/ (admin-only), so every shopper, rider and warehouse operator
-    // was logged out by a 403 on reload.
-    fetchApi('/iam/auth/me')
+    const restoredFacility = readStorage(STORAGE_KEY_FACILITY, null);
+    const facilityQuery = restoredFacility?.code
+      ? `?facility_code=${encodeURIComponent(restoredFacility.code)}`
+      : '';
+    fetchApi(`/iam/auth/me${facilityQuery}`)
       .then((me) => {
         if (cancelled) return;
         if (me?.user) {
-          const fresh = normaliseUser(me.user);
+          const allowedApps = me.allowed_apps || [me.target_app];
+          const fresh = normaliseUser(me.user, allowedApps);
+          if (!fresh.is_super_admin && !allowedApps.includes(appMeta.targetApp)) {
+            clearSession();
+            setAppMismatch({ expected: appMeta, actualKey: Object.values(APPS).find(a => a.targetApp === me.target_app)?.key || null });
+            return;
+          }
           setUser(fresh);
           localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(fresh));
+          if (me.facility) {
+            setFacility(me.facility);
+            localStorage.setItem(STORAGE_KEY_FACILITY, JSON.stringify(me.facility));
+          }
         }
         loadFacilities();
       })
       .catch(() => {
         if (cancelled) return;
-        // Token rejected by the backend: drop the stale session.
         clearSession();
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [loadFacilities, appMeta]);
 
+  const applySession = (resp) => {
+    const allowedApps = resp.allowed_apps || [resp.target_app];
+    const loggedUser = normaliseUser(resp?.user, allowedApps);
+    if (!loggedUser) {
+      throw new Error('Login response did not include a user record.');
+    }
+    const isAllowedInThisApp = loggedUser.is_super_admin
+      || allowedApps.includes(appMeta.targetApp)
+      || resp?.capabilities?.workspace === appMeta.targetApp;
+
+    if (!isAllowedInThisApp) {
+      setAuthToken(null);
+      setAppMismatch({
+        expected: appMeta,
+        actualKey: Object.values(APPS).find(a => a.targetApp === resp.target_app)?.key || null,
+      });
+      return { success: false, mismatch: true, targetApp: resp.target_app };
+    }
+
+    if (resp.token) setAuthToken(resp.token);
+    if (resp.refresh_token) localStorage.setItem(STORAGE_KEY_REFRESH, resp.refresh_token);
+    setUser(loggedUser);
+    if (resp.facility) {
+      setFacility(resp.facility);
+      localStorage.setItem(STORAGE_KEY_FACILITY, JSON.stringify(resp.facility));
+    }
+
+    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(loggedUser));
+    localStorage.setItem(STORAGE_KEY_MODE, appMeta.targetApp);
+
+    loadFacilities();
+
+    if (resp.has_warning) {
+      setRouteNotice({ type: 'warning', message: resp.route_reason });
+    }
+    return {
+      success: true,
+      targetApp: appMeta.targetApp,
+      warning: !!resp.has_warning,
+      reason: resp.route_reason,
+    };
+  };
+
+  const challengeFrom = (body) => ({
+    challengeId: body?.challenge_id,
+    challengeToken: body?.challenge_token,
+    facilities: body?.facilities || [],
+    facility: body?.facility || null,
+    otpSentTo: body?.otp_sent_to || null,
+    attemptsRemaining: body?.attempts_remaining,
+  });
+
+  /**
+   * Step 1: password. The server decides what comes next.
+   *
+   * - `facility_required` -> the caller shows a chooser of the returned sites.
+   * - `otp_required`      -> the caller shows the one-time-code screen.
+   * - `success`           -> rider/consumer products receive a token directly.
+   */
   const login = async (email, password) => {
-    setLoading(true);
+    // `loading` is the bootstrap flag that AuthGate uses to decide whether to
+    // render the app shell. Setting it here unmounted <LoginView> mid-wizard,
+    // which threw away the OTP/facility challenge and dropped the person back
+    // on the password form. The wizard tracks its own `submitting` state.
     setRouteNotice(null);
     setAppMismatch(null);
     try {
-      const resp = await postApi('/iam/auth/login', { email, password });
-      const loggedUser = normaliseUser(resp?.user);
-      if (!loggedUser) {
-        throw new Error('Login response did not include a user record.');
+      const resp = await postApi('/iam/auth/login', {
+        email, password, app: appMeta.targetApp, surface: getLoginSurface(),
+      });
+      if (resp?.facility_required) {
+        return { success: false, facilityRequired: true, ...challengeFrom(resp) };
       }
-      const targetApp = normaliseMode(resp.target_app);
-
-      // Wrong application: this account belongs to a different console. Drop
-      // the token rather than mounting a shell the backend will refuse, and
-      // tell the user which app to open.
-      if (targetApp !== appMeta.targetApp) {
-        setAuthToken(null);
-        setAppMismatch({
-          expected: appMeta,
-          actualKey: Object.values(APPS).find(a => a.targetApp === targetApp)?.key || null,
-        });
-        return { success: false, mismatch: true, targetApp };
+      if (resp?.otp_required) {
+        return { success: false, otpRequired: true, ...challengeFrom(resp) };
       }
-
-      if (resp.token) setAuthToken(resp.token);
-      setUser(loggedUser);
-      setFacility(resp.facility || null);
-
-      localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(loggedUser));
-      if (resp.facility) localStorage.setItem(STORAGE_KEY_FACILITY, JSON.stringify(resp.facility));
-      localStorage.setItem(STORAGE_KEY_MODE, appMeta.targetApp);
-
-      loadFacilities();
-
-      if (resp.has_warning) {
-        setRouteNotice({ type: 'warning', message: resp.route_reason });
+      return applySession(resp);
+    } catch (err) {
+      // A 403 with an OTP challenge in the body is a normal step, not a failure.
+      if (err instanceof ApiError && err.status === 403 && err.body?.otp_required) {
+        return { success: false, otpRequired: true, ...challengeFrom(err.body) };
       }
-      return { success: true, targetApp, warning: !!resp.has_warning, reason: resp.route_reason };
-    } finally {
-      setLoading(false);
+      throw err;
     }
   };
 
-  const switchFacility = (newFacility) => {
-    if (!newFacility) return;
-    if (newFacility.site_type === 'MH' && !user?.can_access_warehouse) {
+  /** Step 2 (multi-site only): choose one of the server-authorized sites. */
+  const selectFacility = async (challengeId, challengeToken, facilityCode) => {
+    const body = await postApi('/iam/auth/facility', {
+      challenge_id: challengeId,
+      challenge_token: challengeToken,
+      facility_code: facilityCode,
+    });
+    return { success: false, otpRequired: true, ...challengeFrom(body) };
+  };
+
+  /** Step 3: verify the one-time code and receive a revocable session. */
+  const verifyOtp = async (challengeId, challengeToken, otp) => {
+    const resp = await postApi('/iam/auth/otp/verify', {
+      challenge_id: challengeId,
+      challenge_token: challengeToken,
+      otp,
+    });
+    return applySession(resp);
+  };
+
+  /** Ask for a fresh code when the previous one expired. */
+  const resendOtp = async (challengeId, challengeToken) => {
+    const body = await postApi('/iam/auth/otp/resend', {
+      challenge_id: challengeId,
+      challenge_token: challengeToken,
+    });
+    return { ...challengeFrom(body), otpRequired: true };
+  };
+
+  const switchFacility = async (newFacility) => {
+    if (!newFacility) return false;
+    try {
+      // The server re-derives the authorized set; a client-side list is not
+      // trusted. A rejected switch leaves the current session facility intact.
+      await postApi('/iam/auth/switch-facility', { facility_code: newFacility.code });
+    } catch (err) {
       setRouteNotice({
         type: 'warning',
-        message: `Access Denied for Warehouse ${newFacility.name || newFacility.code}.`,
-      });
-      return false;
-    }
-    // Picking a dark store keeps the operator in the store console — the
-    // sidebar just swaps to the store-ops sections — so it still needs the
-    // same clearance as the warehouse branch above.
-    if (newFacility.site_type === 'DS' && !user?.can_access_dark_store) {
-      setRouteNotice({
-        type: 'warning',
-        message: `Access Denied for Dark Store ${newFacility.name || newFacility.code}.`,
+        message: describeError(err) || 'Access Denied: you are not assigned to that facility.',
       });
       return false;
     }
@@ -265,6 +407,9 @@ export function AuthProvider({ appKey = APP.key, children }) {
         routeNotice,
         setRouteNotice,
         login,
+        selectFacility,
+        verifyOtp,
+        resendOtp,
         logout,
         switchFacility,
         refreshFacilities: loadFacilities,

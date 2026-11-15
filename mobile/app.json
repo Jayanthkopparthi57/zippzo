@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Zippzo WMS & DS",
+    "slug": "zippzo-operations",
+    "version": "0.2.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": { "package": "com.zippzo.operations", "usesCleartextTraffic": true },
+    "ios": {
+      "bundleIdentifier": "com.zippzo.operations",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Zippzo needs camera access to scan barcodes and QR codes for inbound, QC, putaway and outbound."
+      }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Zippzo needs camera access to scan barcodes and QR codes for inbound, QC, putaway and outbound."
+        }
+      ]
+    ]
+  }
+}

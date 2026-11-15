@@ -118,7 +118,7 @@ export default function InboundView({ initialTab = 'asns' }) {
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000); };
 
-  // â”€â”€ REGISTRATION MODAL HANDLERS â”€â”€
+  // ”—€ REGISTRATION MODAL HANDLERS ”—€
   const openRegisterModal = () => {
     setRegVendor(vendors[0]?.id || '');
     setRegRefNo(`PO-${Date.now().toString().slice(-6)}`);
@@ -191,7 +191,7 @@ export default function InboundView({ initialTab = 'asns' }) {
     }
   };
 
-  // â”€â”€ QC TESTING MODAL HANDLERS â”€â”€
+  // ”—€ QC TESTING MODAL HANDLERS ”—€
   const openQcModal = (line) => {
     setSelectedQcLine(line);
     setQcForm({
@@ -246,7 +246,7 @@ export default function InboundView({ initialTab = 'asns' }) {
     }
   };
 
-  // â”€â”€ PUTAWAY MODAL HANDLERS â”€â”€
+  // ”—€ PUTAWAY MODAL HANDLERS ”—€
   // Location exposes location_type, not type.
   const storageBins = locations.filter(l => l.location_type === 'BIN');
   // PutawayTask.sku is a Sku UUID; resolve it to a display name/code.
@@ -293,7 +293,7 @@ export default function InboundView({ initialTab = 'asns' }) {
     }
   };
 
-  // â”€â”€ LPN CREATION MODAL HANDLERS â”€â”€
+  // ”—€ LPN CREATION MODAL HANDLERS ”—€
   const openLpnModal = () => {
     setShowLpnModal(true);
   };
@@ -337,7 +337,7 @@ export default function InboundView({ initialTab = 'asns' }) {
     }
   };
 
-  // â”€â”€ BARCODE SCANNER HANDLERS â”€â”€
+  // ”—€ BARCODE SCANNER HANDLERS ”—€
   const handleScanComplete = (code) => {
     const cleanCode = code.trim().toUpperCase();
     setScannedBatch(cleanCode);
@@ -498,7 +498,7 @@ export default function InboundView({ initialTab = 'asns' }) {
   // used to live here; it was unreachable (never rendered) and fed raw scanned
   // codes to /inventory/relocate, which only accepts Location.location_id.
 
-  // â”€â”€ DARK STORE TRANSFER ORDER â”€â”€
+  // ”—€ DARK STORE TRANSFER ORDER ”—€
   // Rendered by <eState, useEffect /> on the transfer-order tab. The inline
   // form that used to live here was never rendered, hard-coded
   // source_site/dest_site UUIDs, and invented a non-UUID picklist_id.
@@ -555,19 +555,19 @@ export default function InboundView({ initialTab = 'asns' }) {
       {activeSubtab === 'asns' && (
         <DataTable
           title="Inbound Vendor Consignments"
-          subtitle="Dock arrivals and supplier delivery purchase orders â€” Warehouse: RJY-DS-001"
+          subtitle="Dock arrivals and supplier delivery purchase orders — Warehouse: RJY-DS-001"
           onAdd={openRegisterModal}
           addLabel="Register Consignment"
           columns={[
             { header: 'Inbound #', key: 'id', render: r => <span className="code-cell">INB-{String(r.id).padStart(6, '0')}</span> },
-            { header: 'PO / Ref #', key: 'reference_number', render: r => <strong className="code-cell">{r.reference_number || 'â€”'}</strong> },
+            { header: 'PO / Ref #', key: 'reference_number', render: r => <strong className="code-cell">{r.reference_number || '—'}</strong> },
             { header: 'Supplier / Vendor', key: 'vendor_name', render: r => (
-              <span style={{ fontWeight: 600 }}>{r.vendor_name || r.vendor?.name || 'â€”'}</span>
+              <span style={{ fontWeight: 600 }}>{r.vendor_name || r.vendor?.name || '—'}</span>
             )},
-            { header: 'Vehicle', key: 'vehicle_number', render: r => <span className="code-cell">{r.vehicle_number || 'â€”'}</span> },
-            { header: 'Driver', render: r => <span>{r.driver_name ? `${r.driver_name} (${r.driver_phone || ''})` : 'â€”'}</span> },
+            { header: 'Vehicle', key: 'vehicle_number', render: r => <span className="code-cell">{r.vehicle_number || '—'}</span> },
+            { header: 'Driver', render: r => <span>{r.driver_name ? `${r.driver_name} (${r.driver_phone || ''})` : '—'}</span> },
             { header: 'Items', render: r => <span className="mono-num">{r.items_count || r.items?.length || 1} SKUs</span> },
-            { header: 'Total Expected', render: r => <strong className="mono-num" style={{ fontSize: 13 }}>{r.total_expected_qty || r.items?.reduce((s, it) => s + (it.expected_qty || 0), 0) || 'â€”'}</strong> },
+            { header: 'Total Expected', render: r => <strong className="mono-num" style={{ fontSize: 13 }}>{r.total_expected_qty || r.items?.reduce((s, it) => s + (it.expected_qty || 0), 0) || '—'}</strong> },
             { header: 'Status', key: 'status', render: r => (
               <span className={`badge ${r.status === 'PUTAWAY_DONE' || r.status === 'COMPLETED' ? 'badge-success' : r.status === 'QC_IN_PROGRESS' || r.status === 'QC_PENDING' ? 'badge-warning' : 'badge-info'}`}>
                 {r.status || 'GATE_IN'}
@@ -587,8 +587,8 @@ export default function InboundView({ initialTab = 'asns' }) {
           columns={[
             { header: 'QC ID', key: 'id', render: r => <span className="code-cell">QC-{String(r.id).padStart(5, '0')}</span> },
             { header: 'Inbound No.', render: r => <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)' }}>{r.asn_number || (r.inbound_id ? `INB-${String(r.inbound_id).padStart(6, '0')}` : `INB-${r.inbound}`)}</span> },
-            { header: 'SKU Code', key: 'sku_code', render: r => <strong className="code-cell">{r.sku_code || r.sku?.sku_code || 'â€”'}</strong> },
-            { header: 'Product Name', key: 'sku_name', render: r => <strong>{r.sku_name || r.sku?.name || 'â€”'}</strong> },
+            { header: 'SKU Code', key: 'sku_code', render: r => <strong className="code-cell">{r.sku_code || r.sku?.sku_code || '—'}</strong> },
+            { header: 'Product Name', key: 'sku_name', render: r => <strong>{r.sku_name || r.sku?.name || '—'}</strong> },
             { header: 'Expected', key: 'expected_qty', align: 'right', render: r => <strong className="mono-num" style={{ fontSize: 13 }}>{r.expected_qty}</strong> },
             { header: 'Accepted', key: 'accepted_qty', align: 'right', render: r => <strong className="mono-num" style={{ color: '#047857' }}>{r.accepted_qty || 0}</strong> },
             { header: 'Damaged', key: 'damaged_qty', align: 'right', render: r => <span className="mono-num" style={{ color: r.damaged_qty > 0 ? '#dc2626' : '#94a3b8' }}>{r.damaged_qty || 0}</span> },
@@ -617,8 +617,8 @@ export default function InboundView({ initialTab = 'asns' }) {
           columns={[
             { header: 'Task', key: 'id', render: r => <span className="code-cell">PUT-{String(r.id).padStart(5, '0')}</span> },
             { header: 'Inbound No.', render: r => <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)' }}>{r.asn_no || `INB-${r.inbound_id || r.id}`}</span> },
-            { header: 'SKU', key: 'sku_code', render: r => <strong className="code-cell">{r.sku_code || r.sku?.sku_code || 'â€”'}</strong> },
-            { header: 'Item', key: 'sku_name', render: r => <strong>{r.sku_name || r.sku?.name || 'â€”'}</strong> },
+            { header: 'SKU', key: 'sku_code', render: r => <strong className="code-cell">{r.sku_code || r.sku?.sku_code || '—'}</strong> },
+            { header: 'Item', key: 'sku_name', render: r => <strong>{r.sku_name || r.sku?.name || '—'}</strong> },
             { header: 'Qty', key: 'qty', align: 'right', render: r => <strong className="mono-num" style={{ fontSize: 13 }}>{r.qty}</strong> },
             { header: 'From', key: 'source_location_code', render: r => <span className="badge badge-default">{r.source_location_code || r.source_location?.code || 'DOCK'}</span> },
             { header: 'To (Bin)', key: 'destination_location_code', render: r => (
@@ -670,7 +670,7 @@ export default function InboundView({ initialTab = 'asns' }) {
                 </Box>
                 <div>
                   <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#0f172a' }}>Register Vendor Delivery Consignment</h3>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>Mother Hub: RJY-DS-001 â€¢ Dock Staging & QC Registry</div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>Mother Hub: RJY-DS-001 €¢ Dock Staging & QC Registry</div>
                 </div>
               </Box>
               <button className="modal-close" onClick={() => setShowRegModal(false)}><X size={18} /></button>
@@ -766,7 +766,7 @@ export default function InboundView({ initialTab = 'asns' }) {
                 </Box>
                 <div>
                   <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#0f172a' }}>
-                    QC Inspection â€” {selectedQcLine.sku_name || selectedQcLine.sku?.name || `QC-${selectedQcLine.id}`}
+                    QC Inspection — {selectedQcLine.sku_name || selectedQcLine.sku?.name || `QC-${selectedQcLine.id}`}
                   </h3>
                   <div style={{ fontSize: 12, color: '#64748b' }}>
                     Expected: {selectedQcLine.expected_qty} units | SKU: {selectedQcLine.sku_code || selectedQcLine.sku?.sku_code}
@@ -857,7 +857,7 @@ export default function InboundView({ initialTab = 'asns' }) {
                 </Box>
                 <div>
                   <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#0f172a' }}>
-                    Assign Storage Bin â€” {String(selectedPutTask.task_id).slice(0, 8).toUpperCase()}
+                    Assign Storage Bin — {String(selectedPutTask.task_id).slice(0, 8).toUpperCase()}
                   </h3>
                   <div style={{ fontSize: 12, color: '#64748b' }}>
                     {putawaySku?.name || putawaySku?.sku_code || 'SKU'} ({selectedPutTask.qty} Units)
@@ -876,10 +876,10 @@ export default function InboundView({ initialTab = 'asns' }) {
               <label className="form-group" style={{ marginBottom: 20 }}>
                 <span className="form-label" style={{ fontWeight: 700, fontSize: 13 }}>Destination Storage Bin</span>
                 <select className="form-input" value={putDestBin} onChange={e => setPutDestBin(e.target.value)} required>
-                  <option value="">â€” Select a storage bin â€”</option>
+                  <option value="">— Select a storage bin —</option>
                   {storageBins.map(b => (
                     <option key={b.location_id} value={b.location_id}>
-                      {binLabel(b)} ({b.location_type}{b.aisle ? ` â€¢ Aisle ${b.aisle}` : ''}{b.rack ? ` â€¢ Rack ${b.rack}` : ''})
+                      {binLabel(b)} ({b.location_type}{b.aisle ? ` €¢ Aisle ${b.aisle}` : ''}{b.rack ? ` €¢ Rack ${b.rack}` : ''})
                     </option>
                   ))}
                 </select>
@@ -908,7 +908,7 @@ export default function InboundView({ initialTab = 'asns' }) {
       )}
 
       {/* The scanner was imported and every "Scan" button set scanningMode, but
-          the modal was never mounted â€” so all six scan entry points on this page
+          the modal was never mounted — so all six scan entry points on this page
           were dead ends. */}
       {scanningMode && (
         <BarcodeScannerModal

@@ -154,7 +154,7 @@ export default function MasterCatalogView({ initialTab = 'skus' }) {
 
   // Inline forms
   const [catOpen, setCatOpen] = useState(false);
-  const [catDraft, setCatDraft] = useState({ name: '', parent: '' });
+  const [catDraft, setCatDraft] = useState({ name: '', parent: '', description: '' });
   const [catBusy, setCatBusy] = useState(false);
   const [catError, setCatError] = useState('');
   const [lstDraft, setLstDraft] = useState(null);
@@ -376,8 +376,9 @@ export default function MasterCatalogView({ initialTab = 'skus' }) {
       await postApi('/catalog/categories/', {
         name: catDraft.name.trim(),
         parent: catDraft.parent || null,
+        description: catDraft.description.trim(),
       });
-      setCatDraft({ name: '', parent: '' });
+      setCatDraft({ name: '', parent: '', description: '' });
       setCatOpen(false);
       await loadData();
     } catch (err) {
@@ -782,7 +783,7 @@ export default function MasterCatalogView({ initialTab = 'skus' }) {
             <div className="wf-panel" style={{ marginBottom: 12 }}>
               <div className="wf-panel__header">
                 <div>
-                  <div className="wf-panel__title"><Tag size={16} /> Product categories</div>
+                  <div className="wf-peek"> Product categories</div>
                   <div className="wf-panel__hint">Taxonomy used by the SKU master and storefront browse.</div>
                 </div>
                 <div className="wf-panel__actions">
@@ -812,6 +813,13 @@ export default function MasterCatalogView({ initialTab = 'skus' }) {
                       ))}
                     </select>
                   </div>
+                  <div className="form-group" style={{ marginBottom: 0, minWidth: 320 }}>
+                    <label className="form-label">Description (optional)</label>
+                    <input className="form-input" data-testid="cat-description"
+                      value={catDraft.description}
+                      onChange={e => setCatDraft({ ...catDraft, description: e.target.value })}
+                      placeholder="What belongs in this category" />
+                  </div>
                   <button type="submit" className="btn-primary" disabled={catBusy} data-testid="cat-save">
                     {catBusy ? 'Saving…' : 'Save Category'}
                   </button>
@@ -831,6 +839,7 @@ export default function MasterCatalogView({ initialTab = 'skus' }) {
             columns={[
               { header: 'Category ID', key: 'category_id', render: r => <span className="code-cell">{String(r.category_id).slice(0, 8)}</span> },
               { header: 'Category Name', key: 'name', render: r => <strong>{r.name}</strong> },
+              { header: 'Description', key: 'description', render: r => r.description ? <span title={r.description}>{r.description.length > 90 ? `${String(r.description).slice(0, 90)}…` : r.description}</span> : '—' },
               { header: 'Parent', key: 'parent', render: r => (r.parent ? categoryName[String(r.parent)] || '—' : '—') },
               {
                 header: 'SKUs', key: 'sku_count',
@@ -902,7 +911,7 @@ export default function MasterCatalogView({ initialTab = 'skus' }) {
             <div className="wf-panel" style={{ marginBottom: 12 }}>
               <div className="wf-panel__header">
                 <div>
-                  <div className="wf-panel__title"><Store size={16} /> Store listings</div>
+                  <div className="wf-peek"> Store listings</div>
                   <div className="wf-panel__hint">
                     A SKU only reaches a storefront once it is listed at that site with a price.
                   </div>

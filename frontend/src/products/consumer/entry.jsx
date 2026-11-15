@@ -1,0 +1,14 @@
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import ShopperApp from '../../apps/ShopperApp.jsx'
+import { ToastProvider } from '../../components/ui/Toast.jsx'
+import '../../index.css'
+import '../../styles/shopper.css'
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <ToastProvider>
+      <ShopperApp />
+    </ToastProvider>
+  </React.StrictMode>,
+)

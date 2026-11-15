@@ -7,6 +7,7 @@ class SkuCategory(models.Model):
     category_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='children')
+    description = models.TextField(blank=True, default='')
 
     class Meta:
         db_table = 'sku_category'
@@ -41,6 +42,11 @@ class Sku(models.Model):
     hsn_code = models.CharField(max_length=10, blank=True)
     weight_g = models.PositiveIntegerField(null=True, blank=True)
     image_url = models.CharField(max_length=300, blank=True)
+    description = models.TextField(blank=True)
+    ingredients = models.TextField(blank=True)
+    allergens = models.TextField(blank=True)
+    storage_notes = models.TextField(blank=True)
+    nutrition_facts = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -83,6 +89,58 @@ class Listing(models.Model):
         db_table = 'listings'
         unique_together = [('sku', 'site')]
 
+    def save(self, *args, **kwargs):
+        from decimal import Decimal
+        if self.mrp:
+            self.discount_pct = (
+                (Decimal('1') - self.price / self.mrp) * Decimal('100')
+            ).quantize(Decimal('0.01'))
+        else:
+            self.discount_pct = Decimal('0.00')
+        super().save(*args, **kwargs)
+
+
+class StoreProductProfile(models.Model):
+    """Site-specific shopper presentation for a catalog SKU.
+
+    Inventory and product facts stay on ``Sku`` and ``Listing``. This table is
+    only what shoppers should see at one dark store: up to three image URLs,
+    display name/brand overrides, and the store's own category labels.
+    """
+
+    profile_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    site = models.ForeignKey('network.Site', on_delete=models.CASCADE, related_name='store_product_profiles')
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name='store_profiles')
+    images = models.JSONField(default=list, blank=True)
+    category = models.ForeignKey(SkuCategory, null=True, blank=True, on_delete=models.SET_NULL, related_name='store_profiles')
+    sub_category = models.CharField(max_length=100, blank=True)
+    display_name = models.CharField(max_length=200, blank=True)
+    display_brand = models.CharField(max_length=60, blank=True)
+    is_featured = models.BooleanField(default=False)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'store_product_profiles'
+        unique_together = [('site', 'sku')]
+        ordering = ['site__code', 'sort_order', 'sku__name']
+
+    def clean(self):
+        if not isinstance(self.images, list):
+            raise ValueError('Images must be a list.')
+        values = [str(image or '').strip() for image in self.images if str(image or '').strip()]
+        if len(values) > 3:
+            raise ValueError('A product can have at most 3 images.')
+        self.images = values[:3]
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f'{self.site.code}:{self.sku.sku_code}'
+
 
 class InventoryLot(models.Model):
     BUCKET_CHOICES = [('Good','Good'),('BAD','Bad'),('QC_HOLD','QC Hold'),('InProgress','In Progress')]
@@ -122,6 +180,10 @@ class Coupon(models.Model):
     max_discount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     valid_from = models.DateTimeField()
     valid_until = models.DateTimeField()
+    site = models.ForeignKey(
+        'network.Site', null=True, blank=True, on_delete=models.CASCADE,
+        related_name='coupons',
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -150,6 +212,41 @@ class Coupon(models.Model):
         if d > subtotal:
             d = subtotal
         return d.quantize(Decimal('0.01'))
+
+
+class ComboOffer(models.Model):
+    offer_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    site = models.ForeignKey('network.Site', on_delete=models.CASCADE, related_name='combo_offers')
+    title = models.CharField(max_length=120)
+    description = models.CharField(max_length=300, blank=True)
+    fixed_price = models.DecimalField(max_digits=10, decimal_places=2)
+    valid_from = models.DateTimeField()
+    valid_until = models.DateTimeField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'combo_offers'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
+
+    def is_valid_now(self):
+        from django.utils import timezone
+        now = timezone.now()
+        return self.is_active and self.valid_from <= now <= self.valid_until
+
+
+class ComboOfferItem(models.Model):
+    item_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    offer = models.ForeignKey(ComboOffer, on_delete=models.CASCADE, related_name='items')
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name='combo_offer_items')
+    quantity = models.PositiveIntegerField()
+
+    class Meta:
+        db_table = 'combo_offer_items'
+        unique_together = [('offer', 'sku')]
 
 
 class ProductReview(models.Model):

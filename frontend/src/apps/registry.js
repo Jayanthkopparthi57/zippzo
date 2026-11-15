@@ -1,5 +1,5 @@
 /**
- * The three Zippzo applications, all built from this one source tree.
+ * Zippzo app surfaces, built from this shared source tree.
  *
  * They are separate installs in the same way the big quick-commerce players
  * ship a customer app, a store-partner app and a delivery-partner app: each
@@ -11,58 +11,73 @@
  * "wrong app" screen rather than silently rendering an empty console.
  */
 export const APPS = {
-  store: {
-    key: 'store',
+  wms: {
+    key: 'wms',
     targetApp: 'WMS',
-    name: 'Zippzo Store',
-    tagline: 'Store Partner Console',
-    brand: 'Zippzo Store',
-    htmlTitle: 'Zippzo Store — Store Partner Console',
-    emailLabel: 'Work email',
-    emailPlaceholder: 'operator@zippzo.in',
-    // Web entry this app is served from, used by the wrong-app screen to point
-    // the operator at the right one. Android installs have no sibling entries.
+    name: 'Zippzo Warehouse Management',
+    tagline: 'Warehouse inbound, storage, replenishment and outbound dispatch',
+    brand: 'Zippzo WMS',
+    htmlTitle: 'Zippzo WMS — Warehouse Operations',
+    emailLabel: 'Staff email',
+    emailPlaceholder: 'operator@zippzo.com',
+    icon: '🏬',
     entry: 'index.html',
+    allowedRoles: ['SUPER_ADMIN', 'OPS_MANAGER', 'WAREHOUSE_STAFF'],
+  },
+  darkstore: {
+    key: 'darkstore',
+    targetApp: 'DARK_STORE',
+    name: 'Zippzo Dark Store',
+    tagline: 'Dark-store receiving, shelf operations and customer fulfillment',
+    brand: 'Zippzo Dark Store',
+    htmlTitle: 'Zippzo Dark Store — Store Fulfillment Console',
+    emailLabel: 'Store email',
+    emailPlaceholder: 'store@zippzo.in',
+    icon: '🏪',
+    entry: 'darkstore.html',
+    allowedRoles: ['SUPER_ADMIN', 'OPS_MANAGER', 'WAREHOUSE_STAFF'],
   },
   shopper: {
     key: 'shopper',
     targetApp: 'SHOPPER',
-    name: 'Zippzo',
+    name: 'Zippzo Groceries',
     tagline: 'Groceries in minutes',
     brand: 'Zippzo',
     htmlTitle: 'Zippzo — Groceries in minutes',
-    emailLabel: 'Email',
+    emailLabel: 'Customer email',
     emailPlaceholder: 'you@example.com',
+    icon: '🛒',
     entry: 'shopper.html',
+    allowedRoles: ['CUSTOMER', 'SENDER', 'SUPER_ADMIN'],
   },
   rider: {
     key: 'rider',
     targetApp: 'RIDER',
     name: 'Zippzo Rider',
-    tagline: 'Delivery Partner',
+    tagline: 'Delivery Partner Console',
     brand: 'Zippzo Rider',
     htmlTitle: 'Zippzo Rider — Delivery Partner',
     emailLabel: 'Rider email',
     emailPlaceholder: 'rider@zippzo.in',
+    icon: '🚴',
     entry: 'rider.html',
+    allowedRoles: ['RIDER', 'SUPER_ADMIN'],
   },
 };
 
+// Backwards compatibility alias
+APPS.store = APPS.wms;
+
 /**
  * Which app this bundle is, read from the `data-app` attribute of <html>.
- *
- * All three entries are emitted by a single Vite build, so an env var cannot
- * differ per entry — the HTML file is the only place that knows which of the
- * three applications it is booting.
  */
 export const APP_KEY = (() => {
   const fromDom = typeof document !== 'undefined'
     ? document.documentElement?.dataset?.app
     : null;
   if (APPS[fromDom]) return fromDom;
-  // `vite build` copies index.html's attributes, so a stray build without the
-  // attribute still lands on the store console rather than crashing.
-  return 'store';
+  if (fromDom === 'store') return 'wms';
+  return 'wms';
 })();
 
 export const APP = APPS[APP_KEY];

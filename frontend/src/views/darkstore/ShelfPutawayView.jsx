@@ -1,44 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Boxes, Check, X, AlertTriangle, MapPin, Package, Layers,
-} from 'lucide-react';
+import { Boxes, Check, X, AlertTriangle, RefreshCw } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
-import ScanInput from '../../components/ui/ScanInput';
-import WorkflowStepper from '../../components/ui/WorkflowStepper';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
-import { useAuth } from '../../context/AuthContext';
-import { postApi } from '../../api/client';
-import { resolveBin, binLabel } from '../../utils/bins';
-import {
-  useDarkStore, useAsyncData, receivedLpns, lpnManifest, loadSkuIndex, num,
-} from './useDarkStore';
-
-/**
- * Break a received tote down onto the dark store's pick-face bins.
- *
- * This is the gated step: `POST /ds-ops/shelf-putaway` moves stock out of the
- * LPN container and into a BIN container, and only that IN leg is what makes it
- * sellable. Receipt alone deliberately does not.
- *
- * Two rules the screen enforces rather than trusting the operator:
- *
- *  - A scanned product that is not on the tote's manifest is refused. Accepting
- *    it would either silently drop the unit or invent a stock line the hub
- *    never sent.
- *  - Bins go through `resolveBin`, because stock is keyed by
- *    `Location.location_id` and the label carries a barcode or a coordinate.
- *    Sending the raw scanned text makes the server reject the whole placement.
- *
- * Placement is accumulated locally and posted in one call, so a half-finished
- * putaway never leaves stock split across containers in the ledger.
- */
-
-const STEPS = [
-  { key: 'tote', title: 'Pick a tote', description: 'Choose a received tote to break down' },
-  { key: 'items', title: 'Shelve each line', description: 'Scan the product, then the bin it goes in' },
-  { key: 'confirm', title: 'Confirm', description: 'Post every placement to the stock ledger' },
-];
+import { useDarkStore, useAsyncData, receivedLpns, lpnManifest, loadSkuIndex, resolveStoreBin, shelfPutaway } from './useDarkStore';
 
 function norm(v) {
   return String(v || '').trim().toUpperCase();
@@ -46,25 +11,22 @@ function norm(v) {
 
 function Putaway({ siteId, storeCode, operatorId }) {
   const toast = useToast();
-  const { data: totes, error: totesError, reload: reloadTotes } = useAsyncData(
+  const { data: totes, error: totesError, reload: reloadTotes, loading } = useAsyncData(
     () => receivedLpns(siteId),
     [siteId],
-    { pollMs: 60000 }
+    { pollMs: 30000 }
   );
 
-  const [step, setStep] = useState(0);
-  const [tote, setTote] = useState(null);
-  const [lines, setLines] = useState([]);
+  const [selectedTote, setSelectedTote] = useState(null);
+  const [manifestLines, setManifestLines] = useState([]);
   const [skuIndex, setSkuIndex] = useState(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
-  const [scanText, setScanText] = useState('');
-  const [focused, setFocused] = useState(null);
+  const [targetBins, setTargetBins] = useState({}); // line_id -> bin_code
+  const [filterQuery, setFilterQuery] = useState('');
 
   const toteRows = useMemo(() => totes || [], [totes]);
 
-  // One SKU lookup for the session: the manifest and the scans both speak in
-  // bare uuid/barcodes, so a local index is what makes a scan resolvable.
   useEffect(() => {
     let live = true;
     loadSkuIndex()
@@ -76,429 +38,350 @@ function Putaway({ siteId, storeCode, operatorId }) {
   const openTote = async (row) => {
     setBusy(true);
     setFeedback(null);
-    setTote(row);
-    setScanText('');
-    setFocused(null);
+    setSelectedTote(row);
     try {
-      const manifest = await lpnManifest(row.lpn_id);
-      if (manifest.length === 0) {
-        // An empty manifest is a real data problem, not an empty tote: the hub
-        // said this tote has contents. Say so instead of showing an empty form.
-        setFeedback({
-          type: 'error',
-          message: `Tote ${row.barcode} has an empty manifest. Check the hub-side packing record before shelving.`,
-        });
-        setLines([]);
-      } else {
-        setLines(
-          manifest.map((m, i) => ({
-            key: `${m.id ?? m.lot ?? i}`,
-            lot: m.lot,
-            sku: m.sku,
-            qty: num(m.qty),
-            placedQty: 0,
-            bin: '',
-            binLabel: '',
-          }))
-        );
-      }
-      setStep(1);
+      const manifest = await lpnManifest(row.lpn_id || row.id);
+      setManifestLines((manifest || []).map((line, idx) => ({
+        ...line,
+        line_id: line.line_id || `${line.sku_id || line.sku}-${line.lot_id || line.lot}-${idx}`,
+        sku_name: skuIndex?.byId?.get(String(line.sku_id || line.sku))?.name || line.sku_name || line.sku_code || 'Product',
+        sku_code: skuIndex?.byId?.get(String(line.sku_id || line.sku))?.sku_code || line.sku_code || line.sku || '—',
+        lot_number: line.lot_number || line.lot || '—',
+      })));
+      setTargetBins({});
     } catch (err) {
-      setFeedback({ type: 'error', message: err?.message || 'Could not read the tote manifest.' });
+      setFeedback({ type: 'error', message: err.message || 'Failed loading tote manifest.' });
     } finally {
       setBusy(false);
     }
   };
 
-  const shelvedCount = lines.filter((l) => l.bin).length;
-  const totalUnits = lines.reduce((t, l) => t + l.qty, 0);
-  const placedUnits = lines.reduce((t, l) => t + (l.bin ? l.placedQty : 0), 0);
-
-  const onScan = useCallback(
-    async (raw) => {
-      const value = norm(raw);
-      setFeedback(null);
-      if (!value) return;
-      if (lines.length === 0) {
-        setFeedback({ type: 'error', message: 'Open a tote first — there is nothing to shelve.' });
-        return;
-      }
-
-      const sku = skuIndex?.skuFor(value);
-      if (sku) {
-        // A product scan focuses the line so the *next* scan, the bin, has an
-        // unambiguous target. Scanning an unlisted unit is refused rather than
-        // guessed at.
-        const line = lines.find((l) => String(l.sku) === String(sku.sku_id));
-        if (!line) {
-          setFeedback({
-            type: 'error',
-            message: `${sku.sku_code} is not on this tote's manifest. Put it aside for discrepancy handling.`,
-          });
-          return;
-        }
-        setFocused(line.key);
-        setScanText('');
-        setFeedback({
-          type: 'ok',
-          message: `${sku.sku_code} selected. Now scan the bin it goes into.`,
-        });
-        return;
-      }
-
-      // Not a product: treat it as a bin label and resolve it properly.
-      const target = focused == null ? null : lines.find((l) => l.key === focused);
-      try {
-        const hit = await resolveBin(raw);
-        if (!hit) {
-          setFeedback({
-            type: 'error',
-            message: `No bin matches "${raw}". Scan the bin label, or type its code (e.g. A-01-01-01).`,
-          });
-          return;
-        }
-        if (hit.candidates) {
-          setFeedback({
-            type: 'error',
-            message: `"${raw}" matched ${hit.candidates.length} bins. Scan a unique label.`,
-          });
-          return;
-        }
-        if (!target) {
-          setFeedback({
-            type: 'error',
-            message: 'Scan the product first, then scan the bin it goes into.',
-          });
-          return;
-        }
-        setLines((prev) =>
-          prev.map((l) =>
-            l.key === target.key
-              ? {
-                  ...l,
-                  bin: hit.location_id,
-                  binLabel: hit.label || binLabel(hit.location),
-                  // Default the whole line: partial shelving needs a deliberate
-                  // edit, which the qty field below makes possible.
-                  placedQty: l.qty,
-                }
-              : l
-          )
-        );
-        setScanText('');
-        setFeedback({
-          type: 'ok',
-          message: `${skuIndex?.byId.get(String(target.sku))?.sku_code || 'Line'} → ${hit.label || hit.location_id}`,
-        });
-        setStep(2);
-      } catch (err) {
-        setFeedback({ type: 'error', message: err?.message || 'Bin lookup failed.' });
-      }
-    },
-    [lines, focused, skuIndex]
-  );
-
-  const setQty = (key, value) => {
-    const n = Math.max(0, Math.floor(Number(value) || 0));
-    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, placedQty: n } : l)));
-  };
-
-  const confirm = async () => {
-    const placements = lines
-      .filter((l) => l.bin && l.placedQty > 0)
-      .map((l) => ({ sku: l.sku, lot: l.lot, bin: l.bin, qty: l.placedQty }));
-    if (placements.length === 0) {
-      setFeedback({ type: 'error', message: 'Nothing is shelved yet. Scan a bin for at least one line.' });
+  const resolveBin = async (line) => {
+    const text = targetBins[line.line_id] || '';
+    if (!text.trim()) {
+      setFeedback({ type: 'error', message: 'Scan or type the shelf bin barcode first.' });
       return;
     }
     setBusy(true);
     try {
-      const res = await postApi('/ds-ops/shelf-putaway', {
-        lpn: tote.lpn_id,
-        placements,
-        // Named so the ledger's actor_id says which operator moved the stock.
-        actor_id: operatorId || '',
+      const matches = await resolveStoreBin(storeCode, text.trim());
+      if (matches.length !== 1) {
+        setFeedback({
+          type: 'error',
+          message: matches.length
+            ? `"${text}" matched ${matches.length} bins. Scan a unique label.`
+            : `No bin at ${storeCode} matches "${text}".`,
+        });
+        return;
+      }
+      setTargetBins(prev => ({ ...prev, [line.line_id]: matches[0].location_id }));
+      setFeedback({
+        type: 'success',
+        message: `${line.sku_code} will be shelved in ${matches[0].label || matches[0].location_id}.`,
       });
-      const units = (res?.shelved || []).reduce((t, m) => t + num(m.qty), 0);
-      toast.success(
-        `Tote ${tote.barcode} shelved`,
-        `${units} unit${units === 1 ? '' : 's'} onto pick faces` +
-          (res?.lpn_emptied ? '. Tote is now empty and reusable.' : '. Tote still has stock left in it.')
-      );
-      setTote(null);
-      setLines([]);
-      setFocused(null);
-      setStep(0);
-      setScanText('');
-      setFeedback(null);
-      await reloadTotes({ quiet: true });
     } catch (err) {
-      const msg = err?.body?.error || err?.message || 'Shelf putaway failed.';
-      setFeedback({ type: 'error', message: msg });
-      toast.error('Shelf putaway failed', msg);
+      setFeedback({ type: 'error', message: err.message || 'Bin lookup failed.' });
     } finally {
       setBusy(false);
     }
   };
 
-  const reset = () => {
-    setTote(null);
-    setLines([]);
-    setFocused(null);
-    setScanText('');
+  const handleShelfPutaway = async (line) => {
+    if (!selectedTote) return;
+    const binLocationId = targetBins[line.line_id];
+    if (!binLocationId) {
+      setFeedback({ type: 'error', message: 'Resolve a shelf bin before putting this line away.' });
+      return;
+    }
+    setBusy(true);
     setFeedback(null);
-    setStep(0);
+    try {
+      await shelfPutaway(selectedTote.lpn_id || selectedTote.id, [{
+        sku: line.sku_id || line.sku,
+        lot: line.lot_id || line.lot,
+        bin: binLocationId,
+        qty: line.qty || line.expected_qty || 1,
+      }]);
+      toast.show(`Stock placed in bin ${binLocationId}`, 'success');
+      setFeedback({
+        type: 'success',
+        message: `Putaway confirmed: ${line.sku_name || line.sku} placed into ${binLocationId}.`,
+      });
+      const remaining = manifestLines.filter(l => l.line_id !== line.line_id);
+      setManifestLines(remaining);
+      if (remaining.length === 0) {
+        setSelectedTote(null);
+        reloadTotes();
+      }
+    } catch (err) {
+      setFeedback({ type: 'error', message: err.message || 'Putaway failed. Check bin code.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePutawayAll = async () => {
+    if (!selectedTote || manifestLines.length === 0) return;
+    if (manifestLines.some(line => !targetBins[line.line_id])) {
+      setFeedback({ type: 'error', message: 'Resolve a shelf bin for every line before putting away all.' });
+      return;
+    }
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await shelfPutaway(selectedTote.lpn_id || selectedTote.id, manifestLines.map(line => ({
+        sku: line.sku_id || line.sku,
+        lot: line.lot_id || line.lot,
+        bin: targetBins[line.line_id],
+        qty: line.qty || line.expected_qty || 1,
+      })));
+      toast.show(`All lines put away for tote ${selectedTote.barcode}`, 'success');
+      setSelectedTote(null);
+      setManifestLines([]);
+      reloadTotes();
+    } catch (err) {
+      setFeedback({ type: 'error', message: err.message || 'Complete putaway failed.' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
-    <>
-      <WorkflowStepper steps={STEPS} current={step} dataTestId="ds-putaway-stepper" />
-
-      <div className="wf-panel">
-        <div className="wf-panel__header">
-          <div>
-            <div className="wf-panel__title"><Boxes size={17} /> Received totes awaiting shelving</div>
-            <div className="wf-panel__hint">
-              Stock in a tote is in custody but not sellable until it lands on a pick face
-            </div>
+    <div style={{ paddingBottom: 24 }}>
+      <div className="screen-header">
+        <div>
+          <div className="screen-title">
+            <span>SHELF PUTAWAY (STORE RESTOCK)</span>
+            <span className="screen-count-tag">{toteRows.length} totes</span>
           </div>
-          <div className="wf-panel__actions">
-            <span className="scan-feedback scan-feedback--hint">
-              <Boxes size={13} /> <MapPin size={13} />
-            </span>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+            Break down received mother hub totes onto dark store shelf bins directly from queue.
           </div>
         </div>
 
-        {totesError && (
-          <div className="form-group">
-            <div className="scan-feedback scan-feedback--error" data-testid="ds-putaway-tote-error">
-              <AlertTriangle size={14} /> {totesError}
-            </div>
-          </div>
-        )}
-
-        {toteRows.length === 0 && !totesError ? (
-          <div className="wf-empty" data-testid="ds-putaway-empty">
-            <Boxes size={40} className="wf-empty__icon" />
-            <div className="wf-empty__title">Nothing to shelve</div>
-            <div className="wf-empty__text">
-              No received totes are waiting at {storeCode}. Receive an inbound tote first,
-              and its contents will appear here.
-            </div>
-          </div>
-        ) : (
-          toteRows.length > 0 && (
-            <div className="form-group">
-              <div className="table-container">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Tote</th>
-                      <th>Type</th>
-                      <th>Insulated</th>
-                      <th>Status</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody data-testid="ds-putaway-totes">
-                    {toteRows.map((t) => (
-                      <tr key={t.lpn_id}>
-                        <td className="mono-num">{t.barcode}</td>
-                        <td>{t.lpn_type}</td>
-                        <td>{t.is_insulated ? 'yes' : 'no'}</td>
-                        <td>
-                          <StatusBadge status={t.status} dataTestId={`ds-putaway-status-${t.barcode}`} />
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="scan-btn"
-                            style={{ minHeight: 34, fontSize: 12 }}
-                            data-testid={`ds-putaway-tote-${t.barcode}`}
-                            onClick={() => openTote(t)}
-                          >
-                            Shelve
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )
-        )}
+        <div className="screen-actions">
+          <button className="btn-ui neutral" onClick={() => reloadTotes()} disabled={loading}>
+            <RefreshCw size={12} className={loading ? 'spin' : ''} />
+            <span>Sync</span>
+          </button>
+        </div>
       </div>
 
-      {tote && (
-        <div className="wf-panel" data-testid="ds-putaway-work">
-          <div className="wf-panel__header">
-            <div>
-              <div className="wf-panel__title">
-                <MapPin size={17} /> Shelving <span className="mono-num">{tote.barcode}</span>
-              </div>
-              <div className="wf-panel__hint">
-                {shelvedCount} of {lines.length} line{lines.length === 1 ? '' : 's'} placed ·{' '}
-                {placedUnits} of {totalUnits} unit{totalUnits === 1 ? '' : 's'}
-              </div>
-            </div>
-            <div className="wf-panel__actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={reset}
-                disabled={busy}
-                data-testid="ds-putaway-clear"
-              >
-                <X size={14} /> Close
-              </button>
-            </div>
-          </div>
-
-          <div className="tally-grid" style={{ marginBottom: 16 }}>
-            <div className={`tally-tile${shelvedCount === lines.length && lines.length ? ' tally-tile--ok' : ''}`}>
-              <div className="tally-tile__label">Lines shelved</div>
-              <div className="tally-tile__value" data-testid="ds-putaway-progress">
-                {shelvedCount} / {lines.length}
-              </div>
-            </div>
-            <div className="tally-tile">
-              <div className="tally-tile__label">Units placed</div>
-              <div className="tally-tile__value" data-testid="ds-putaway-units">{placedUnits}</div>
-            </div>
-          </div>
-
-          <ScanInput
-            label="Scan the product, then the bin"
-            placeholder="Scan a product barcode, then a bin label"
-            value={scanText}
-            onChange={setScanText}
-            onScan={onScan}
-            busy={busy}
-            feedback={feedback}
-            disabled={lines.length === 0}
-            dataTestId="ds-putaway-scan"
-          />
-
-          {lines.length === 0 ? (
-            <div className="wf-empty" data-testid="ds-putaway-no-lines">
-              <Boxes size={40} className="wf-empty__icon" />
-              <div className="wf-empty__title">This tote has no manifest</div>
-              <div className="wf-empty__text">
-                Nothing to shelve was recorded against {tote.barcode}. Check the hub-side
-                packing record.
-              </div>
-            </div>
-          ) : (
-            <div className="form-group">
-              <div className="table-container">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Product</th>
-                      <th>SKU / Batch</th>
-                      <th>Qty</th>
-                      <th>Bin</th>
-                      <th>Status</th>
-                      <th>Units to shelve</th>
-                    </tr>
-                  </thead>
-                  <tbody data-testid="ds-putaway-lines">
-                    {lines.map((l, i) => {
-                      const sku = skuIndex?.byId.get(String(l.sku));
-                      const state = l.bin ? 'done' : focused === l.key ? 'active' : 'pending';
-                      return (
-                        <tr
-                          key={l.key}
-                          data-testid={`ds-putaway-line-${i}`}
-                          data-state={state}
-                          onClick={() => setFocused(focused === l.key ? null : l.key)}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <td data-testid={`ds-putaway-line-${i}-name`}>
-                            {sku?.name || 'Unknown product'}
-                          </td>
-                          <td className="mono-num">
-                            {sku?.sku_code || '—'}
-                            {l.lot ? (
-                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                Batch {l.lot}
-                              </div>
-                            ) : null}
-                          </td>
-                          <td className="mono-num" data-testid={`ds-putaway-line-${i}-qty`}>
-                            {l.placedQty} / {l.qty}
-                          </td>
-                          <td
-                            className="mono-num"
-                            data-testid={`ds-putaway-target-${i}`}
-                            style={{ color: l.bin ? 'var(--success)' : 'var(--text-muted)' }}
-                          >
-                            {l.bin ? `→ ${l.binLabel || l.bin}` : 'no bin assigned'}
-                          </td>
-                          <td>
-                            {l.bin ? (
-                              <div data-testid={`ds-putaway-bin-${i}`}>
-                                <StatusBadge status="SHELVED" />
-                              </div>
-                            ) : (
-                              <StatusBadge status="PENDING" />
-                            )}
-                          </td>
-                          <td>
-                            {l.bin && (
-                              <input
-                                className="scan-input"
-                                data-testid={`ds-putaway-qty-${i}`}
-                                type="number"
-                                min="0"
-                                max={l.qty}
-                                value={l.placedQty}
-                                onChange={(e) => setQty(l.key, e.target.value)}
-                                onClick={(e) => e.stopPropagation()}
-                                style={{ minHeight: 34, fontSize: 14, width: 90, padding: '0 10px' }}
-                                aria-label={`Units to shelve for line ${i + 1}`}
-                              />
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {lines.length > 0 && (
-            <div className="wf-panel__actions" style={{ marginTop: 12 }}>
-              <button
-                type="button"
-                className="scan-btn"
-                onClick={confirm}
-                disabled={busy || shelvedCount === 0}
-                data-testid="ds-putaway-confirm"
-              >
-                <Check size={16} />{' '}
-                {busy ? 'Posting…' : `Shelve ${shelvedCount} line${shelvedCount === 1 ? '' : 's'}`}
-              </button>
-            </div>
-          )}
+      {feedback && (
+        <div
+          style={{
+            padding: '10px 14px',
+            marginBottom: 16,
+            borderRadius: 'var(--radius-sm)',
+            fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: feedback.type === 'error' ? 'var(--danger-bg)' : 'var(--success-bg)',
+            color: feedback.type === 'error' ? 'var(--danger)' : 'var(--success)',
+            border: `1px solid ${feedback.type === 'error' ? 'var(--danger-border)' : 'var(--success-border)'}`,
+          }}
+        >
+          {feedback.type === 'error' ? <AlertTriangle size={15} /> : <Check size={15} />}
+          <span style={{ flex: 1 }}>{feedback.message}</span>
+          <button
+            type="button"
+            className="btn-ui neutral"
+            style={{ padding: '2px 6px', fontSize: 11 }}
+            onClick={() => setFeedback(null)}
+          >
+            <X size={12} />
+          </button>
         </div>
       )}
-    </>
+
+      {selectedTote ? (
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: 16, marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, borderBottom: '1px solid var(--border-color)', paddingBottom: 12 }}>
+            <div>
+              <strong style={{ fontSize: 15, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                TOTE: {selectedTote.barcode || selectedTote.lpn_id}
+              </strong>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                Status: {selectedTote.status} | Total Items: {manifestLines.length}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className="btn-ui primary"
+                disabled={busy || manifestLines.length === 0}
+                onClick={handlePutawayAll}
+              >
+                <Check size={13} />
+                <span>Putaway All Lines</span>
+              </button>
+              <button
+                type="button"
+                className="btn-ui neutral"
+                onClick={() => {
+                  setSelectedTote(null);
+                  setManifestLines([]);
+                }}
+              >
+                Back to Tote Queue
+              </button>
+            </div>
+          </div>
+
+          {/* Lines Table */}
+          <table className="wms-table">
+            <thead>
+              <tr>
+                <th>ITEM / SKU</th>
+                <th>BATCH / LOT</th>
+                <th>EXPIRY</th>
+                <th>UNITS</th>
+                <th>ASSIGNED SHELF BIN</th>
+                <th style={{ textAlign: 'right' }}>ACTION</th>
+              </tr>
+            </thead>
+            <tbody>
+              {manifestLines.length > 0 ? (
+                manifestLines.map(line => {
+                  const assignedBin = targetBins[line.line_id] || '';
+                  return (
+                    <tr key={line.line_id}>
+                      <td>
+                        <strong>{line.sku_name || line.sku_code || 'Product'}</strong>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                          {line.sku_code || line.sku}
+                        </div>
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>{line.lot_number || '—'}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{line.expiry_date || '—'}</td>
+                      <td>
+                        <strong style={{ fontFamily: 'var(--font-mono)' }}>{line.qty || line.expected_qty}</strong>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            value={assignedBin}
+                            onChange={e => setTargetBins({ ...targetBins, [line.line_id]: e.target.value })}
+                            placeholder="Scan shelf bin"
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: 12,
+                              fontFamily: 'var(--font-mono)',
+                              background: 'var(--bg-input)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: 'var(--radius-xs)',
+                              width: 140,
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="btn-ui neutral"
+                            style={{ padding: '3px 8px', fontSize: 11 }}
+                            disabled={busy}
+                            onClick={() => resolveBin(line)}
+                          >
+                            Resolve
+                          </button>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          type="button"
+                          className="btn-ui neutral"
+                          style={{ padding: '3px 10px', fontSize: 11 }}
+                          disabled={busy}
+                          onClick={() => handleShelfPutaway(line)}
+                        >
+                          <Check size={11} style={{ color: 'var(--success)' }} />
+                          <span>Place on Shelf</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
+                    All items in this tote have been shelved!
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        /* Tote List Table */
+        <div className="wms-table-wrap">
+          <table className="wms-table">
+            <thead>
+              <tr>
+                <th>TOTE BARCODE / LPN</th>
+                <th>RECEIVED AT</th>
+                <th>SEAL NUMBER</th>
+                <th>CONTAINER STATUS</th>
+                <th style={{ textAlign: 'right' }}>ACTION</th>
+              </tr>
+            </thead>
+            <tbody>
+              {toteRows.length > 0 ? (
+                toteRows.map(t => (
+                  <tr key={t.lpn_id || t.id}>
+                    <td>
+                      <div>
+                        <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                          {t.barcode || t.lpn_id || t.id}
+                        </strong>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                          LPN ID: {String(t.lpn_id || t.id).slice(0, 12)}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                        {t.received_at ? new Date(t.received_at).toLocaleString() : 'Just now'}
+                      </span>
+                    </td>
+                    <td>
+                      <span style={{ fontFamily: 'var(--font-mono)' }}>{t.seal_code || t.seal || '—'}</span>
+                    </td>
+                    <td>
+                      <StatusBadge status={t.status || 'RECEIVED'} />
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        type="button"
+                        className="btn-ui primary"
+                        style={{ padding: '3px 10px', fontSize: 11 }}
+                        onClick={() => openTote(t)}
+                      >
+                        <Boxes size={12} />
+                        <span>Breakdown & Putaway</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                    No received totes waiting for putaway.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
 export default function ShelfPutawayView() {
-  const { siteId, storeCode } = useDarkStore();
-  const { user } = useAuth();
-
+  const { siteId, storeCode, operatorId } = useDarkStore();
   return (
     <StoreGate>
-      {siteId && (
-        <Putaway siteId={siteId} storeCode={storeCode} operatorId={user?.user_id} />
-      )}
+      <Putaway siteId={siteId} storeCode={storeCode} operatorId={operatorId} />
     </StoreGate>
   );
 }

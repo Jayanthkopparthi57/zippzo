@@ -15,7 +15,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from bounded.catalog.models import InventoryLot, Sku
+from bounded.catalog.models import InventoryLot, Sku, SkuBarcode
 from bounded.ds_ops.allocation import allocate_order
 from bounded.ds_ops.models import OrderLineAllocation, PickTask
 from bounded.inventory.models import StockBalance, StockMovement
@@ -70,7 +70,11 @@ class PickScanTestBase(TestCase):
 
         cls.sku = Sku.objects.create(
             sku_code='PICK-SKU-1', name='Pick Test Cereal', sub_category='Grocery',
-            brand='Zippzo', pack_size='1', hsn_code='1904',
+            brand='Zippzo', pack_size='1', hsn_code='1904', ean='5000000000001',
+        )
+        SkuBarcode.objects.create(
+            barcode='PICK-EACH-1', symbology='INTERNAL', sku=cls.sku,
+            pack_level='EACH', is_primary=True,
         )
         cls.lot = InventoryLot.objects.create(
             sku=cls.sku, site=cls.site, batch_number='LOT-PICK-1',
@@ -113,11 +117,12 @@ class PickScanTestBase(TestCase):
     def picked_qty(self):
         return CustomerOrderLine.objects.get(pk=self.line.pk).picked_qty
 
-    def scan(self, qty=1, scan_id=None, bin_location_id=None):
+    def scan(self, qty=1, scan_id=None, bin_location_id=None, product_barcode=None):
         return self.api.post(PICK_LINE, {
             'order_id': str(self.order.order_id),
             'line_id': str(self.line.line_id),
             'bin_location_id': bin_location_id or self.bin.location_id,
+            'product_barcode': product_barcode or self.sku.sku_code,
             'qty': qty,
             'scan_id': scan_id or str(uuid.uuid4()),
         }, format='json')
@@ -128,6 +133,24 @@ class PickScanTestBase(TestCase):
 
     def set_bin_qty(self, qty):
         StockBalance.objects.filter(pk=self.balance.pk).update(qty=qty)
+
+
+class PickLineOrderDetailsTests(PickScanTestBase):
+    def test_pick_lines_include_order_price_image_and_fulfilment_quantities(self):
+        self.sku.image_url = '/media/products/pick-test.webp'
+        self.sku.save(update_fields=['image_url'])
+        self.line.packed_qty = 1
+        self.line.save(update_fields=['packed_qty'])
+
+        response = self.api.get(PICK_LINES, {'order_id': str(self.order.order_id)})
+
+        self.assertEqual(200, response.status_code, response.data)
+        line = response.data['lines'][0]
+        self.assertEqual('/media/products/pick-test.webp', line['image_url'])
+        self.assertEqual('50.00', line['unit_price'])
+        self.assertEqual('100.00', line['line_total'])
+        self.assertEqual(1, line['packed_qty'])
+        self.assertEqual(0, line['shipped_qty'])
 
 
 class RepeatedScanTests(PickScanTestBase):
@@ -180,6 +203,24 @@ class RepeatedScanTests(PickScanTestBase):
 
 
 class BinVerificationTests(PickScanTestBase):
+
+    def test_scanning_the_sku_ean_is_accepted(self):
+        response = self.scan(product_barcode=self.sku.ean)
+
+        self.assertEqual(200, response.status_code, response.data)
+
+    def test_scanning_an_active_sku_barcode_is_accepted(self):
+        response = self.scan(product_barcode='PICK-EACH-1')
+
+        self.assertEqual(200, response.status_code, response.data)
+
+    def test_scanning_a_different_product_is_refused(self):
+        response = self.scan(product_barcode='OTHER-SKU')
+
+        self.assertEqual(409, response.status_code)
+        self.assertEqual(self.sku.sku_code, response.data['expected_sku_code'])
+        self.assertEqual(0, self.picked_qty())
+        self.assertEqual(10, self.bin_qty())
 
     def test_scanning_the_wrong_bin_is_refused(self):
         response = self.scan(bin_location_id=self.other_bin.location_id)
@@ -374,7 +415,8 @@ class ResolveBinTests(PickScanTestBase):
 
         self.assertEqual(200, response.status_code, response.data)
         self.assertEqual(
-            [{'location_id': self.bin.location_id, 'label': 'A1-R2-L3-P4'}],
+            [{'location_id': self.bin.location_id, 'label': 'A1-R2-L3-P4',
+              'location_type': 'BIN', 'container': 'PICK_FACE'}],
             response.data['matches'])
 
     def test_resolves_by_printed_coordinates(self):

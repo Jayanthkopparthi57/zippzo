@@ -25,7 +25,7 @@ from rest_framework.test import APIClient
 from bounded.catalog.models import InventoryLot, Sku
 from bounded.ds_ops.models import BinTransfer, PackTask, PickTask, TransferOrder
 from bounded.iam.models import User
-from bounded.network.models import Location, Site
+from bounded.network.models import EmployeeSiteAssignment, Location, Site
 from bounded.orders.models import Customer, CustomerAddress, CustomerOrder
 from bounded.supply.models import Asn, Grn, GrnLine, PutawayTask, QcInspection
 
@@ -222,6 +222,15 @@ class OutboundAttributionTests(TestCase):
         self.evil = _mk_user('attr-out-evil@zippzo.in')
         self.site = _mk_site('DS-ATTR-OUT')
         self.site2 = _mk_site('DS-ATTR-OUT-2')
+        # Field endpoints are fenced to the sites an operator is assigned to
+        # (bounded/ds_ops/access.py). These fixtures predate that rule, so the
+        # picker was resolved to "nowhere" and every detail route answered 404.
+        for site in (self.site, self.site2):
+            EmployeeSiteAssignment.objects.create(
+                employee=f'EMP-{self.picker.email}'[:20], user=self.picker,
+                site=site, mode='DARKHOUSE', role_at_site='OPERATOR',
+                is_primary=site is self.site, is_active=True,
+            )
         self.client.force_authenticate(user=self.picker)
 
         customer = Customer.objects.create(user=self.picker, name='Attr Cust')
@@ -232,6 +241,13 @@ class OutboundAttributionTests(TestCase):
             order_no='ORD-ATTR-1', customer=customer, site=self.site,
             address=address, status='PICKING', payment_method='COD',
             subtotal=Decimal('100.00'), grand_total=Decimal('100.00'))
+        # Bin transfers name real bin rows: perform_create resolves each bin and
+        # refuses unknown ones, which is the guard that stops a web client from
+        # moving stock in a bin it cannot see.
+        for bin_id in ('BIN-A', 'BIN-B'):
+            Location.objects.create(
+                location_id=bin_id, site=self.site, location_type='BIN',
+                barcode=f'BC-{bin_id}', container='RESERVE')
 
     def _mk_pick(self, **kwargs):
         base = dict(
@@ -382,7 +398,7 @@ class OutboundAttributionTests(TestCase):
         tid = r.data['transfer_id']
         r = self.client.patch(
             f'{API}/ds-ops/bin-transfers/{tid}/',
-            {'status': 'COMPLETED'}, format='json')
+            {'status': 'COMPLETED', 'scanned_items': {}}, format='json')
         self.assertEqual(r.status_code, 200)
         bt = BinTransfer.objects.get(transfer_id=tid)
         self.assertEqual(str(bt.completed_by), str(self.picker.user_id))

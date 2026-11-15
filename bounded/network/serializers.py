@@ -19,6 +19,10 @@ class LocationSerializer(serializers.ModelSerializer):
                   'barcode','qr_payload','capacity_qty','capacity_weight_g','capacity_volume_ml',
                   'is_sellable_bin','is_active','created_at']
         read_only_fields = ['created_at']
+        extra_kwargs = {
+            'barcode': {'allow_blank': True, 'required': False},
+            'qr_payload': {'allow_blank': True, 'required': False},
+        }
 
 class ZoneSerializer(serializers.ModelSerializer):
     class Meta:

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+﻿import React, { useCallback, useMemo, useState } from 'react';
 import {
   Undo2, AlertTriangle, Check, RefreshCw, Package, MapPin, X,
   ClipboardCheck,
@@ -6,10 +6,10 @@ import {
 import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
-import { useAuth } from '../../context/AuthContext';
 import { postApi } from '../../api/client';
-import { resolveBin } from '../../utils/bins';
-import { useDarkStore, useAsyncData, allReturns, siteOrderIds, num } from './useDarkStore';
+import {
+  useDarkStore, useAsyncData, allReturns, siteOrderIds, num, resolveStoreBin,
+} from './useDarkStore';
 
 /**
  * Take returned goods back into sellable stock, in the three steps they
@@ -60,7 +60,6 @@ function dispositionReason(r) {
 
 function Returns({ siteId, storeCode }) {
   const toast = useToast();
-  const { user } = useAuth();
 
   // Returns are scoped by intersecting with this site's orders (see siteOrderIds).
   const { data, error, loading, reload } = useAsyncData(
@@ -92,24 +91,28 @@ function Returns({ siteId, storeCode }) {
       return;
     }
     try {
-      const hit = await resolveBin(binText);
-      if (!hit) {
+      // `/network/locations` is admin-only, so a store operator calling it got
+      // a 403 and could never restock into a bin. This endpoint is fenced to
+      // the operator's own store instead.
+      const matches = await resolveStoreBin(storeCode, binText);
+      if (!matches.length) {
         setBin(null);
-        setBinError(`No bin matches "${binText}". Leave it empty to put the units back into site stock.`);
+        setBinError(`No bin at ${storeCode} matches "${binText}". Leave it empty to put the units back into site stock.`);
         return;
       }
-      if (hit.candidates) {
+      if (matches.length > 1) {
         setBin(null);
-        setBinError(`"${binText}" matched ${hit.candidates.length} bins. Scan a unique label.`);
+        setBinError(`"${binText}" matched ${matches.length} bins. Scan a unique label.`);
         return;
       }
+      const hit = matches[0];
       setBin({ location_id: hit.location_id, label: hit.label || hit.location_id });
       setBinError('');
     } catch (err) {
       setBin(null);
       setBinError(err?.message || 'Bin lookup failed.');
     }
-  }, [binText]);
+  }, [binText, storeCode]);
 
   const receive = async (r) => {
     setBusyFor(r.return_id);
@@ -162,7 +165,6 @@ function Returns({ siteId, storeCode }) {
           site_code: storeCode,
           // Empty bin is valid and means site-level stock rather than a pick face.
           bin: bin?.location_id || '',
-          actor_id: user?.user_id || '',
         }
       );
       if (res?.already_restocked) {
@@ -262,7 +264,7 @@ function Returns({ siteId, storeCode }) {
                 disabled={receiving}
                 data-testid={`ds-return-receive-${index}`}
               >
-                {receiving ? 'Receiving…' : 'Receive'}
+                {receiving ? 'Receiving€¦' : 'Receive'}
               </button>
             )}
             {awaitingInspection && (
@@ -304,13 +306,13 @@ function Returns({ siteId, storeCode }) {
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div>
-            <div className="wf-panel__title"><Undo2 size={17} /> Returns at this store</div>
+            <div className="wf-peek"> Returns at this store</div>
             <div className="wf-panel__hint">
-              {pending.length} awaiting action · {settled.length} settled · <AlertTriangle size={14} />
+              {pending.length} awaiting action · {settled.length} settled ·
             </div>
           </div>
           <div className="wf-panel__actions">
-            {loading && <span className="scan-feedback scan-feedback--hint">Loading…</span>}
+            {loading && <span className="scan-feedback scan-feedback--hint">Loading€¦</span>}
             <button className="btn-secondary" onClick={() => reload()} disabled={loading} data-testid="ds-return-refresh">
               <RefreshCw size={14} /> Refresh
             </button>
@@ -392,7 +394,7 @@ function Returns({ siteId, storeCode }) {
         <div className="wf-panel" data-testid="ds-return-work">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title">
+              <div className="wf-peek">
                 Inspecting return <span className="mono-num">{selected.return_id.slice(0, 8)}</span>
               </div>
               <div className="wf-panel__hint">
@@ -458,7 +460,7 @@ function Returns({ siteId, storeCode }) {
               disabled={busy}
               data-testid="ds-return-qc-confirm"
             >
-              {busy ? 'Recording…' : 'Record inspection'}
+              {busy ? 'Recording€¦' : 'Record inspection'}
             </button>
           </div>
         </div>
@@ -468,7 +470,7 @@ function Returns({ siteId, storeCode }) {
         <div className="wf-panel" data-testid="ds-return-work">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title">
+              <div className="wf-peek">
                 Restocking return <span className="mono-num">{selected.return_id.slice(0, 8)}</span>
               </div>
               <div className="wf-panel__hint">
@@ -543,7 +545,7 @@ function Returns({ siteId, storeCode }) {
               disabled={busy || !!binError || (Boolean(binText.trim()) && !bin)}
               data-testid="ds-return-confirm"
             >
-              {busy ? 'Restocking…' : 'Confirm restock'}
+              {busy ? 'Restocking€¦' : 'Confirm restock'}
             </button>
           </div>
         </div>

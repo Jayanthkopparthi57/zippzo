@@ -17,7 +17,7 @@ services:
       cd frontend && npm ci && npm run build && cd .. &&
       python manage.py collectstatic --noinput &&
       python manage.py migrate
-    startCommand: gunicorn zippzo_wms.wsgi:application --bind 0.0.0.0:$PORT
+    startCommand: daphne -b 0.0.0.0 -p $PORT zippzo_wms.asgi:application
     env:
       # settings.py refuses to boot production with a placeholder secret or a
       # missing ALLOWED_HOSTS, so these are load-bearing, not decorative.
@@ -67,6 +67,53 @@ services:
         deploy: true
     envGroups:
       - zippzo-production
+  - type: worker
+    name: zippzo-outbox-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python manage.py publish_outbox --loop --interval 1
+    env:
+      - key: REDIS_URL
+        value: redis://internal-zippzo-redis:6379/0
+    envGroups:
+      - zippzo-production
+  # The pending pick queue is a scheduled job, not a button. Checkout assigns a
+  # picker when one is free and leaves the order queued when none is; this drains
+  # that queue every minute. Without it the queue only moved when a manager
+  # pressed "assign" in the console, so an order placed at a busy moment could
+  # wait indefinitely. `recheck_pick_queue` is idempotent and assigns one order
+  # per store per pass, which keeps the load balanced.
+  - type: cron
+    name: zippzo-pick-queue
+    runtime: python
+    schedule: "* * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python manage.py recheck_pick_queue
+    env:
+      - key: REDIS_URL
+        value: redis://internal-zippzo-redis:6379/0
+    envGroups:
+      - zippzo-production
+    regions:
+      - ap-south-1
+  # Abandoned Cashfree checkouts hold stock. The command reconciles each
+  # expired attempt with the provider (a payment made just before expiry is
+  # confirmed, not released) and returns the held inventory when it really did
+  # expire. The command has always said "run from cron every 5 minutes", but no
+  # cron existed, so a crashed checkout could hold a store's inventory forever.
+  - type: cron
+    name: zippzo-cashfree-expiry
+    runtime: python
+    schedule: "*/5 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python manage.py expire_cashfree_orders
+    env:
+      - key: REDIS_URL
+        value: redis://internal-zippzo-redis:6379/0
+    envGroups:
+      - zippzo-production
+    regions:
+      - ap-south-1
   - type: redis
     name: zippzo-redis
     plan: essential

@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
 from rest_framework.views import APIView
 from django.db import models
 from django.db.models import Count, Sum
+import json
 from django.utils import timezone
 from bounded.orders.models import CustomerOrder
 from bounded.inventory.models import LpnMaster
@@ -67,6 +68,52 @@ class LocationViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated()]
         return [IsAdminUser()]
 
+    def perform_create(self, serializer):
+        site = serializer.validated_data.get('site')
+        barcode = serializer.validated_data.get('barcode') or ''
+        if not barcode.strip():
+            seq = Location.objects.filter(site=site).count() + 1
+            barcode = f'BIN-{site.code}-{seq:04d}'
+            serializer.validated_data['barcode'] = barcode
+        qr_payload = serializer.validated_data.get('qr_payload') or ''
+        if not qr_payload.strip():
+            zone = serializer.validated_data.get('zone')
+            details = {
+                'location_id': serializer.validated_data.get('location_id') or '',
+                'site': site.code if site else '',
+                'location_type': serializer.validated_data.get('location_type') or 'BIN',
+                'container': serializer.validated_data.get('container') or 'PICK_FACE',
+                'zone': zone.code if zone else None,
+                'aisle': serializer.validated_data.get('aisle') or '',
+                'rack': serializer.validated_data.get('rack') or '',
+                'level': serializer.validated_data.get('level') or '',
+                'position': serializer.validated_data.get('position') or '',
+                'barcode': barcode,
+            }
+            serializer.validated_data['qr_payload'] = json.dumps(details, separators=(',', ':'))
+        serializer.save()
+
+    def perform_update(self, serializer):
+        site = serializer.instance.site
+        qr_payload = serializer.validated_data.get('qr_payload', serializer.instance.qr_payload) or ''
+        barcode = serializer.validated_data.get('barcode', serializer.instance.barcode) or ''
+        if not qr_payload.strip():
+            zone = serializer.validated_data.get('zone', serializer.instance.zone)
+            details = {
+                'location_id': serializer.validated_data.get('location_id', serializer.instance.location_id) or '',
+                'site': site.code if site else '',
+                'location_type': serializer.validated_data.get('location_type', serializer.instance.location_type) or 'BIN',
+                'container': serializer.validated_data.get('container', serializer.instance.container) or 'PICK_FACE',
+                'zone': zone.code if zone else None,
+                'aisle': serializer.validated_data.get('aisle', serializer.instance.aisle) or '',
+                'rack': serializer.validated_data.get('rack', serializer.instance.rack) or '',
+                'level': serializer.validated_data.get('level', serializer.instance.level) or '',
+                'position': serializer.validated_data.get('position', serializer.instance.position) or '',
+                'barcode': barcode,
+            }
+            serializer.validated_data['qr_payload'] = json.dumps(details, separators=(',', ':'))
+        serializer.save()
+
 
 class ZoneViewSet(viewsets.ModelViewSet):
     queryset = Zone.objects.select_related('site').all()
@@ -123,6 +170,13 @@ class StaffShiftViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # A shift always starts OPEN and is stamped server-side.
+        from bounded.ds_ops.access import require_site_access, is_superuser
+        attrs = serializer.validated_data
+        require_site_access(self.request.user, attrs['site'].code)
+        requested_user = attrs.get('user', self.request.user)
+        if not is_superuser(self.request.user) and requested_user != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('You can only open a shift for your own account.')
         serializer.save(status='OPEN')
 
     @action(detail=False, methods=['post'])
@@ -136,6 +190,11 @@ class StaffShiftViewSet(viewsets.ModelViewSet):
         site = Site.objects.filter(code=site_code).first()
         if site is None:
             return Response({'error': f'Unknown site {site_code}'}, status=404)
+
+        from bounded.ds_ops.access import require_site_access, is_superuser
+        require_site_access(request.user, site.code)
+        if not is_superuser(request.user) and str(user_id) != str(request.user.user_id):
+            return Response({'error': 'You can only open a shift for your own account.'}, status=403)
 
         existing = StaffShift.objects.filter(user_id=user_id, status='OPEN').first()
         if existing:
@@ -164,6 +223,9 @@ class StaffShiftViewSet(viewsets.ModelViewSet):
     def close(self, request, pk=None):
         """Clock out. Idempotent: closing a closed shift is a no-op."""
         shift = self.get_object()
+        from bounded.ds_ops.access import is_superuser
+        if not is_superuser(request.user) and shift.user_id != request.user.user_id:
+            return Response({'error': 'You can only close your own shift.'}, status=403)
         if shift.status == 'CLOSED':
             return Response({
                 'already_closed': True,
@@ -279,22 +341,48 @@ class CityDeliveryConfigViewSet(viewsets.ModelViewSet):
 
 
 class NetworkOverviewView(APIView):
-    """Facility directory for the login screen.
+    """Facility directory for the authenticated user.
 
-    Must stay authenticated: it exposes every site code, name and address, so
-    leaving it open published the whole estate to anonymous callers.
+    This is the only non-admin-readable source of the site list: the header
+    facility picker and the customer storefront both read it, and
+    /network/sites/ stays admin-only. Visibility therefore has to follow the
+    caller's role rather than one blanket rule:
 
-    This is also the only non-admin-readable source of the dark store list.
-    /network/sites/ stays admin-only, so the dark store console must resolve
-    its store from here or every operator gets a 403 and no store at all.
+      * SUPER_ADMIN / OPS_MANAGER run the network, so they see every site and
+        can pick the dark store whose store-ops sections they need.
+      * CUSTOMER sees the stores it can order from. A shopper has no employee
+        site assignment, and without this the storefront would have no store to
+        ask about and would sit on "Loading the shelf" forever.
+      * Everyone else (warehouse staff, riders, senders) sees only the sites
+        they are actively assigned to. No assignment means no sites, which the
+        operational endpoints already enforce with a 403.
     """
     permission_classes = [IsAuthenticated]
 
+    ESTATE_ROLES = {'SUPER_ADMIN', 'OPS_MANAGER'}
+
     def get(self, request):
-        sites = Site.objects.all()
+        user = getattr(request, 'user', None)
+        role = getattr(user, 'role', None)
+        if role in self.ESTATE_ROLES:
+            sites = Site.objects.all()
+        elif role == 'CUSTOMER':
+            sites = Site.objects.filter(
+                site_type='DS', status='ACTIVE', is_accepting_orders=True,
+            )
+        else:
+            from bounded.ds_ops.access import operator_site_codes
+            codes = operator_site_codes(user)
+            if codes:
+                sites = Site.objects.filter(code__in=codes)
+            else:
+                sites = Site.objects.none()
+
         warehouses = list(sites.filter(site_type='MH').values('site_id', 'code', 'name', 'site_type', 'status'))
-        dark_stores = list(sites.filter(site_type='DS').values('site_id', 'code', 'name', 'site_type', 'status'))
-        all_facilities = list(sites.values('site_id', 'code', 'name', 'site_type', 'status', 'address'))
+        dark_stores = list(sites.filter(site_type='DS').values(
+            'site_id', 'code', 'name', 'site_type', 'status', 'geo_lat', 'geo_lng'))
+        all_facilities = list(sites.values(
+            'site_id', 'code', 'name', 'site_type', 'status', 'address', 'geo_lat', 'geo_lng'))
         return Response({
             'warehouses': warehouses,
             'dark_stores': dark_stores,

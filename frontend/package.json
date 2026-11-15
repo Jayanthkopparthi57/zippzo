@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:operations-app": "vite --open /operations-app.html",
+    "dev:consumer-app": "vite --open /consumer-app.html",
     "dev:shopper": "vite --open /shopper.html",
     "dev:rider": "vite --open /rider.html",
     "build": "vite build",
@@ -12,11 +14,17 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "android:store": "node scripts/build-android.mjs store",
+    "android:wms": "node scripts/build-android.mjs store",
+    "android:darkstore": "node scripts/build-android.mjs darkstore",
     "android:shopper": "node scripts/build-android.mjs shopper",
     "android:rider": "node scripts/build-android.mjs rider",
-    "android:all": "node scripts/build-android.mjs"
+    "android:all": "node scripts/build-android.mjs",
+    "ios:sync": "node scripts/build-ios.mjs sync",
+    "ios:darkstore:sync": "node scripts/build-ios.mjs sync darkstore",
+    "ios:build": "node scripts/build-ios.mjs build"
   },
   "dependencies": {
+    "@capacitor/ios": "^8.5.3",
     "@zxing/browser": "^0.2.1",
     "@zxing/library": "^0.23.0",
     "lucide-react": "^1.43.0",

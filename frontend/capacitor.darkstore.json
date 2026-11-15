@@ -1,0 +1,11 @@
+{
+  "appId": "com.zippzo.darkstore",
+  "appName": "Zippzo Dark Store",
+  "webDir": "dist-native",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

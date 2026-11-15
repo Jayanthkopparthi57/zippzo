@@ -40,9 +40,9 @@
 .scan-input {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 48px;
-  padding: 0 14px;
-  font-size: 17px;
+  min-height: 30px;
+  padding: 0 8px 0 28px;
+  font-size: 12px;
   font-weight: 600;
   font-family: var(--font-mono, ui-monospace, monospace);
   letter-spacing: 0.02em;
@@ -77,11 +77,11 @@
 .scan-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   flex-shrink: 0;
-  min-height: 48px;
-  padding: 0 18px;
-  font-size: 13px;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
   color: #fff;
@@ -487,6 +487,29 @@
   font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+/* Pure-table look: panel titles demote to a small caption strip. The text
+   stays in the DOM (tests assert it), it just reads as a table caption. */
+.wf-peek {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+/* Small buttons inside panel action rows. */
+.wf-panel__actions button,
+.wf-panel__header button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  gap: 4px;
+}
+.wf-panel__actions svg,
+.wf-panel__header svg {
+  width: 13px;
+  height: 13px;
 }
 
 .wf-panel__hint { font-size: 12px; color: var(--text-muted); margin-top: 2px; }

@@ -1,9 +1,13 @@
+import json
+
+from django.db import transaction
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import Customer, CustomerAddress, Cart, CartLine, CustomerOrder, CustomerOrderLine, OrderStatusHistory
+from .models import (Customer, CustomerAddress, Cart, CartLine, CustomerOrder,
+                     CustomerOrderLine, OrderStatusHistory, PaymentAttempt)
 from .serializers import CustomerSerializer, CustomerAddressSerializer, CartSerializer, CartLineSerializer, CustomerOrderSerializer, CustomerOrderLineSerializer, OrderStatusHistorySerializer
 
 # ── live delivery tracking ────────────────────────────────────────────────
@@ -161,6 +165,48 @@ class CustomerViewSet(viewsets.ModelViewSet):
                 'customer': 'This login already has a shopper profile.'})
 
         serializer.save(user=user)
+
+
+class ShopperProfileView(APIView):
+    """Read/update only the signed-in shopper's display name and phone."""
+    permission_classes = [IsAuthenticated]
+
+    def _profile(self, request):
+        user = request.user
+        if getattr(user, 'role', '') not in ('CUSTOMER', 'SENDER'):
+            return None, Response({'error': 'A shopper account is required.'}, status=403)
+        customer, _ = Customer.objects.get_or_create(
+            user=user, defaults={'name': user.full_name or ''})
+        return customer, None
+
+    def get(self, request):
+        customer, error = self._profile(request)
+        if error:
+            return error
+        return Response({'customer_id': str(customer.customer_id),
+                         'name': customer.name or request.user.full_name,
+                         'phone': request.user.phone,
+                         'email': request.user.email})
+
+    def patch(self, request):
+        customer, error = self._profile(request)
+        if error:
+            return error
+        name = str(request.data.get('name', customer.name)).strip()[:80]
+        phone = ''.join(ch for ch in str(request.data.get('phone', request.user.phone))
+                        if ch.isdigit())
+        if not name:
+            return Response({'error': 'Your name is required.'}, status=400)
+        if len(phone) < 10 or len(phone) > 15:
+            return Response({'error': 'Enter a valid mobile number.'}, status=400)
+        customer.name = name
+        customer.save(update_fields=['name'])
+        request.user.full_name = name
+        request.user.phone = phone
+        request.user.save(update_fields=['full_name', 'phone', 'updated_at'])
+        return Response({'customer_id': str(customer.customer_id),
+                         'name': name, 'phone': phone,
+                         'email': request.user.email})
 
 
 class CustomerAddressViewSet(viewsets.ModelViewSet):
@@ -326,9 +372,9 @@ class CustomerOrderViewSet(viewsets.ModelViewSet):
             return self.queryset.none()
 
         from bounded.iam.models import User
-        from bounded.ds_ops.access import is_superuser
+        from bounded.ds_ops.access import is_superuser, operator_site_codes
 
-        if getattr(user, 'role', '') in ('ADMIN', 'SUPER_ADMIN') or is_superuser(user):
+        if getattr(user, 'role', '') in ('ADMIN', 'SUPER_ADMIN', 'OPS_MANAGER') or is_superuser(user):
             return self.queryset
 
         qs = self.queryset
@@ -350,11 +396,16 @@ class CustomerOrderViewSet(viewsets.ModelViewSet):
             # orders to the other half of this branch.
             return (carrying | qs.filter(customer=customer)).distinct()
 
+        # An operator assigned to one or more stores works their queue from the
+        # dark-store pick screen. Without this they fell through to "no customer
+        # record, no orders", so every store queue was empty for every picker.
+        codes = operator_site_codes(user)
+        if codes:
+            return qs.filter(site__code__in=codes)
+
         if customer is None:
-            # Not a shopper. Staff reach their orders through the dark-store
-            # endpoints, which are fenced by site assignment, so an operator
-            # with no customer record gets an empty list rather than the
-            # network.
+            # Not a shopper, and not assigned to any store. They get an empty
+            # list rather than the network.
             return qs.none()
         return qs.filter(customer=customer)
 
@@ -617,6 +668,18 @@ class CheckoutView(APIView):
                     {'error': 'Add a delivery address to your account first.'},
                     status=400)
 
+        if (site.site_type not in ('DS', 'DARK_STORE') or site.status != 'ACTIVE'
+                or not site.is_accepting_orders):
+            return Response(
+                {'error': 'This dark store is not active and accepting customer orders.'},
+                status=409)
+        from bounded.routing.models import DeliveryArea
+        if not DeliveryArea.objects.filter(
+                site=site, pincode=address.pincode, is_active=True).exists():
+            return Response(
+                {'error': f'{site.name or site.code} does not serve pincode {address.pincode}.'},
+                status=409)
+
         cart = None
         if data.get('cart_id'):
             from .models import Cart
@@ -635,11 +698,12 @@ class CheckoutView(APIView):
                     {'error': f'That basket is for {cart.site.code}, not {site.code}.'},
                     status=400)
 
+        payment_method = data.get('payment_method') or 'COD'
         try:
             result = place_order(
                 customer=customer, site=site, address=address,
                 items=data.get('items'), cart=cart,
-                payment_method=data.get('payment_method') or 'COD',
+                payment_method=payment_method,
                 actor=user,
                 coupon_code=data.get('coupon_code') or '',
                 delivery_slot=data.get('delivery_slot') or '',
@@ -647,7 +711,150 @@ class CheckoutView(APIView):
         except CheckoutError as exc:
             return Response({'error': exc.message, **exc.detail}, status=exc.status)
 
+        if payment_method == 'CASHFREE':
+            from .payments import CashfreeError, abort_unstarted_payment, create_attempt
+            try:
+                attempt = create_attempt(result['order'])
+            except CashfreeError as exc:
+                abort_unstarted_payment(result['order'])
+                return Response({'error': str(exc)}, status=503)
+            return Response({
+                'success': True,
+                **result['summary'],
+                'payment_required': True,
+                'cashfree': {
+                    'order_id': attempt.provider_order_id,
+                    'payment_session_id': attempt.payment_session_id,
+                    'environment': __import__('django.conf', fromlist=['settings']).settings.CASHFREE_ENV,
+                },
+            }, status=201)
+
         return Response({'success': True, **result['summary']}, status=201)
+
+
+class CashfreePaymentStatusView(APIView):
+    """Refresh a shopper's own Cashfree order using server credentials."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, order_id):
+        order = CustomerOrder.objects.filter(
+            order_id=order_id, customer__user_id=request.user.user_id,
+        ).first()
+        if order is None:
+            return Response({'error': 'Order not found.'}, status=404)
+        attempt = order.payment_attempts.order_by('-created_at').first()
+        if attempt is None:
+            return Response({'error': 'No online payment attempt exists for this order.'}, status=404)
+        if attempt.status == 'PENDING':
+            from .payments import CashfreeError, sync_attempt
+            try:
+                order = sync_attempt(attempt)
+            except CashfreeError as exc:
+                return Response({'error': str(exc)}, status=503)
+        attempt.refresh_from_db()
+        return Response({
+            'order_id': str(order.order_id), 'order_no': order.order_no,
+            'order_status': order.status, 'payment_status': order.payment_status,
+            'attempt_status': attempt.status,
+        })
+
+
+class CashfreeWebhookView(APIView):
+    """Cashfree server webhook. Signature is verified over the exact raw body."""
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .payments import (CashfreeError, sync_attempt,
+                               verify_doorstep_attempt, verify_webhook)
+
+        raw_body = request.body
+        if not verify_webhook(
+                raw_body, request.headers.get('x-webhook-timestamp', ''),
+                request.headers.get('x-webhook-signature', '')):
+            return Response({'error': 'Invalid webhook signature.'}, status=401)
+        try:
+            payload = json.loads(raw_body)
+        except (ValueError, TypeError):
+            return Response({'error': 'Malformed Cashfree webhook.'}, status=400)
+
+        # Refund events carry no order object of their own; settle them before
+        # the payment branch starts insisting on one.
+        data = payload.get('data') or {}
+        if (str(payload.get('type') or '').upper() == 'REFUND_STATUS_CHANGED'
+                or 'refund' in data):
+            return self._refund_event(payload)
+
+        try:
+            provider_order_id = payload['data']['order']['order_id']
+            payment_id = payload.get('data', {}).get('payment', {}).get('cf_payment_id', '')
+        except (ValueError, KeyError, TypeError):
+            return Response({'error': 'Malformed Cashfree webhook.'}, status=400)
+        attempt = PaymentAttempt.objects.filter(
+            provider_order_id=provider_order_id,
+        ).first()
+        if attempt is None:
+            return Response({'error': 'Unknown payment order.'}, status=404)
+        try:
+            # A COD order paid at the door is not waiting to be confirmed: it
+            # is already being picked, and its `payment_status` still says
+            # PENDING while the cash obligation is live. `sync_attempt` only
+            # promotes a PAYMENT_PENDING order, so it would mark the attempt
+            # PAID and leave the rider screen asking for cash Cashfree has
+            # already taken. Route the door-step capture through the verifier
+            # that knows how to settle it, whatever the phone is doing.
+            if (attempt.provider_order_id.startswith('zp_cod_')
+                    or attempt.order.payment_method == 'COD'):
+                verify_doorstep_attempt(attempt, payment_id=payment_id)
+            else:
+                sync_attempt(attempt, payment_id=payment_id)
+        except CashfreeError:
+            # Ask Cashfree to retry transient provider verification failures.
+            return Response({'error': 'Payment verification is temporarily unavailable.'}, status=503)
+        return Response({'received': True})
+
+    def _refund_event(self, payload):
+        """Apply one REFUND_STATUS_CHANGED event to the local refund row."""
+        from django.utils import timezone
+
+        from bounded.money.models import Payment, Refund
+
+        data = payload.get('data') or {}
+        refund_data = data.get('refund') or {}
+        provider_refund_id = str(refund_data.get('refund_id') or '').strip()
+        gateway_refund_id = str(refund_data.get('cf_refund_id') or '').strip()
+        provider_status = str(refund_data.get('refund_status') or '').upper()
+
+        refund = None
+        if provider_refund_id:
+            try:
+                refund = Refund.objects.filter(refund_id=provider_refund_id).first()
+            except (ValueError, TypeError):
+                refund = None
+        if refund is None and gateway_refund_id:
+            refund = Refund.objects.filter(
+                gateway_refund_id=gateway_refund_id).first()
+        if refund is None:
+            return Response({'error': 'Unknown refund.'}, status=404)
+
+        # PENDING/ONHOLD mean the money is on its way, not that it landed.
+        status_map = {
+            'SUCCESS': 'SUCCESS', 'PROCESSED': 'SUCCESS',
+            'PENDING': 'PROCESSED', 'ONHOLD': 'PROCESSED',
+            'FAILED': 'FAILED', 'CANCELLED': 'FAILED',
+        }
+        refund.status = status_map.get(provider_status, refund.status)
+        if gateway_refund_id:
+            refund.gateway_refund_id = gateway_refund_id[:80]
+        refund.completed_at = (
+            timezone.now() if refund.status == 'SUCCESS'
+            else refund.completed_at)
+        refund.save(update_fields=[
+            'status', 'gateway_refund_id', 'completed_at'])
+        if (refund.status == 'SUCCESS'
+                and refund.amount >= refund.payment.amount):
+            Payment.objects.filter(pk=refund.payment_id).update(status='REFUNDED')
+        return Response({'received': True, 'refund_status': refund.status})
 
 
 class StorefrontView(APIView):
@@ -662,7 +869,8 @@ class StorefrontView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from bounded.catalog.models import Listing, Sku
+        from bounded.catalog.models import Listing, Sku, StoreProductProfile
+        from bounded.catalog.promotions import combo_offer_quotes
         from bounded.ds_ops.models import OrderLineAllocation
         from bounded.inventory.models import StockBalance
         from bounded.network.models import Site
@@ -674,11 +882,26 @@ class StorefrontView(APIView):
         site = Site.objects.filter(code=site_code).first()
         if site is None:
             return Response({'error': f'No store with code {site_code!r}.'}, status=404)
+        if (site.site_type not in ('DS', 'DARK_STORE') or site.status != 'ACTIVE'
+                or not site.is_accepting_orders):
+            return Response(
+                {'error': 'This dark store is not active and accepting customer orders.'},
+                status=409)
+        pincode = (request.query_params.get('pincode') or '').strip()
+        if not (len(pincode) == 6 and pincode.isdigit()):
+            return Response({'error': 'A valid delivery pincode is required.'}, status=400)
+        from bounded.routing.models import DeliveryArea
+        if not DeliveryArea.objects.filter(
+                site=site, pincode=pincode, is_active=True).exists():
+            return Response(
+                {'error': f'{site.name or site.code} does not serve pincode {pincode}.'},
+                status=409)
 
         stock = {
             row['sku_id']: row
             for row in StockBalance.objects
-            .filter(site=site, container='BIN', qty__gt=0)
+            .filter(site=site, container='BIN', qty__gt=0,
+                    lot__bucket='Good')
             .values('sku_id').annotate(on_hand=Sum('qty'))
         }
         # `on_hand` is what is physically shelved, which includes units a
@@ -691,7 +914,7 @@ class StorefrontView(APIView):
         held = {
             row['line__sku_id']: row['held']
             for row in OrderLineAllocation.objects
-            .filter(site=site)
+            .filter(site=site, line__lot__bucket='Good')
             .exclude(status='RELEASED')
             .values('line__sku_id')
             .annotate(held=Sum(Case(
@@ -705,6 +928,18 @@ class StorefrontView(APIView):
         listings = Listing.objects.filter(
             site=site, price__gt=0, is_listed=True,
             is_available=True).select_related('sku', 'sku__category')
+        listing_rows = list(listings)
+        profiles = {
+            str(row.sku_id): row
+            for row in StoreProductProfile.objects.filter(site=site, sku_id__in=[row.sku_id for row in listing_rows])
+            .select_related('sku', 'category')
+        }
+        combo_prices = {
+            str(listing.sku_id): listing.price
+            for listing in listing_rows
+            if available.get(listing.sku_id, 0) > 0
+            and listing.sku.status == 'ACTIVE'
+        }
 
         query = (request.query_params.get('q') or '').strip().lower()
 
@@ -712,8 +947,13 @@ class StorefrontView(APIView):
             if not query:
                 return True
             sku = l.sku
+            profile = profiles.get(str(l.sku_id))
             hay = ' '.join(filter(None, [
+                profile.display_name if profile else '',
+                profile.display_brand if profile else '',
                 sku.name, sku.brand, sku.pack_size, sku.sku_code,
+                profile.sub_category if profile else '',
+                profile.category.name if profile and profile.category_id else '',
                 sku.sub_category,
                 sku.category.name if sku.category else '',
             ])).lower()
@@ -723,27 +963,51 @@ class StorefrontView(APIView):
             {
                 'sku_id': str(l.sku_id),
                 'sku_code': l.sku.sku_code,
-                'name': l.sku.name,
-                'brand': l.sku.brand,
+                'name': profiles.get(str(l.sku_id)).display_name if profiles.get(str(l.sku_id)) and profiles.get(str(l.sku_id)).display_name else l.sku.name,
+                'brand': profiles.get(str(l.sku_id)).display_brand if profiles.get(str(l.sku_id)) and profiles.get(str(l.sku_id)).display_brand else l.sku.brand,
                 'pack_size': l.sku.pack_size,
                 'weight_g': l.sku.weight_g,
-                'image': l.sku.image_url or '',
-                # The shelf groups itself by this. `sub_category` is what the
-                # cataloguer typed against the SKU; the category row is the
-                # fallback when they left it blank.
-                'category': l.sku.sub_category
-                or (l.sku.category.name if l.sku.category else ''),
+                'description': l.sku.description,
+                'ingredients': l.sku.ingredients,
+                'allergens': l.sku.allergens,
+                'storage_notes': l.sku.storage_notes,
+                'nutrition_facts': l.sku.nutrition_facts,
+                'is_featured': bool(profiles.get(str(l.sku_id)) and profiles.get(str(l.sku_id)).is_featured),
+                'sort_order': int(profiles.get(str(l.sku_id)).sort_order) if profiles.get(str(l.sku_id)) else 0,
+                'images': ([url for url in (profiles.get(str(l.sku_id)).images if profiles.get(str(l.sku_id)) else []) if url][:3] or ([l.sku.image_url] if l.sku.image_url else [])),
+                'image': ([url for url in (profiles.get(str(l.sku_id)).images if profiles.get(str(l.sku_id)) else []) if url][:3] or [l.sku.image_url])[0] if ([url for url in (profiles.get(str(l.sku_id)).images if profiles.get(str(l.sku_id)) else []) if url][:3] or [l.sku.image_url]) else '',
+                # The store shelf groups itself by this. A store profile wins
+                # over the catalog SKU so a dark store can present its own
+                # taxonomy; otherwise the SKU sub-category is the fallback.
+                'category': (
+                    profiles.get(str(l.sku_id)).sub_category
+                    if profiles.get(str(l.sku_id)) and profiles.get(str(l.sku_id)).sub_category
+                    else profiles.get(str(l.sku_id)).category.name
+                    if profiles.get(str(l.sku_id)) and profiles.get(str(l.sku_id)).category_id
+                    else l.sku.sub_category
+                    or (l.sku.category.name if l.sku.category else '')
+                ),
                 'price': str(l.price),
-                'mrp': str(l.sku.mrp),
+                'mrp': str(l.mrp),
                 'on_offer': l.mrp > l.price,
                 'available': available.get(l.sku_id, 0),
             }
-            for l in listings
+            for l in listing_rows
             if available.get(l.sku_id, 0) > 0
             and l.sku.status == 'ACTIVE'
             and matches(l)
         ]
-        items.sort(key=lambda i: i['name'])
+        items.sort(key=lambda i: (not i.get('is_featured'), i.get('sort_order', 0), i['name']))
+        banners = [
+            {
+                'title': i['name'],
+                'subtitle': i.get('category'),
+                'image': i.get('image'),
+                'sku_id': i['sku_id'],
+            }
+            for i in items if i.get('is_featured') and i.get('image')
+        ]
+        combo_offers = combo_offer_quotes(site, combo_prices, available)
 
         # Delivery is priced by the store's own rule, and the same rule can
         # waive the fee above a basket threshold. The shelf also answers the
@@ -753,20 +1017,20 @@ class StorefrontView(APIView):
         from bounded.routing.models import DeliveryArea
 
         rule = DeliveryPricingRule.objects.filter(site=site, is_active=True).first()
-        pincode = (request.query_params.get('pincode') or '').strip()
         serviceable = True
-        if pincode:
-            serviceable = DeliveryArea.covers(site, pincode)
 
         return Response({
             'site': site.code,
             'name': site.name,
             'delivery_fee': str(resolve_delivery_fee(site)),
+            'promise_minutes': int(rule.promise_minutes) if rule and getattr(rule, 'promise_minutes', None) else 15,
             'free_above': str(rule.free_above) if rule else '0.00',
             'delivery_configured': DeliveryArea.configured(site),
             'pincode': pincode,
             'serviceable': serviceable,
             'items': items,
+            'banners': banners,
+            'combo_offers': combo_offers,
         })
 
 
@@ -779,9 +1043,10 @@ class OrderCancelView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, order_id):
         from django.utils import timezone
-        order = CustomerOrder.objects.filter(
+        order = CustomerOrder.objects.select_for_update().filter(
             order_id=order_id,
             customer__user_id=request.user.user_id).first()
         if order is None:
@@ -792,16 +1057,38 @@ class OrderCancelView(APIView):
                           'longer be cancelled here. Report a problem after '
                           'delivery instead.'},
                 status=409)
+        if order.status == 'PAYMENT_PENDING':
+            return Response(
+                {'error': 'Online payment is still active. Check its status; '
+                          'unpaid orders expire automatically.'}, status=409)
+        if order.payment_method == 'CASHFREE' and order.payment_status == 'CAPTURED':
+            return Response(
+                {'error': 'This online order has already been paid. Contact support '
+                          'to cancel it and arrange the refund.'}, status=409)
+        previous = order.status
         order.status = 'CANCELLED'
         order.cancel_actor = 'CUSTOMER'
         order.cancel_reason = (request.data.get('reason') or 'Cancelled by customer.')[:500]
         order.cancelled_at = timezone.now()
         order.save(update_fields=['status', 'cancel_actor', 'cancel_reason',
                                   'cancelled_at'])
+        from bounded.ds_ops.allocation import release_order_allocations
+        release_order_allocations(order)
         OrderStatusHistory.objects.create(
-            order=order, from_status='CONFIRMED', to_status='CANCELLED',
+            order=order, from_status=previous, to_status='CANCELLED',
             actor_type='CUSTOMER', actor_id=request.user.user_id,
             remark=order.cancel_reason,
+        )
+        from bounded.outbox.services import enqueue_event
+        enqueue_event(
+            aggregate_type='CustomerOrder', aggregate_id=order.order_id,
+            event_type='order.cancelled',
+            payload_json={
+                'order_id': str(order.order_id), 'order_no': order.order_no,
+                'site_code': order.site.code,
+                'customer_user_id': str(request.user.user_id),
+                'reason': order.cancel_reason,
+            },
         )
         return Response({'success': True, 'order_no': order.order_no,
                          'status': order.status})

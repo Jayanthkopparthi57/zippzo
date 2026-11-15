@@ -21,6 +21,16 @@ function shortId(v) {
   return v ? String(v).slice(0, 8) : '—';
 }
 
+function roleCanDoTask(role, kind) {
+  const normalized = String(role || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!normalized) return false;
+  if (normalized === 'OPERATOR' || normalized === 'STOREOPERATOR' || normalized === 'WAREHOUSEOPERATOR') return true;
+  if (kind === 'pick') return normalized.includes('PICK');
+  if (kind === 'pack') return normalized.includes('PACK');
+  if (kind === 'putaway') return normalized.includes('PUTAWAY') || normalized.includes('RECEIVING');
+  return false;
+}
+
 /**
  * Merge the four real work feeds into one assignment row set.
  *
@@ -34,6 +44,7 @@ function toAssignments(putaways, picks, packs, deliveries) {
 
   putaways.forEach((t) => push({
     fullId: String(t.task_id), kind: 'putaway',
+    siteCode: t.site_code,
     taskId: shortId(t.task_id),
     type: 'Putaway',
     refDoc: shortId(t.grn_line),
@@ -46,6 +57,7 @@ function toAssignments(putaways, picks, packs, deliveries) {
   }));
   picks.forEach((t) => push({
     fullId: String(t.id), kind: 'pick',
+    siteCode: t.site_code,
     taskId: shortId(t.id),
     type: 'Picking',
     refDoc: shortId(t.picklist_id),
@@ -58,6 +70,7 @@ function toAssignments(putaways, picks, packs, deliveries) {
   }));
   packs.forEach((t) => push({
     fullId: String(t.id), kind: 'pack',
+    siteCode: t.site_code,
     taskId: shortId(t.id),
     type: 'Packing',
     refDoc: t.lpn || shortId(t.packlist_id),
@@ -93,6 +106,7 @@ export default function EmployeeAssignmentView({ initialTab = 'roster' }) {
   const [activity, setActivity] = useState(null);
   const [shifts, setShifts] = useState([]);
   const [siteOf, setSiteOf] = useState({});
+  const [siteRoles, setSiteRoles] = useState([]);
   const [manpower, setManpower] = useState([]);
   const [actionBusy, setActionBusy] = useState('');
   const [actionError, setActionError] = useState('');
@@ -151,6 +165,7 @@ export default function EmployeeAssignmentView({ initialTab = 'roster' }) {
       setAssignments(toAssignments(putaways, picks, packs, deliveries));
       setShifts(latestByUser);
       setSiteOf(siteMap);
+      setSiteRoles(siteRows.filter((a) => a.is_active && a.user));
       setManpower(unwrapList(manpowerPayload) || []);
 
       // Per-person throughput, computed from the same rows rather than stored
@@ -193,6 +208,7 @@ export default function EmployeeAssignmentView({ initialTab = 'roster' }) {
       setActivity(null);
       setShifts(new Map());
       setSiteOf({});
+      setSiteRoles([]);
       setManpower([]);
     } finally {
       setLoading(false);
@@ -250,6 +266,15 @@ export default function EmployeeAssignmentView({ initialTab = 'roster' }) {
   };
 
   const staff = users.filter((u) => u.role !== 'CUSTOMER');
+  const eligibleStaffFor = (task) => {
+    const links = siteRoles.filter((a) =>
+      (!task.siteCode || String(a.site_code) === String(task.siteCode)) && roleCanDoTask(a.role_at_site, task.kind)
+    );
+    const eligibleIds = new Set(links.map((a) => String(a.user)));
+    // Keep a legacy assignee visible so an existing task can always be safely reassigned.
+    if (task.userId) eligibleIds.add(String(task.userId));
+    return staff.filter((u) => eligibleIds.has(String(u.user_id)));
+  };
 
   const rosterData = staff.map((u) => {
     const a = (activity && activity.get(u.user_id)) || null;
@@ -387,7 +412,7 @@ export default function EmployeeAssignmentView({ initialTab = 'roster' }) {
         <DataTable
           data-testid="emp-tasks"
           title="Warehouse Task Assignments"
-          subtitle="Putaway, picking, packing and delivery work — reassign open tasks from this board"
+            subtitle="Assign each open warehouse task to an active employee with the matching site role. Assignment alerts go to that employee."
           columns={[
             { header: 'Task', key: 'taskId', render: r => <span className="code-cell">{r.taskId}</span> },
             { header: 'Type', key: 'type', render: r => <span className="badge badge-info">{r.type}</span> },
@@ -399,6 +424,7 @@ export default function EmployeeAssignmentView({ initialTab = 'roster' }) {
             { header: 'Actions', key: 'actions', render: (r, idx) => {
               const assignable = !!ASSIGN_ENDPOINT[r.kind];
               const terminal = DONE.has(String(r.status).toUpperCase()) || String(r.status).toUpperCase() === 'CANCELLED';
+              const eligibleStaff = eligibleStaffFor(r);
               if (!assignable) return <span style={{ fontSize: 11, color: '#94a3b8' }}>Rider flow</span>;
               return (
                 <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
@@ -410,10 +436,11 @@ export default function EmployeeAssignmentView({ initialTab = 'roster' }) {
                     onChange={(e) => assignTask(r, e.target.value)}
                     style={{ height: 26, fontSize: 11, padding: '0 6px', minWidth: 140 }}>
                     <option value="">— Unassigned —</option>
-                    {staff.map((u) => (
+                    {eligibleStaff.map((u) => (
                       <option key={u.user_id} value={String(u.user_id)}>{u.full_name || u.email}</option>
                     ))}
                   </select>
+                  {!eligibleStaff.length && <span style={{ fontSize: 10, color: '#b45309' }}>No active employee has this site role.</span>}
                   {actionBusy === r.fullId && <span style={{ fontSize: 11 }}>…</span>}
                 </span>
               );

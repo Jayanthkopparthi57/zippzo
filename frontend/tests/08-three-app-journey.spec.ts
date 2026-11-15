@@ -224,6 +224,11 @@ test.describe('three applications, one order', () => {
 
       await shopper.click('[data-testid="nav-shop-storefront"]');
       const storePicker = shopper.locator('#shop-select');
+      // The store directory arrives after the shell mounts. Waiting for the
+      // picker first is what makes the choice below reliable: reading it too
+      // early skipped the selection and left the default store's shelf on
+      // screen, which is a different store from the rider's.
+      await storePicker.waitFor({ state: 'visible', timeout: 120_000 }).catch(() => {});
       if (await storePicker.count()) await storePicker.selectOption(site!);
       await shopper
         .locator('[data-testid="product-card"], [data-testid="storefront-empty"]')

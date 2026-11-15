@@ -23,6 +23,12 @@ class LpnMaster(models.Model):
     capacity_weight_g = models.BigIntegerField(null=True, blank=True)
     capacity_volume_ml = models.BigIntegerField(null=True, blank=True)
     created_by = models.CharField(max_length=64, blank=True)
+    # Frozen snapshot of what the label carries: destination dark store plus
+    # one row per product (sku code, name, quantity, source bin). LpnContent is
+    # the live custody ledger; this is the manifest the label resolves to, so a
+    # scan anywhere can answer "what is in this tote and where is it going"
+    # without replaying the content table.
+    manifest = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     sealed_at = models.DateTimeField(null=True, blank=True)
     consumed_at = models.DateTimeField(null=True, blank=True)
@@ -65,7 +71,7 @@ class StockMovement(models.Model):
     actor_id = models.CharField(max_length=64, null=True, blank=True)
     actor_type = models.CharField(max_length=20, default='SYSTEM')
     device_id = models.CharField(max_length=50, null=True, blank=True)
-    idempotency_key = models.CharField(max_length=80, null=True, blank=True)
+    idempotency_key = models.CharField(max_length=80, null=True, blank=True, unique=True)
     sellable_delta = models.SmallIntegerField(default=0)
     site_custody_delta = models.SmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -82,6 +88,76 @@ class StockMovement(models.Model):
             models.Index(fields=['movement_ref', 'ref_id']),
             models.Index(fields=['to_container', 'to_ref_id']),
         ]
+
+
+class ReplenishmentTask(models.Model):
+    """Reserve-to-pick-face work for one SKU/lot.
+
+    The task is the planning record; completing it is the only place the
+    ledger moves. Keeping the source and destination as ledger containers
+    means the same stock function used by relocation and putaway remains
+    the single writer.
+    """
+
+    STATUS_CHOICES = [
+        ('OPEN', 'Open'),
+        ('ASSIGNED', 'Assigned'),
+        ('IN_PROGRESS', 'In Progress'),
+        ('COMPLETED', 'Completed'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+    TRIGGER_CHOICES = [
+        ('MANUAL', 'Manual'),
+        ('LOW_STOCK', 'Low stock'),
+        ('CYCLE_COUNT', 'Cycle count'),
+        ('FORECAST', 'Forecast'),
+    ]
+
+    task_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    site = models.ForeignKey('network.Site', on_delete=models.PROTECT, related_name='replenishment_tasks')
+    sku = models.ForeignKey('catalog.Sku', on_delete=models.PROTECT, related_name='replenishment_tasks')
+    lot = models.ForeignKey('catalog.InventoryLot', on_delete=models.PROTECT, related_name='replenishment_tasks')
+    from_container = models.CharField(max_length=30, default='BIN')
+    from_container_ref = models.CharField(max_length=50)
+    to_container = models.CharField(max_length=30, default='BIN')
+    to_container_ref = models.CharField(max_length=50)
+    qty = models.PositiveIntegerField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='OPEN')
+    trigger = models.CharField(max_length=20, choices=TRIGGER_CHOICES, default='MANUAL')
+    reason = models.TextField(blank=True)
+    assigned_to = models.ForeignKey(
+        'iam.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='replenishment_tasks_assigned',
+    )
+    created_by = models.ForeignKey(
+        'iam.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='replenishment_tasks_created',
+    )
+    completed_by = models.ForeignKey(
+        'iam.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='replenishment_tasks_completed',
+    )
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'replenishment_tasks'
+        ordering = ['-created_at', 'task_id']
+        indexes = [
+            models.Index(fields=['site', 'status']),
+            models.Index(fields=['sku', 'status']),
+            models.Index(fields=['assigned_to', 'status']),
+        ]
+
+    def clean(self):
+        if self.from_container == self.to_container and self.from_container_ref == self.to_container_ref:
+            from django.core.exceptions import ValidationError
+            raise ValidationError({'to_container_ref': 'Source and destination must differ.'})
+
+    def __str__(self):
+        return f'Replenishment {self.task_id}: {self.qty} units'
 
 
 class StockMovementsChain(models.Model):
@@ -115,3 +191,51 @@ class StockBalance(models.Model):
         indexes = [
             models.Index(fields=['site', 'sku', 'container'], name='ix_atp', condition=models.Q(sellable=True, qty__gt=0)),
         ]
+
+
+class StockAdjustment(models.Model):
+    """Append-only, two-person stock correction.
+
+    Historical movements are never edited. A correction writes a compensating
+    movement and records who asked, who approved, and why. `qty_delta` is signed:
+    positive adds stock, negative removes it.
+    """
+
+    STATUS_CHOICES = [
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected'),
+    ]
+
+    adjustment_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    site = models.ForeignKey('network.Site', on_delete=models.PROTECT, related_name='stock_adjustments')
+    sku = models.ForeignKey('catalog.Sku', on_delete=models.PROTECT, related_name='stock_adjustments')
+    lot = models.ForeignKey('catalog.InventoryLot', on_delete=models.PROTECT, related_name='stock_adjustments')
+    container = models.CharField(max_length=30, default='SITE')
+    container_ref = models.CharField(max_length=50, default='')
+    qty_delta = models.IntegerField()
+    reason = models.TextField()
+    #: Client-supplied replay guard. A retried correction returns the original.
+    idempotency_key = models.CharField(max_length=80, null=True, blank=True, unique=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='APPROVED')
+    requested_by = models.ForeignKey(
+        'iam.User', on_delete=models.PROTECT, related_name='stock_adjustments_requested',
+    )
+    approved_by = models.ForeignKey(
+        'iam.User', on_delete=models.PROTECT, related_name='stock_adjustments_approved',
+    )
+    movement = models.OneToOneField(
+        StockMovement, null=True, blank=True, on_delete=models.PROTECT,
+        related_name='adjustment',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'stock_adjustments'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['site', 'created_at']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f'Adjustment {self.adjustment_id}: {self.qty_delta}'

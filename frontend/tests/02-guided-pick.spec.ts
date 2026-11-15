@@ -41,10 +41,9 @@ test.describe('Guided scan-first picking', () => {
     await login(page);
     await page.locator('[data-testid="nav-pick-execute"]').click();
 
-    // The guided stepper is the core of the redesign and must be present.
-    await expect(page.locator('[data-testid="workflow-stepper"]')).toBeVisible({ timeout: 30000 });
-    await expect(page.locator('[data-testid="workflow-stepper-step-0"]')).toBeVisible();
-    await expect(page.locator('[data-testid="workflow-stepper-step-3"]')).toBeVisible();
+    // The queue shell must be present: the stepper chrome was removed in the
+    // table-first redesign, so the refresh control is the load anchor.
+    await expect(page.locator('[data-testid="pick-refresh"]')).toBeVisible({ timeout: 30000 });
 
     await expect(page.getByText('Pick Queue')).toBeVisible();
 
@@ -81,7 +80,6 @@ test.describe('Guided scan-first picking', () => {
 
     // Step 1 demands a bin scan, not a dropdown.
     await expect(page.locator('[data-testid="pick-bin-scan-text"]')).toBeVisible();
-    await expect(page.locator('[data-testid="workflow-stepper-step-1"]')).toHaveAttribute('data-state', 'active');
 
     // A bogus bin must be rejected rather than silently accepted.
     await page.locator('[data-testid="pick-bin-scan-text"]').fill('NOT-A-REAL-BIN-9999');
@@ -121,9 +119,7 @@ test.describe('Guided scan-first picking', () => {
 
     // Advancing to product entry is the point of the guided flow.
     await expect(page.locator('[data-testid="pick-item-scan-text"]')).toBeVisible({ timeout: 30000 });
-    await expect(page.locator('[data-testid="workflow-stepper-step-2"]')).toHaveAttribute('data-state', 'active');
-    await expect(page.locator('[data-testid="pick-current-bin"]')).toHaveText(bin);
-    await expect(page.locator('[data-testid="pick-progress-value"]')).toBeVisible();
+    await expect(page.locator('[data-testid="pick-current-bin"]')).toHaveText(bin, { timeout: 30000 });
 
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);

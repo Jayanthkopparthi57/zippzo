@@ -109,8 +109,8 @@ test.describe('Zippzo WMS — scan-first operations', () => {
     await page.locator('[data-testid="nav-bin-transfer"]').click();
 
     await expect(page.getByText('Bin Transfer').first()).toBeVisible();
+    await expect(page.locator('[data-testid="bin-transfer-scan-text"]')).toBeVisible();
     await expect(page.locator('[data-testid="scan-source-bin"]')).toBeVisible();
-    await expect(page.locator('[data-testid="scan-target-bin"]')).toBeVisible();
 
     // Execute must stay disabled until a complete, valid transfer exists.
     await expect(page.locator('[data-testid="execute-bin-transfer"]')).toBeDisabled();
@@ -125,13 +125,32 @@ test.describe('Zippzo WMS — scan-first operations', () => {
     expect(failedRequests, `failed API: ${failedRequests.join(' | ')}`).toHaveLength(0);
   });
 
-  test('packing page renders, opens all-bins browser and pack modal', async ({ page }) => {
+  test('packing pages show batches and LPN records as tables', async ({ page }) => {
+    await login(page);
+    failedRequests.length = 0;
+
+    await page.locator('[data-testid="nav-packing"]').click();
+    await expect(page.locator('[data-testid="packing-batches"]')).toBeVisible({ timeout: 60000 });
+    await expect(page.locator('[data-testid="packing-root"]')).toHaveAttribute('data-loading', 'false', { timeout: 60000 });
+    await expect(page.locator('[data-testid="open-pack-modal"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="pack-bin-scan"]')).toHaveCount(0);
+
+    await page.locator('[data-testid="nav-packed-lpns"]').click();
+    await expect(page.locator('[data-testid="packed-lpns"]')).toBeVisible({ timeout: 60000 });
+    await expect(page.locator('[data-testid="packing-root"]')).toHaveAttribute('data-loading', 'false', { timeout: 60000 });
+    await expect(page.locator('[data-testid="pack-resolve-scan-text"]')).toHaveCount(0);
+    expect(pageErrors, `pageerror: ${pageErrors.join(' | ')}`).toHaveLength(0);
+    expect(consoleErrors, `console: ${consoleErrors.join(' | ')}`).toHaveLength(0);
+    expect(failedRequests, `failed API: ${failedRequests.join(' | ')}`).toHaveLength(0);
+  });
+
+  test.skip('legacy packing scanner flow was removed in favor of table-only pages', async ({ page }) => {
     await login(page);
     failedRequests.length = 0;
 
     await page.locator('[data-testid="nav-packing"]').click();
 
-    await expect(page.getByText('Outbound Packing').first()).toBeVisible();
+    await expect(page.getByText(/Mother Hub Packing|Outbound Packing/).first()).toBeVisible();
 
     // Bin transfer from packing is a real modal, not a full page dumped in a div.
     await page.locator('[data-testid="open-bin-transfer"]').click();
@@ -157,18 +176,60 @@ test.describe('Zippzo WMS — scan-first operations', () => {
     expect(failedRequests, `failed API: ${failedRequests.join(' | ')}`).toHaveLength(0);
   });
 
-  test('transfer orders page renders and opens its scanner', async ({ page }) => {
+  test.skip('legacy label scanner flow was removed in favor of table-only pages', async ({ page }) => {
+    await login(page);
+    failedRequests.length = 0;
+
+    await page.locator('[data-testid="nav-packing"]').click();
+    await expect(page.locator('[data-testid="pack-resolve-scan-text"]')).toBeVisible({ timeout: 60000 });
+
+    // Any label the pack bench printed must answer "what is in this tote and
+    // where is it going" — not only the tote packed a moment ago.
+    const tote: any = await page.evaluate(async () => {
+      const token = localStorage.getItem('zippzo_jwt');
+      const r = await fetch('/api/inventory/lpns/?page_size=200', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const j = await r.json();
+      const rows = Array.isArray(j) ? j : (j.results || []);
+      const withDest = rows.find(
+        (l) => l.manifest && l.manifest.destination && l.manifest.destination.code
+      );
+      return withDest || rows.find((l) => l.barcode || l.lpn_id) || null;
+    });
+    test.skip(!tote, 'no LPN exists to resolve');
+
+    await page.fill('[data-testid="pack-resolve-scan-text"]', tote.barcode || tote.lpn_id);
+    await page.press('[data-testid="pack-resolve-scan-text"]', 'Enter');
+
+    const result = page.locator('[data-testid="pack-resolve-result"]');
+    await expect(result).toBeVisible({ timeout: 60000 });
+    await expect(result).toContainText(tote.lpn_id);
+    const destCode = tote.manifest && tote.manifest.destination
+      ? tote.manifest.destination.code
+      : null;
+    if (destCode) {
+      await expect(result, 'the label states its destination dark store').toContainText(destCode);
+    }
+
+    expect(pageErrors, `pageerror: ${pageErrors.join(' | ')}`).toHaveLength(0);
+    expect(consoleErrors, `console: ${consoleErrors.join(' | ')}`).toHaveLength(0);
+    expect(failedRequests, `failed API: ${failedRequests.join(' | ')}`).toHaveLength(0);
+  });
+
+  test('transfer orders page renders its ledger and opens the create form', async ({ page }) => {
     await login(page);
     failedRequests.length = 0;
 
     await page.locator('[data-testid="nav-transfer-orders"]').click();
 
-    await expect(page.getByText('Create Dark Store Transfer Order')).toBeVisible();
-    const scanBtns = page.locator('button[title="Scan source site"], button[title="Scan destination site"]');
-    expect(await scanBtns.count()).toBeGreaterThan(0);
+    await expect(page.getByText('Stock Transfer Orders')).toBeVisible();
+    await expect(page.locator('[data-testid="sto-table"]')).toBeVisible();
 
-    await scanBtns.first().click();
-    await expect(page.locator('[data-testid="manual-barcode-input"]')).toBeVisible();
+    await page.locator('[data-testid="sto-new"]').click();
+    await expect(page.getByText('Create Dark Store Transfer Order')).toBeVisible();
+    await expect(page.locator('[data-testid="sto-source-site"]')).toBeVisible();
+    await expect(page.locator('[data-testid="sto-dest-site"]')).toBeVisible();
 
     expect(pageErrors, `pageerror: ${pageErrors.join(' | ')}`).toHaveLength(0);
     expect(consoleErrors, `console: ${consoleErrors.join(' | ')}`).toHaveLength(0);

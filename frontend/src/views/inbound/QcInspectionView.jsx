@@ -4,11 +4,11 @@ import {
   XCircle, ClipboardCheck, FlaskConical,
 } from 'lucide-react';
 import ScanInput from '../../components/ui/ScanInput';
-import WorkflowStepper from '../../components/ui/WorkflowStepper';
-import ProgressRing from '../../components/ui/ProgressRing';
+// WorkflowStepper / ProgressRing chrome removed.
 import StatusBadge from '../../components/ui/StatusBadge';
+import { PageHead, SubTabs, FilterBar } from '../../components/ui/WmsUI';
 import { useToast } from '../../components/ui/Toast';
-import { useAuth } from '../../context/AuthContext';
+import { useTabs } from '../../context/TabContext';
 import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../api/client';
 
 /**
@@ -20,11 +20,6 @@ import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../ap
  * final PASSED/PARTIAL/FAILED verdict is written through the real
  * `verify` action so a reload shows the same result.
  */
-const STEPS = [
-  { key: 'batch', title: 'Scan Batch', description: 'Scan the consignment, GRN or a product to start' },
-  { key: 'units', title: 'Scan Units', description: 'Set pass or fail, then scan each unit' },
-  { key: 'record', title: 'Record Result', description: 'Write the verdict and release the line' },
-];
 
 const norm = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -47,7 +42,8 @@ const VERDICT = (pass, fail) => {
 
 export default function QcInspectionView() {
   const toast = useToast();
-  const { user } = useAuth();
+  const { openTab } = useTabs();
+  const [queueFilter, setQueueFilter] = useState('');
 
   const [skus, setSkus] = useState([]);
   const [lines, setLines] = useState([]);
@@ -127,7 +123,7 @@ export default function QcInspectionView() {
     [lines, skuById, qcByLine]
   );
 
-  const pending = rows.filter((r) => !r.qc || !['PASSED', 'FAILED'].includes(String(r.qc.status).toUpperCase()));
+  const pending = rows.filter((r) => !r.qc || !['PASSED', 'FAILED', 'PARTIAL'].includes(String(r.qc.status).toUpperCase()));
   const inspectedCount = rows.length - pending.length;
 
   const resetBatch = () => {
@@ -341,6 +337,13 @@ export default function QcInspectionView() {
     const sameLine = String(hit.gl.line_id) === String(line.gl.line_id);
     const basePass = sameLine ? pass : (hit.qc ? Number(hit.qc.pass_count) || 0 : 0);
     const baseFail = sameLine ? fail : (hit.qc ? Number(hit.qc.fail_count) || 0 : 0);
+    if (basePass + baseFail >= (Number(hit.received) || 0)) {
+      setFeedback({
+        type: 'error',
+        message: `${hit.skuCode} is fully inspected (${basePass + baseFail}/${hit.received}). Record the result or reject the remainder.`,
+      });
+      return;
+    }
     // Reuse an inspection only when it is known to belong to `hit`.
     const knownId = hit.qc ? hit.qc.qc_id : sameLine ? qcId : null;
     const nextPass = mode === 'pass' ? basePass + 1 : basePass;
@@ -385,6 +388,13 @@ export default function QcInspectionView() {
       setFeedback({ type: 'error', message: 'Scan at least one unit before recording a result.' });
       return;
     }
+    if (sampled > 0 && totalScanned < sampled) {
+      setFeedback({
+        type: 'error',
+        message: `${sampled - totalScanned} unit(s) not inspected. Scan them, or use "Reject remaining" to record them as damaged.`,
+      });
+      return;
+    }
     setBusy(true);
     setFeedback(null);
     try {
@@ -395,9 +405,11 @@ export default function QcInspectionView() {
         fail_count: fail,
         status: verdict,
         remarks: `${verdict}: ${pass} pass / ${fail} fail of ${pass + fail} scanned`,
-        tested_by: user?.user_id || undefined,
       });
-      toast.success('QC recorded', `${line.skuCode} → ${saved.status || verdict} (${saved.pass_count}/${saved.fail_count}).`);
+      toast.success(
+        'QC recorded',
+        `${line.skuCode} → ${saved.status || verdict}: ${saved.accepted_qty ?? pass} accepted, ${saved.damaged_qty ?? fail} rejected.`
+      );
       setStep(1);
       setLine(null);
       setQcId(null);
@@ -414,45 +426,108 @@ export default function QcInspectionView() {
     }
   };
 
+  /**
+   * Explicit rejected-count control: the remaining unscanned units are
+   * recorded as failed. This is the only way a quantity enters QC without a
+   * per-unit scan, and it is labelled as such on screen and in the remark.
+   */
+  const rejectRemaining = async () => {
+    if (!line) return;
+    const remaining = Math.max(0, sampled - totalScanned);
+    if (remaining <= 0) {
+      setFeedback({ type: 'error', message: 'Every received unit has already been inspected.' });
+      return;
+    }
+    const nextFail = fail + remaining;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const id = await ensureInspection(line, pass, nextFail, qcId);
+      const saved = await patchApi(`/supply/qc-inspections/${id}/`, {
+        sample_size: pass + nextFail,
+        pass_count: pass,
+        fail_count: nextFail,
+      });
+      setFail(Number(saved.fail_count) || nextFail);
+      setScanText('');
+      setFeedback({
+        type: 'ok',
+        message: `Rejected the ${remaining} remaining unit(s) without a scan — ${pass} pass / ${nextFail} fail. Record the result.`,
+      });
+    } catch (e) {
+      setFeedback({ type: 'error', message: describeError(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const totalScanned = pass + fail;
   const sampled = line ? (line.received || 0) : 0;
+  const qcRows = rows.filter((r) => {
+    const q = queueFilter.trim().toLowerCase();
+    if (!q) return true;
+    return [r.name, r.skuCode, r.ean, r.qc?.status, 'PENDING']
+      .some((v) => String(v ?? '').toLowerCase().includes(q));
+  });
 
   /* ── No batch: the scan-first landing ── */
   if (!batch) {
     return (
       <div>
-        <WorkflowStepper steps={STEPS} current={0} dataTestId="qc-stepper" />
+        <PageHead
+          title="Quality Control Inspection"
+          count={pending.length}
+          subtitle="Scan received batches, verify units one by one, and release only accepted stock to putaway."
+          actions={(
+            <button className="btn-ui" onClick={load} disabled={loading} data-testid="qc-refresh">
+              <RefreshCw size={13} /> Sync
+            </button>
+          )}
+        />
 
-        <div className="wf-panel">
-          <div className="wf-panel__header">
+        <SubTabs
+          search={queueFilter}
+          onSearch={setQueueFilter}
+          active="qc-testing"
+          onChange={(id) => { if (id !== 'qc-testing') openTab(id, id === 'asns' ? 'Consignments' : id === 'putaway-tasks' ? 'Putaway Tasks' : 'Inbound Ledger'); }}
+          tabs={[
+            { id: 'asns', label: 'ASNs (Advance Shipping)' },
+            { id: 'qc-testing', label: 'QC Testing', count: pending.length },
+            { id: 'putaway-tasks', label: 'Putaway Tasks' },
+            { id: 'inbound-ledger', label: 'Inbound Ledger' },
+          ]}
+        />
+
+        <div className="wf-panel" style={{ padding: 0 }}>
+          <div className="wms-table-card__head">
             <div>
-              <div className="wf-panel__title"><CheckCircle2 size={17} /> Scan &amp; Verify Quality</div>
-              <div className="wf-panel__hint">
+              <div className="wms-table-card__title">
+                <span>Scan &amp; Verify Quality</span>
+                <span className="screen-count-tag">{pending.length} records</span>
+              </div>
+              <div className="wms-table-card__sub">
                 {loading
                   ? 'Loading received batches…'
                   : `${pending.length} line${pending.length === 1 ? '' : 's'} awaiting QC · ${inspectedCount} already decided`}
               </div>
             </div>
-            <div className="wf-panel__actions">
-              <button className="btn-secondary" onClick={load} disabled={loading} data-testid="qc-refresh">
-                <RefreshCw size={14} /> Refresh
-              </button>
-            </div>
           </div>
 
-          <ScanInput
-            label="Step 1 · Scan the batch"
-            placeholder="Scan a consignment number, GRN number, SKU code or EAN"
-            value={scanText}
-            onChange={setScanText}
-            onScan={onScanBatch}
-            busy={busy}
-            feedback={feedback}
-            dataTestId="qc-batch-scan"
-          />
+          <div style={{ padding: '9px 12px', borderBottom: '1px solid var(--wms-line)' }}>
+            <ScanInput
+              label="Scan batch"
+              placeholder="Scan a consignment number, GRN number, SKU code or EAN"
+              value={scanText}
+              onChange={setScanText}
+              onScan={onScanBatch}
+              busy={busy}
+              feedback={feedback}
+              dataTestId="qc-batch-scan"
+            />
+          </div>
 
           {loadError && (
-            <div className="scan-feedback scan-feedback--error" data-testid="qc-load-error">
+            <div className="scan-feedback scan-feedback--error" data-testid="qc-load-error" style={{ margin: 12 }}>
               <ClipboardCheck size={14} /> {loadError}
             </div>
           )}
@@ -468,50 +543,67 @@ export default function QcInspectionView() {
           )}
 
           {rows.length > 0 && (
-            <div className="table-container">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Product</th>
-                    <th>SKU</th>
-                    <th>Inspected</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody data-testid="qc-queue">
-                  {rows.map((r) => (
-                    <tr
-                      key={r.gl.line_id}
-                      data-testid={`qc-queue-${r.gl.line_id}`}
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => {
-                        setBatch({
-                          kind: 'asn',
-                          label: r.skuCode,
-                          sub: '1 received line',
-                          lineIds: [String(r.gl.line_id)],
-                        });
-                        setScanText('');
-                        setStep(1);
-                      }}
-                    >
-                      <td data-testid={`qc-queue-${r.gl.line_id}-name`}>{r.name}</td>
-                      <td className="code-cell">
-                        {r.skuCode}
-                        {r.ean ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>EAN {r.ean}</div> : null}
-                      </td>
-                      <td className="mono-num" data-testid={`qc-queue-${r.gl.line_id}-qty`}>
-                        {r.qc ? (Number(r.qc.pass_count) || 0) + (Number(r.qc.fail_count) || 0) : 0}
-                        {r.received > 0 && (
-                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}> / {r.received}</span>
-                        )}
-                      </td>
-                      <td>{r.qc ? <StatusBadge status={r.qc.status} /> : <StatusBadge status="PENDING" />}</td>
+            <>
+              <FilterBar value={queueFilter} onChange={setQueueFilter} shown={qcRows.length} total={rows.length} />
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Product</th>
+                      <th>SKU</th>
+                      <th>Inspected</th>
+                      <th>Status</th>
+                      <th>Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody data-testid="qc-queue">
+                    {qcRows.map((r) => (
+                      <tr
+                        key={r.gl.line_id}
+                        data-testid={`qc-queue-${r.gl.line_id}`}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => {
+                          setBatch({
+                            kind: 'asn',
+                            label: r.skuCode,
+                            sub: '1 received line',
+                            lineIds: [String(r.gl.line_id)],
+                          });
+                          setScanText('');
+                          setStep(1);
+                        }}
+                      >
+                        <td data-testid={`qc-queue-${r.gl.line_id}-name`}>{r.name}</td>
+                        <td>
+                          <span className="link-cell">{r.skuCode}</span>
+                          {r.ean ? <span className="cell-sub">EAN {r.ean}</span> : null}
+                        </td>
+                        <td data-testid={`qc-queue-${r.gl.line_id}-qty`}>
+                          {r.qc ? (Number(r.qc.pass_count) || 0) + (Number(r.qc.fail_count) || 0) : 0}
+                          {r.received > 0 && (
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}> / {r.received}</span>
+                          )}
+                        </td>
+                        <td>{r.qc ? <StatusBadge status={r.qc.status} /> : <StatusBadge status="PENDING" />}</td>
+                        <td>
+                          <button type="button" className="row-action-btn" onClick={(e) => { e.stopPropagation(); setBatch({ kind: 'asn', label: r.skuCode, sub: '1 received line', lineIds: [String(r.gl.line_id)] }); setScanText(''); setStep(1); }}>
+                            Inspect
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="wms-pager">
+                <div className="wms-shown">Showing <b>{qcRows.length}</b> of <b>{rows.length}</b> records</div>
+                <div className="wms-pager__pages">
+                  <button className="wms-page-btn" disabled>Prev</button>
+                  <button className="wms-page-btn active">1</button>
+                  <button className="wms-page-btn" disabled>Next</button>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -521,13 +613,13 @@ export default function QcInspectionView() {
   /* ── Batch open ── */
   return (
     <div>
-      <WorkflowStepper steps={STEPS} current={step} dataTestId="qc-stepper" />
+
 
       <div className="wf-split">
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><ScanLine size={17} /> Scan</div>
+              <div className="wf-peek"> Scan</div>
               <div className="wf-panel__hint">
                 {batch.label}
                 {batch.sub ? ` · ${batch.sub}` : ''}
@@ -582,7 +674,7 @@ export default function QcInspectionView() {
 
               <ScanInput
                 key={`qc-unit-${line.gl.line_id}`}
-                label={`Step 2 · Scan units as ${mode.toUpperCase()}`}
+                label={`Scan units`}
                 placeholder="Scan a product unit"
                 value={scanText}
                 onChange={setScanText}
@@ -606,10 +698,18 @@ export default function QcInspectionView() {
                 <button
                   className="scan-btn scan-btn--success"
                   onClick={recordResult}
-                  disabled={busy || totalScanned === 0}
+                  disabled={busy || totalScanned === 0 || (sampled > 0 && totalScanned < sampled)}
                   data-testid="qc-record"
                 >
                   <ClipboardCheck size={16} /> Record Result
+                </button>
+                <button
+                  className="scan-btn scan-btn--neutral"
+                  onClick={rejectRemaining}
+                  disabled={busy || sampled <= totalScanned}
+                  data-testid="qc-reject-remaining"
+                >
+                  <XCircle size={16} /> Reject remaining ({Math.max(0, sampled - totalScanned)})
                 </button>
                 <button
                   className="btn-secondary"
@@ -628,6 +728,16 @@ export default function QcInspectionView() {
                 <div className="scan-feedback scan-feedback--hint" data-testid="qc-need-scan">
                   <AlertTriangle size={14} />
                   <span>Scan at least one unit before recording a result.</span>
+                </div>
+              )}
+
+              {totalScanned > 0 && sampled > totalScanned && (
+                <div className="scan-feedback scan-feedback--hint" data-testid="qc-need-remaining">
+                  <AlertTriangle size={14} />
+                  <span>
+                    {sampled - totalScanned} unit(s) still uninspected. Scan them, or record
+                    them as rejected with the explicit control above.
+                  </span>
                 </div>
               )}
             </>
@@ -675,17 +785,13 @@ export default function QcInspectionView() {
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><CheckCircle2  size={17} /> Inspection</div>
+              <div className="wf-peek"> Inspection</div>
               <div className="wf-panel__hint">{line ? line.name : 'No line selected'}</div>
             </div>
             {line && (
-              <ProgressRing
-                value={totalScanned}
-                total={sampled || totalScanned || 1}
-                label={`${totalScanned} tested`}
-                sublabel={`${sampled} received`}
-                dataTestId="qc-progress"
-              />
+              <span className="mono-num" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {totalScanned} tested / {sampled} received
+              </span>
             )}
           </div>
 
@@ -712,6 +818,12 @@ export default function QcInspectionView() {
                     <tr>
                       <td>Received</td>
                       <td className="mono-num" data-testid="qc-received">{sampled}</td>
+                    </tr>
+                    <tr>
+                      <td>Uninspected</td>
+                      <td className="mono-num" data-testid="qc-uninspected">
+                        {Math.max(0, sampled - totalScanned)}
+                      </td>
                     </tr>
                   </tbody>
                 </table>

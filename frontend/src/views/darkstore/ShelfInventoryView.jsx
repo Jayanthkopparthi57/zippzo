@@ -1,7 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import {
-  Layers, RefreshCw, AlertTriangle, Search, Package,
-} from 'lucide-react';
+import { Layers, RefreshCw, AlertTriangle, Search, Boxes } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useDarkStore, useAsyncData, dsShelfInventory, num } from './useDarkStore';
@@ -93,7 +91,7 @@ function Shelf({ storeCode }) {
       <div className="wf-panel">
         <div className="wf-panel__header">
           <div>
-            <div className="wf-panel__title"><Layers size={17} /> Shelf Inventory</div>
+            <div className="wf-peek"> Shelf Inventory</div>
             <div className="wf-panel__hint">
               Lot-level position for <StoreBadge />
             </div>
@@ -172,7 +170,7 @@ function Shelf({ storeCode }) {
       <div className="wf-panel">
         {rows.length === 0 && !error ? (
           <div className="wf-empty" data-testid="ds-shelf-empty">
-            <Package size={40} className="wf-empty__icon" />
+            <Boxes size={40} className="wf-empty__icon" />
             <div className="wf-empty__title">No stock recorded</div>
             <div className="wf-empty__text">
               This store has no inventory lots yet. Receive and shelve a tote, or check

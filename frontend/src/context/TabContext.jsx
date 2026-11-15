@@ -3,10 +3,7 @@ import React, { createContext, useContext, useState } from 'react';
 const TabContext = createContext();
 
 const STORE_INITIAL_TABS = [
-  { id: 'dashboard', label: 'Dashboard & Overview', icon: 'LayoutDashboard' },
-  { id: 'asns', label: 'Consignments', icon: 'PackageCheck' },
-  { id: 'inventory-lots', label: 'Storage Inventory', icon: 'Layers' },
-  { id: 'packing', label: 'Packing & Units', icon: 'Package' }
+  { id: 'dashboard', label: 'Operations home', icon: 'LayoutDashboard' },
 ];
 
 const SHOPPER_INITIAL_TABS = [

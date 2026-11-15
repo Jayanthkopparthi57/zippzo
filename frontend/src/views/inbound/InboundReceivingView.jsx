@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { PackageCheck, Package, RefreshCw, AlertTriangle, Boxes, ScanLine, Truck, Send, XCircle, Building2, Store, Plus, X, FilePlus2 } from 'lucide-react';
 import ScanInput from '../../components/ui/ScanInput';
-import WorkflowStepper from '../../components/ui/WorkflowStepper';
-import ProgressRing from '../../components/ui/ProgressRing';
+// WorkflowStepper / ProgressRing chrome removed: scan inputs + tables carry the flow.
 import StatusBadge from '../../components/ui/StatusBadge';
+import { PageHead, SubTabs, FilterBar } from '../../components/ui/WmsUI';
 import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../context/AuthContext';
+import { useTabs } from '../../context/TabContext';
 import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../api/client';
 
 /**
@@ -16,15 +17,9 @@ import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../ap
  * Nothing is invented client-side: the expected side comes from AsnLine, the
  * received side is persisted to GrnLine.received_qty on every single scan, and
  * "Complete Receiving" is the real GrnViewSet.complete action that closes the
- * GRN, closes the ASN and mints the putaway tasks.
+ * GRN, closes the ASN and hands the batch to QC. Only QC-accepted units later
+ * become putaway tasks.
  */
-const STEPS = [
-  { key: 'asn', title: 'Open Consignment', description: 'Scan the consignment, or pick one from the queue' },
-  { key: 'batch', title: 'Scan Batch', description: 'Scan the vendor batch / LPN on the pallet' },
-  { key: 'units', title: 'Scan Products', description: 'Scan each unit — received vs expected tallies live' },
-  { key: 'close', title: 'Complete', description: 'Close the GRN and release putaway' },
-];
-
 /**
  * Only these ASN states can still be received against. An unfiltered
  * /supply/asns/ page is ordered -created_at, so in a database where the
@@ -97,6 +92,9 @@ function joinLines(asnLines, grnLines, skuById) {
 export default function InboundReceivingView() {
   const toast = useToast();
   const { user } = useAuth();
+  const { openTab } = useTabs();
+  const [queueFilter, setQueueFilter] = useState('');
+  const [queueSelection, setQueueSelection] = useState(new Set());
 
   const [asns, setAsns] = useState([]);
   const [skus, setSkus] = useState([]);
@@ -113,6 +111,13 @@ export default function InboundReceivingView() {
   const [completing, setCompleting] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [rejects, setRejects] = useState([]);
+  // Manual batch entry is an exception path. It stays collapsed until the
+  // operator says the label cannot be scanned, and it cannot be submitted
+  // without a reason: the GRN then carries who typed it and why.
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualBatch, setManualBatch] = useState('');
+  const [manualReason, setManualReason] = useState('');
+  const [manualBusy, setManualBusy] = useState(false);
 
   /* ── ASN creation wizard ── */
   const [showCreate, setShowCreate] = useState(false);
@@ -251,6 +256,9 @@ export default function InboundReceivingView() {
     setScanText('');
     setFeedback(null);
     setRejects([]);
+    setManualOpen(false);
+    setManualBatch('');
+    setManualReason('');
     setStep(0);
   };
 
@@ -295,11 +303,12 @@ export default function InboundReceivingView() {
   };
 
   /* ── Step 2: scan the batch, provision the receipt, load expected lines ── */
-  const onScanBatch = async (code) => {
+  const onScanBatch = async (code, manual = null) => {
     if (!asn) {
       setFeedback({ type: 'error', message: 'Select a consignment first.' });
       return;
     }
+    const batchValue = String(code).trim().slice(0, 100);
     setBusy(true);
     setFeedback(null);
     try {
@@ -317,9 +326,15 @@ export default function InboundReceivingView() {
           asn: asn.asn_id,
           mode: 'LPN_SCAN',
           status: 'IN_PROGRESS',
+          batch_code: batchValue,
         });
-      } else if (String(receipt.status).toUpperCase() !== 'COMPLETED') {
-        receipt = await patchApi(`/supply/grns/${receipt.grn_id}/`, { status: 'IN_PROGRESS' });
+      } else {
+        if (String(receipt.status).toUpperCase() !== 'COMPLETED') {
+          receipt = await patchApi(`/supply/grns/${receipt.grn_id}/`, { status: 'IN_PROGRESS' });
+        }
+        if (!receipt.batch_code) {
+          receipt = await patchApi(`/supply/grns/${receipt.grn_id}/`, { batch_code: batchValue });
+        }
       }
 
       // Expected side: the ASN lines. Received side: the GRN lines, seeded from
@@ -368,14 +383,51 @@ export default function InboundReceivingView() {
       setBatchCode(String(code).trim().slice(0, BATCH_MAX));
       setScanText('');
       setStep(2);
-      setFeedback({
-        type: 'ok',
-        message: `Batch ${String(code).trim()} loaded. ${missing.length} line(s) opened on ${receipt.grn_no}.`,
-      });
+      if (manual?.reason) {
+        // The label could not be scanned. The typed reference is only allowed
+        // because the receipt now records who typed it and why.
+        const stamped = await postApi(`/supply/grns/${receipt.grn_id}/manual_batch/`, {
+          batch_code: batchValue,
+          reason: manual.reason,
+        });
+        setGrn((prev) => ({ ...prev, ...stamped }));
+        setManualOpen(false);
+        setManualBatch('');
+        setManualReason('');
+        setFeedback({
+          type: 'ok',
+          message: `Manual batch ${batchValue} recorded as an exception. ${missing.length} line(s) opened on ${receipt.grn_no}.`,
+        });
+      } else {
+        setFeedback({
+          type: 'ok',
+          message: `Batch ${String(code).trim()} loaded. ${missing.length} line(s) opened on ${receipt.grn_no}.`,
+        });
+      }
     } catch (e) {
       setFeedback({ type: 'error', message: describeError(e) });
     } finally {
       setBusy(false);
+    }
+  };
+
+  /* ── Step 2b: typed batch reference — labelled exception only ── */
+  const submitManualBatch = async () => {
+    const code = manualBatch.trim();
+    const reason = manualReason.trim();
+    if (!code) {
+      setFeedback({ type: 'error', message: 'Type the batch / LPN reference before recording it.' });
+      return;
+    }
+    if (!reason) {
+      setFeedback({ type: 'error', message: 'A reason is required when a label cannot be scanned.' });
+      return;
+    }
+    setManualBusy(true);
+    try {
+      await onScanBatch(code, { reason });
+    } finally {
+      setManualBusy(false);
     }
   };
 
@@ -473,7 +525,10 @@ export default function InboundReceivingView() {
       for (const line of lines) {
         if (line.received <= 0) throw new Error(`${line.skuCode} has nothing received.`);
         const lotId = await ensureLot(line);
-        await patchApi(`/supply/grn-lines/${line.grnId}/`, { accepted_qty: line.received, lot: lotId });
+        // Receiving records what arrived; it does not decide what is sellable.
+        // accepted_qty stays 0 until QC has scanned the units, so no putaway
+        // task and no stock can be minted from an uninspected receipt.
+        await patchApi(`/supply/grn-lines/${line.grnId}/`, { accepted_qty: 0, lot: lotId });
       }
 
       const result = await postApi(`/supply/grns/${grn.grn_id}/complete/`, {
@@ -482,7 +537,7 @@ export default function InboundReceivingView() {
 
       toast.success(
         'Receiving complete',
-        `${result.grn_no || grn.grn_no} closed. ${result.putaway_task_count ?? 0} putaway task(s) released.`
+        `${result.grn_no || grn.grn_no} closed and sent to QC. Accepted units become putaway tasks.`
       );
       resetReceipt();
       await load();
@@ -502,46 +557,84 @@ export default function InboundReceivingView() {
   const allComplete = lines.length > 0 && shortLines.length === 0 && overLines.length === 0;
 
   /* ── Not receiving yet: the queue + the consignment scan ── */
+  const queueRows = useMemo(() => {
+    const q = queueFilter.trim().toLowerCase();
+    if (!q) return asns;
+    return asns.filter((a) => [
+      a.asn_no, a.po_ref, a.type, a.status,
+      a.source_vendor_name, a.source_site_code, a.expected_vehicle,
+    ].some((v) => String(v ?? '').toLowerCase().includes(q)));
+  }, [asns, queueFilter]);
+
+  const openReceipt = (asnRow) => {
+    setAsn(asnRow);
+    setScanText('');
+    setFeedback(null);
+    setStep(1);
+  };
+
   if (!asn) {
     return (
       <div>
-        <WorkflowStepper steps={STEPS} current={0} dataTestId="rcv-stepper" />
+        <PageHead
+          title="Inbound Warehouse Operations"
+          count={asns.length}
+          subtitle="Manage Advance Shipping Notices (ASNs), dock gate entry, GRN inwarding, putaway, and discrepancies."
+          actions={(
+            <>
+              <button className="btn-ui" onClick={load} disabled={loading} data-testid="rcv-refresh">
+                <RefreshCw size={13} /> Sync
+              </button>
+              <button className="btn-ui primary" onClick={openCreate} data-testid="rcv-create-asn">
+                <FilePlus2 size={13} /> Create Inbound ASN
+              </button>
+            </>
+          )}
+        />
 
-        <div className="wf-panel">
-          <div className="wf-panel__header">
+        <SubTabs
+          search={queueFilter}
+          onSearch={setQueueFilter}
+          active="asns"
+          onChange={(id) => { if (id !== 'asns') openTab(id, id === 'qc-testing' ? 'QC Testing' : id === 'putaway-tasks' ? 'Putaway Tasks' : 'Inbound Ledger'); }}
+          tabs={[
+            { id: 'asns', label: 'ASNs (Advance Shipping)', count: asns.length },
+            { id: 'qc-testing', label: 'QC Testing' },
+            { id: 'putaway-tasks', label: 'Putaway Tasks' },
+            { id: 'inbound-ledger', label: 'Inbound Ledger' },
+          ]}
+        />
+
+        <div className="wf-panel" style={{ padding: 0 }}>
+          <div className="wms-table-card__head">
             <div>
-              <div className="wf-panel__title">
-                <Package size={17} /> Register Batches by Scanning
+              <div className="wms-table-card__title">
+                <span>Register Batches by Scanning</span>
+                <span className="screen-count-tag">{asns.length} records</span>
               </div>
-              <div className="wf-panel__hint">
+              <div className="wms-table-card__sub">
                 {loading
                   ? 'Loading open consignments…'
                   : `${asns.length} consignment${asns.length === 1 ? '' : 's'} waiting to be received`}
               </div>
             </div>
-            <div className="wf-panel__actions">
-              <button className="btn-secondary" onClick={load} disabled={loading} data-testid="rcv-refresh">
-                <RefreshCw size={14} /> Refresh
-              </button>
-              <button className="btn-primary" onClick={openCreate} data-testid="rcv-create-asn">
-                <FilePlus2 size={14} /> New Consignment
-              </button>
-            </div>
           </div>
 
-          <ScanInput
-            label="Step 1 · Scan the consignment / ASN"
-            placeholder="Scan the ASN number, PO reference or LPN label"
-            value={scanText}
-            onChange={setScanText}
-            onScan={onScanConsignment}
-            busy={busy}
-            feedback={feedback}
-            dataTestId="rcv-asn-scan"
-          />
+          <div style={{ padding: '9px 12px', borderBottom: '1px solid var(--wms-line)' }}>
+            <ScanInput
+              label="Scan the consignment / ASN"
+              placeholder="Scan the ASN number, PO reference or LPN label"
+              value={scanText}
+              onChange={setScanText}
+              onScan={onScanConsignment}
+              busy={busy}
+              feedback={feedback}
+              dataTestId="rcv-asn-scan"
+            />
+          </div>
 
           {loadError && (
-            <div className="scan-feedback scan-feedback--error" data-testid="rcv-load-error">
+            <div className="scan-feedback scan-feedback--error" data-testid="rcv-load-error" style={{ margin: 12 }}>
               <AlertTriangle size={14} /> {loadError}
             </div>
           )}
@@ -557,40 +650,97 @@ export default function InboundReceivingView() {
           )}
 
           {asns.length > 0 && (
-            <div className="table-container">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Consignment</th>
-                    <th>PO reference</th>
-                    <th>Expected qty</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody data-testid="rcv-queue">
-                  {asns.map((a) => (
-                    <tr
-                      key={a.asn_id}
-                      data-testid={`rcv-queue-${a.asn_id}`}
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => {
-                        setAsn(a);
-                        setScanText('');
-                        setFeedback(null);
-                        setStep(1);
-                      }}
-                    >
-                      <td data-testid={`rcv-queue-${a.asn_id}-name`}>Consignment {a.asn_no}</td>
-                      <td className="code-cell">{a.po_ref || a.asn_no}</td>
-                      <td className="mono-num" data-testid={`rcv-queue-${a.asn_id}-qty`}>
-                        {Number(a.total_qty) || 0}
-                      </td>
-                      <td><StatusBadge status={a.status} /></td>
+            <>
+              <FilterBar
+                value={queueFilter}
+                onChange={setQueueFilter}
+                shown={queueRows.length}
+                total={asns.length}
+              />
+              <div className="table-container" style={{ overflowX: 'auto' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 34, textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          className="row-checkbox"
+                          checked={queueRows.length > 0 && queueSelection.size === queueRows.length}
+                          onChange={(e) => setQueueSelection(e.target.checked ? new Set(queueRows.map((a) => a.asn_id)) : new Set())}
+                          aria-label="Select all consignments"
+                        />
+                      </th>
+                      <th>ASN Number</th>
+                      <th>Type</th>
+                      <th>Vendor / Source</th>
+                      <th>Door / Vehicle</th>
+                      <th>SKUs &amp; Qty</th>
+                      <th>Status</th>
+                      <th>Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody data-testid="rcv-queue">
+                    {queueRows.map((a) => (
+                      <tr
+                        key={a.asn_id}
+                        data-testid={`rcv-queue-${a.asn_id}`}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => openReceipt(a)}
+                      >
+                        <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            className="row-checkbox"
+                            checked={queueSelection.has(a.asn_id)}
+                            onChange={() => setQueueSelection((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(a.asn_id)) next.delete(a.asn_id);
+                              else next.add(a.asn_id);
+                              return next;
+                            })}
+                            aria-label={`Select ${a.asn_no}`}
+                          />
+                        </td>
+                        <td>
+                          <span className="link-cell" data-testid={`rcv-queue-${a.asn_id}-name`}>{a.asn_no}</span>
+                          <span className="cell-sub">PO: {a.po_ref || '—'}</span>
+                        </td>
+                        <td>{a.type || '—'}</td>
+                        <td>{a.source_vendor_name || a.source_site_code || '—'}</td>
+                        <td>
+                          {a.expected_vehicle || '—'}
+                          <span className="cell-sub">Door: {a.dock_code || 'DOCK-01'}</span>
+                        </td>
+                        <td>
+                          <span className="mono-num" data-testid={`rcv-queue-${a.asn_id}-qty`}>{Number(a.total_qty) || 0}</span> Qty
+                          <span className="cell-sub">{a.line_count ?? a.lines_count ?? 1} SKUs</span>
+                        </td>
+                        <td><StatusBadge status={a.status} /></td>
+                        <td>
+                          <div className="row-actions">
+                            <button
+                              type="button"
+                              className="row-action-btn"
+                              onClick={(e) => { e.stopPropagation(); openReceipt(a); }}
+                            >
+                              Lines
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="wms-pager">
+                <div className="wms-shown">Showing <b>{queueRows.length}</b> of <b>{asns.length}</b> records</div>
+                <div className="wms-pager__pages">
+                  <button className="wms-page-btn" disabled>Prev</button>
+                  <button className="wms-page-btn active">1</button>
+                  <button className="wms-page-btn" disabled>Next</button>
+                </div>
+              </div>
+            </>
           )}
         </div>
 
@@ -733,13 +883,11 @@ export default function InboundReceivingView() {
   /* ── Receiving a consignment ── */
   return (
     <div>
-      <WorkflowStepper steps={STEPS} current={step} dataTestId="rcv-stepper" />
-
       <div className="wf-split">
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><ScanLine size={17} /> Scan</div>
+              <div className="wf-peek"> Scan</div>
               <div className="wf-panel__hint">
                 {asn.asn_no}
                 {grn ? ` · ${grn.grn_no}` : ''}
@@ -751,7 +899,7 @@ export default function InboundReceivingView() {
           {step === 1 && (
             <ScanInput
               key="rcv-batch"
-              label="Step 2 · Scan the vendor batch / LPN"
+              label="Scan the vendor batch / LPN"
               placeholder="Scan the pallet or LPN label to open the receipt"
               value={scanText}
               onChange={setScanText}
@@ -762,10 +910,83 @@ export default function InboundReceivingView() {
             />
           )}
 
+          {step === 1 && !manualOpen && (
+            <div className="form-group">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setManualOpen(true)}
+                data-testid="rcv-manual-toggle"
+              >
+                <AlertTriangle size={14} /> Label unreadable? Type the batch (exception)
+              </button>
+            </div>
+          )}
+
+          {step === 1 && manualOpen && (
+            <div className="form-group" data-testid="rcv-manual-panel">
+              <div className="scan-feedback scan-feedback--hint">
+                <AlertTriangle size={14} />
+                <span>
+                  Manual entry is the exception, not the default. It is recorded against
+                  this receipt with your name and the reason you give.
+                </span>
+              </div>
+              <label className="form-label" htmlFor="rcv-manual-batch">Batch / LPN reference</label>
+              <input
+                id="rcv-manual-batch"
+                className="form-input mono-num"
+                value={manualBatch}
+                onChange={(e) => setManualBatch(e.target.value)}
+                placeholder="Type the reference printed on the label"
+                data-testid="rcv-manual-batch"
+              />
+              <label className="form-label" htmlFor="rcv-manual-reason" style={{ marginTop: 10 }}>
+                Why can it not be scanned?
+              </label>
+              <input
+                id="rcv-manual-reason"
+                className="form-input"
+                value={manualReason}
+                onChange={(e) => setManualReason(e.target.value)}
+                placeholder="e.g. pallet label water damaged"
+                data-testid="rcv-manual-reason"
+              />
+              <div className="wf-panel__actions" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="scan-btn scan-btn--neutral"
+                  onClick={submitManualBatch}
+                  disabled={busy || manualBusy || !manualBatch.trim() || !manualReason.trim()}
+                  data-testid="rcv-manual-submit"
+                >
+                  <FilePlus2 size={15} /> Record exception
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => { setManualOpen(false); setManualBatch(''); setManualReason(''); }}
+                  data-testid="rcv-manual-cancel"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {grn?.manual_entry_by && (
+            <div className="scan-feedback scan-feedback--error" data-testid="rcv-manual-exception">
+              <AlertTriangle size={14} />
+              <span>
+                Manual batch exception: <strong>{grn.batch_code}</strong> — {grn.manual_entry_reason}
+              </span>
+            </div>
+          )}
+
           {step >= 2 && (
             <ScanInput
               key="rcv-unit"
-              label={`Step 3 · Scan each unit (${receivedTotal} of ${expectedTotal})`}
+              label={`Scan each unit (${receivedTotal} of ${expectedTotal})`}
               placeholder="Scan a product barcode — accepted or rejected"
               value={scanText}
               onChange={setScanText}
@@ -822,20 +1043,16 @@ export default function InboundReceivingView() {
         <div className="wf-panel">
           <div className="wf-panel__header">
             <div>
-              <div className="wf-panel__title"><PackageCheck size={17} /> Receipt</div>
+              <div className="wf-peek"> Receipt</div>
               <div className="wf-panel__hint">
                 {asn.po_ref ? `PO ${asn.po_ref} · ` : ''}
                 {asn.expected_vehicle || 'no vehicle on the ASN'}
               </div>
             </div>
             {lines.length > 0 && (
-              <ProgressRing
-                value={receivedTotal}
-                total={expectedTotal}
-                label={`${receivedTotal} of ${expectedTotal}`}
-                sublabel="units received"
-                dataTestId="rcv-progress"
-              />
+              <span className="mono-num" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {receivedTotal} / {expectedTotal}
+              </span>
             )}
           </div>
 

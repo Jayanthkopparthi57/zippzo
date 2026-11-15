@@ -1,12 +1,12 @@
 # Zippzo Quick-Commerce Platform
 
-A full-stack warehouse management system built with **Django REST Framework** and **React**, featuring a modular monolith backend with **19 bounded contexts**, an immutable hash-chained stock ledger, and real-time WebSocket delivery.
+A full-stack quick-commerce platform built with **Django REST Framework** and **React 19 + Vite**. It ships an operations web console and floor app, a rider app, and a consumer web and app, backed by a modular Django platform and an immutable stock ledger.
 
 ## Architecture
 
-- **Backend**: Django 5.x + DRF + Celery + Django Channels
+- **Backend**: Django 4.2 + DRF + Celery + Django Channels
 - **Database**: PostgreSQL 16 + PostGIS + TimescaleDB + Redis
-- **Frontend**: React 18 + Vite + Tailwind CSS
+- **Frontend**: React 19 + Vite, with separate product entry points documented in `frontend/PRODUCTS.md`
 - **Deployment**: Docker + Render.com
 
 ## Bounded Contexts (19)
@@ -48,8 +48,8 @@ pip install -r requirements.txt
 # Run migrations
 python manage.py migrate
 
-# Create superuser
-python manage.py createsuperuser
+# Create the first application administrator (prompts securely for a password)
+python manage.py bootstrap_admin
 
 # Run development server
 python manage.py runserver
@@ -67,7 +67,7 @@ npm run dev
 - **OpenAPI Schema**: `http://localhost:8000/api/schema/`
 
 ## Database Schema
-- 45+ tables across 19 bounded contexts
+- 99 tables across 19 bounded contexts (see `bounded/` and the design spec)
 - Hash-chained immutable stock ledger
 - 33 invariants enforced at DB level
 - See `schema.sql` for complete DDL
@@ -81,6 +81,22 @@ npm run dev
 - Gated putaway (stock not sellable until confirmed)
 - COD custody ledger with ceiling enforcement
 
+## Local services and app surfaces
+
+Docker Compose runs PostgreSQL, Redis, the Django ASGI server, and the outbox
+publisher. The API and built React surfaces are served from port 8000:
+
+```bash
+docker compose up --build
+```
+
+For frontend development with hot reload, run the backend services and use the
+product entry commands in `frontend/PRODUCTS.md`. Daphne serves both HTTP and
+WebSocket traffic; the outbox worker publishes durable order events so
+connected rider and customer sessions can refresh immediately. The in-app
+notification inbox is persisted. SMS, email, WhatsApp, and push providers still
+need provider-specific credentials and adapters.
+
 ## Testing
 
 ```bash
@@ -89,7 +105,7 @@ cd frontend && npm run lint && npm run build
 cd frontend && npx playwright test          # end-to-end, ~30 min
 ```
 
-Playwright drives a **seeded** development database: the five fixed accounts
+Playwright expects a **seeded** development database: the five fixed accounts
 (`admin` / `ops` / `warehouse` / `rider` / `customer`), one dark store with its
 bins and stock, an 80+ SKU catalogue, open pick tasks and at least one
 delivered order. No command creates that dataset yet (it was built up by

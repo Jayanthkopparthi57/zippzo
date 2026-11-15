@@ -152,7 +152,8 @@ class AssignByRiderTests(QrAssignmentBase):
             order=task.order, to_status='RIDER_ASSIGNED').exists(),
             'the order records who it went to')
 
-        qr = QRCode.objects.get(code=code)
+        qr = QRCode.objects.get(code=r.data['next_qr'])
+        self.assertNotEqual(qr.code, code, 'the QR rotates after use')
         self.assertEqual(qr.scan_count, 1, 'the scan lands on the QR row')
 
     def test_offline_rider_can_still_be_scanned_in(self):
@@ -173,15 +174,17 @@ class AssignByRiderTests(QrAssignmentBase):
         code = self.mint_qr()
         task = self.make_task(suffix='A3')
         api = self.api_for(self.ops)
-        api.post(ASSIGN_ENDPOINT,
+        first = api.post(ASSIGN_ENDPOINT,
                  {'qr_code': code, 'task_id': str(task.task_id)},
                  format='json')
+        second_code = first.data['next_qr']
+        self.assertNotEqual(second_code, code, 'the QR rotates after use')
         again = api.post(ASSIGN_ENDPOINT,
-                         {'qr_code': code, 'task_id': str(task.task_id)},
+                         {'qr_code': second_code, 'task_id': str(task.task_id)},
                          format='json')
         self.assertEqual(again.status_code, 200, again.data)
         self.assertTrue(again.data['already_assigned'])
-        self.assertEqual(QRCode.objects.get(code=code).scan_count, 2)
+        self.assertEqual(QRCode.objects.get(code=again.data['next_qr']).scan_count, 2)
 
     def test_riders_cannot_run_the_counter_flow(self):
         task = self.make_task(suffix='A4')

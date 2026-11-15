@@ -117,7 +117,8 @@ interface Tab {
 const LIST_CONTAINERS = [
   'rcv-queue', 'asn-lines', 'rcv-lines', 'qc-queue', 'qc-batch-lines', 'qc-tally',
   'put-queue', 'put-bin-card', 'co-lines', 'co-stock', 'co-result-tasks',
-  'pack-queue', 'pack-lines', 'bin-lookup-candidates', 'bin-lookup-rows',
+  'pack-queue', 'pack-lines', 'pack-bin-lines', 'pack-items', 'pack-resolve-contents',
+  'bin-lookup-candidates', 'bin-lookup-rows',
   'pick-queue', 'ds-shelf-rows', 'ds-ledger-rows', 'ds-return-pending',
   'ds-return-settled', 'ds-pick-queue', 'ds-pick-lines', 'ds-pack-queue',
   'ds-handoff-queue', 'ds-handoff-closed', 'ds-receipt-queue',
@@ -155,11 +156,18 @@ const WMS_TABS: Tab[] = [
   { id: 'pick-execute', arrival: ['[data-testid^="pick-queue-"]', '[data-testid="pick-empty"]', '[data-testid="pick-load-error"]'], error: ['[data-testid="pick-load-error"]'], refresh: 'pick-refresh' },
   { id: 'pack-seal', arrival: ['[data-testid="pack-queue"]', '[data-testid="pack-lines"]', '[data-testid="pack-empty"]', '[data-testid="pack-load-error"]'], error: ['[data-testid="pack-load-error"]'], refresh: 'pack-refresh' },
   { id: 'transfer-orders', arrival: GENERIC_ARRIVAL },
-  { id: 'sorting-list', arrival: ['[data-testid="pq-picks"]', '[data-testid="pq-picks-empty"]', '[data-testid="pq-waves"]', '[data-testid="pq-waves-empty"]', '[data-testid="pq-load-error"]'], error: ['[data-testid="pq-load-error"]', '[data-testid="pq-picks-error"]', '[data-testid="pq-waves-error"]'], refresh: 'pq-refresh' },
+  { id: 'sorting-list', arrival: ['[data-testid="pq-waves"]', '[data-testid="pq-waves-empty"]', '[data-testid="pq-picks"]', '[data-testid="pq-picks-empty"]', '[data-testid="pq-load-error"]'], error: ['[data-testid="pq-load-error"]', '[data-testid="pq-picks-error"]', '[data-testid="pq-waves-error"]'], refresh: 'pq-refresh' },
   { id: 'packing', arrival: GENERIC_ARRIVAL },
-  { id: 'batches', arrival: ['[data-testid="pq-picks"]', '[data-testid="pq-picks-empty"]', '[data-testid="pq-load-error"]'], error: ['[data-testid="pq-load-error"]', '[data-testid="pq-picks-error"]', '[data-testid="pq-waves-error"]'], refresh: 'pq-refresh' },
-  { id: 'picklists', arrival: ['[data-testid="pq-picks"]', '[data-testid="pq-picks-empty"]', '[data-testid="pq-load-error"]'], error: ['[data-testid="pq-load-error"]', '[data-testid="pq-picks-error"]', '[data-testid="pq-waves-error"]'], refresh: 'pq-refresh' },
-  { id: 'dispatch-trips', arrival: ['[data-testid="dispatch-transfers"]', '[data-testid="dispatch-transfers-empty"]', '[data-testid="dispatch-batches"]', '[data-testid="dispatch-batches-empty"]', '[data-testid="dispatch-routes"]', '[data-testid="dispatch-routes-empty"]', '[data-testid="dispatch-load-error"]'], error: ['[data-testid="dispatch-load-error"]', '[data-testid="dispatch-transfers-error"]', '[data-testid="dispatch-batches-error"]', '[data-testid="dispatch-routes-error"]'], refresh: 'dispatch-refresh' },
+  { id: 'batches', arrival: ['[data-testid="pq-picklists"]', '[data-testid="pq-picklists-empty"]', '[data-testid="pq-load-error"]'], error: ['[data-testid="pq-load-error"]', '[data-testid="pq-picks-error"]', '[data-testid="pq-waves-error"]'], refresh: 'pq-refresh' },
+  { id: 'picklists', arrival: ['[data-testid="pq-picklists"]', '[data-testid="pq-picklists-empty"]', '[data-testid="pq-load-error"]'], error: ['[data-testid="pq-load-error"]', '[data-testid="pq-picklists-error"]'], refresh: 'pq-refresh' },
+  { id: 'dispatch-trips', arrival: ['[data-testid="dispatch-transfers"]'], error: ['[data-testid="dispatch-load-error"]'], refresh: null },
+  { id: 'shipment-batches', arrival: ['[data-testid="dispatch-batches"]'], error: ['[data-testid="dispatch-load-error"]'], refresh: null },
+  { id: 'route-plans', arrival: ['[data-testid="dispatch-routes"]'], error: ['[data-testid="dispatch-load-error"]'], refresh: null },
+  { id: 'packed-lpns', arrival: ['[data-testid="packed-lpns"]'], error: ['[data-testid="packing-load-error"]'], refresh: null },
+  { id: 'outbound-ledger', arrival: ['[data-testid="obl-table"]'], error: ['[data-testid="obl-error"]'], refresh: null },
+  { id: 'outbound-ledger-packs', arrival: ['[data-testid="obl-table"]'], error: ['[data-testid="obl-error"]'], refresh: null },
+  { id: 'outbound-ledger-transfers', arrival: ['[data-testid="obl-table"]'], error: ['[data-testid="obl-error"]'], refresh: null },
+  { id: 'outbound-ledger-bins', arrival: ['[data-testid="obl-table"]'], error: ['[data-testid="obl-error"]'], refresh: null },
   { id: 'manifests', arrival: ['[data-testid="dispatch-batches"]', '[data-testid="dispatch-batches-empty"]', '[data-testid="dispatch-routes"]', '[data-testid="dispatch-load-error"]'], error: ['[data-testid="dispatch-load-error"]', '[data-testid="dispatch-batches-error"]', '[data-testid="dispatch-routes-error"]'], refresh: 'dispatch-refresh' },
   { id: 'cross-dock', arrival: GENERIC_ARRIVAL },
   { id: 'dashboard', arrival: GENERIC_ARRIVAL },
@@ -168,7 +176,9 @@ const WMS_TABS: Tab[] = [
   { id: 'skus', arrival: GENERIC_ARRIVAL },
   { id: 'vendors', arrival: GENERIC_ARRIVAL },
   { id: 'active-trips', arrival: GENERIC_ARRIVAL },
-  { id: 'admin-settings', arrival: GENERIC_ARRIVAL },
+  // Admin settings is a console of panels, not a listing: the staff directory
+  // is its real content landmark (its first tab).
+  { id: 'admin-settings', arrival: ['[data-testid="admin-tab-employees"]', '[data-testid="admin-load-error"]'], error: [] },
 ];
 
 // Every store-ops nav id (dark-store facility selected), gated on StoreGate.
@@ -209,19 +219,30 @@ test.describe('real-user walkthrough — every tab, every mode, nothing stubbed'
       // Generic DataTable tabs must actually render their content: a data
       // table for tabular views, the metric grid for the dashboard.
       if (t.id === 'transfer-orders') {
-        // This tab is the creation form, not a listing — a table is the wrong
-        // landmark for it.
+        // This tab is the STO ledger: the reference screen is a lifecycle
+        // table, with the creation form behind the "New STO" action.
         await expect(
-          page.getByRole('heading', { name: /Create Dark Store Transfer Order/i }),
-          `WMS ${t.id} renders its form`
+          page.locator('[data-testid="sto-table"]'),
+          `WMS ${t.id} renders its ledger`
         ).toBeVisible(LONG);
       } else if (t.id === 'inventory-lots' || t.id === 'transaction-log' || t.id === 'storage-bins' ||
           t.id === 'packing' || t.id === 'cross-dock' ||
           t.id === 'employee-roster' || t.id === 'sites-registry' ||
-          t.id === 'skus' || t.id === 'vendors' || t.id === 'active-trips' || t.id === 'admin-settings') {
+          t.id === 'skus' || t.id === 'vendors' || t.id === 'active-trips') {
         await expect(
           page.locator('main.workspace-viewport table, main.workspace-viewport .data-table').first(),
           `WMS ${t.id} renders a data table`
+        ).toBeVisible(LONG);
+      } else if (t.id === 'admin-settings') {
+        // A settings console, not a list: the staff directory tab must be
+        // selected and its data table must render.
+        await expect(
+          page.getByTestId('admin-tab-employees'),
+          'WMS admin-settings opens on the staff directory'
+        ).toBeVisible(LONG);
+        await expect(
+          page.locator('main.workspace-viewport table, main.workspace-viewport .data-table').first(),
+          'WMS admin-settings renders the staff table'
         ).toBeVisible(LONG);
       } else if (t.id === 'dashboard') {
         await expect(
@@ -242,9 +263,9 @@ test.describe('real-user walkthrough — every tab, every mode, nothing stubbed'
     // them.
     await selectDarkStore(page);
     await expect(page.locator('[data-testid="nav-ds-dashboard"]')).toBeVisible(LONG);
-    // The dark-store sections belong to the store application's own shell, so
-    // picking a site must not swap the sidebar for a second brand.
-    await expect(page.locator('.brand-title')).toHaveText('Zippzo Store', LONG);
+    // The dark-store sections live in the WMS shell, and picking a store only
+    // swaps the menu set: the bundle's brand must not change underneath it.
+    await expect(page.locator('.brand-title')).toHaveText('Zippzo WMS', LONG);
     const w = watch(page);
 
     // StoreGate: if the session has no store and more than one dark store is

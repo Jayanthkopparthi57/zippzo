@@ -28,6 +28,8 @@ them:
 The fixtures deliberately raise the lot at the warehouse, which is the shape
 production actually has and the shape the older suites did not.
 """
+import uuid
+
 from django.contrib.auth.hashers import make_password
 from django.test import TestCase
 from django.utils import timezone
@@ -102,6 +104,12 @@ class ConsoleBase(TestCase):
             current_site=cls.hub, source_site=cls.hub, dest_site=cls.store,
             status='IN_TRANSIT', created_by='test')
         LpnContent.objects.create(lpn=cls.inbound, sku=cls.sku, lot=cls.lot, qty=7)
+        # Receipt must move real source custody into the destination tote. Seed
+        # the source LPN balance explicitly instead of relying on manifest-only
+        # inventory, which would create stock during receipt.
+        StockBalance.objects.create(
+            site=cls.hub, container='LPN', container_ref=str(cls.inbound.lpn_id),
+            sku=cls.sku, lot=cls.lot, qty=7)
         cls.foreign = LpnMaster.objects.create(
             lpn_id='LPN-CONSOLE-FOREIGN', barcode='TOTE-CONSOLE-FOREIGN', lpn_type='TOTE',
             current_site=cls.hub, source_site=cls.hub, dest_site=cls.other,
@@ -153,6 +161,36 @@ class OverviewTests(ConsoleBase):
         self.assertEqual(200, response.status_code, response.data)
         self.assertEqual(12, response.data['shelf_inventory']['total_units'])
         self.assertEqual(1, response.data['shelf_inventory']['total_skus'])
+
+    def test_a_completed_pick_reports_its_duration_instead_of_500ing(self):
+        """A pick with both timestamps used to take the whole tile down.
+
+        `completed_at - started_at` is an interval. Averaging it through a
+        FloatField annotation made Postgres return a timedelta that Django
+        refused to cast, so the command centre 500'd the moment the store had
+        completed its first pick. Nothing caught it because every other
+        overview fixture had no finished pick.
+        """
+        completed = timezone.now()
+        PickTask.objects.create(
+            picklist_id=uuid.uuid4(), batch=uuid.uuid4(), order=self.order,
+            sku=self.sku.sku_id, lot=self.lot.lot_id, bin=self.bin.location_id,
+            qty=2, picked_qty=2, status='COMPLETED', started_at=completed,
+            completed_at=completed + timezone.timedelta(seconds=90))
+
+        response = self.api.get(OVERVIEW, {'store_code': self.store.code})
+        self.assertEqual(200, response.status_code, response.data)
+        self.assertEqual(90.0, response.data['avg_pick_time_sec'])
+
+    def test_an_unfinished_pick_does_not_claim_a_duration(self):
+        PickTask.objects.create(
+            picklist_id=uuid.uuid4(), batch=uuid.uuid4(), order=self.order,
+            sku=self.sku.sku_id, lot=self.lot.lot_id, bin=self.bin.location_id,
+            qty=2, status='IN_PROGRESS', started_at=timezone.now())
+
+        response = self.api.get(OVERVIEW, {'store_code': self.store.code})
+        self.assertEqual(200, response.status_code, response.data)
+        self.assertIsNone(response.data['avg_pick_time_sec'])
 
 
 class IncomingTotesTests(ConsoleBase):

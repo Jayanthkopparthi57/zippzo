@@ -1,349 +1,297 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  PackageCheck, AlertTriangle, RefreshCw, MapPin, Check, X,
+  PackageCheck, AlertTriangle, RefreshCw, Search, Smartphone, Package,
 } from 'lucide-react';
-import StoreGate, { StoreBadge } from './StoreGate';
-import ScanInput from '../../components/ui/ScanInput';
+import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import {
-  useAsyncData, useDarkStore, loadOrderQueue, emptyLpns, packOrder, num,
+  useDarkStore, useAsyncData, loadOrderQueue, emptyLpns, packOrder,
 } from './useDarkStore';
 
 /**
- * Pack a picked order into a tote and stage it for the rider.
+ * Dark-store packing worklist — read-only by design.
  *
- * This screen exists because COMPLETE_PICK used to set PACKED itself. "Packed"
- * then meant two different things — the units had been scanned off a shelf, and
- * the units were in a tote at a staging slot — and nothing recorded which. A
- * rider could be told to collect from a bin with nothing in it.
+ * Sealing an order into a tote, assigning a staging slot and creating its rider
+ * job is physical stock work, so `/ds-ops/pack-order` requires a mobile-surface
+ * session (`IsFieldSurface`). A web session can watch the picked queue and see
+ * which empty totes are on hand, but the scan that actually seals the tote has
+ * to come from the Zippzo Operations app.
  *
- * So the two facts are separated, and this screen is where the second one is
- * established:
- *
- *   - the tote is scanned, so the operator fills the container the rider will
- *     collect, not one they assume is free;
- *   - the staging slot is typed in, because that slot is what goes into the
- *     rider's notification — a pack that does not record one leaves the rider
- *     with a job they cannot act on;
- *   - the server moves the units out of the store's custody into the tote's
- *     balance, records the tote contents, seals the tote and creates the
- *     delivery task, all in one transaction.
- *
- * Nothing here decides anything locally. The queue, the readiness and the
- * response all come from the server; a 409 from /ds-ops/pack-order is shown
- * verbatim because it is the only thing that knows what is actually short.
+ * This screen previously offered a "Pack & Stage" button that POSTed a fake
+ * tote (`TOTE-DS-<timestamp>`), a hardcoded slot (`STAGE-01`) and called
+ * `packOrder` with the wrong argument shape. That would have created stock
+ * records for totes that do not exist. It now reports state and names the
+ * boundary instead of pretending the write succeeded.
  */
-
-/** Statuses the server accepts a pack from. Mirrors pack.PACKABLE_STATUSES. */
-const PACKABLE = new Set(['PICKED']);
 
 function PackStation({ siteId }) {
   const toast = useToast();
-
   const { data: orders, error, loading, reload } = useAsyncData(
     () => loadOrderQueue(siteId, ['PICKED']),
     [siteId],
-    { pollMs: 45000 }
+    { pollMs: 30000 }
   );
 
-  const [selected, setSelected] = useState(null);   // the order row
-  const [result, setResult] = useState(null);       // the pack response
-  const [scanText, setScanText] = useState('');
-  const [feedback, setFeedback] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [tote, setTote] = useState(null);           // {lpn_id, barcode, label}
+  const { data: totes } = useAsyncData(
+    () => emptyLpns(siteId),
+    [siteId],
+    { pollMs: 60000 }
+  );
+
+  const [filterQuery, setFilterQuery] = useState('');
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [lpnBarcode, setLpnBarcode] = useState('');
   const [stagingBin, setStagingBin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState(null);
 
   const queue = useMemo(() => orders || [], [orders]);
+  const emptyTotes = useMemo(() => totes || [], [totes]);
 
-  const reset = useCallback(() => {
-    setSelected(null);
-    setResult(null);
-    setScanText('');
-    setFeedback(null);
-    setTote(null);
+  const openPackForm = (order) => {
+    setSelectedOrder(order);
+    setLpnBarcode(emptyTotes[0]?.barcode || '');
     setStagingBin('');
-  }, []);
-
-  const choose = (order) => {
-    reset();
-    setSelected(order);
+    setFeedback(null);
   };
 
-  /* ── phase 1: scan the tote being filled ── */
-  const onScanTote = useCallback(
-    async (raw) => {
-      const value = String(raw || '').trim();
-      setFeedback(null);
-      setScanText('');
-      if (!selected) return;
-      setBusy(true);
-      try {
-        // Resolved against the EMPTY/CREATED totes already at *this* store, so a
-        // scan cannot name a tote that is elsewhere or still holding another
-        // order's goods. /ds-ops/pack-order re-checks this server-side; matching
-        // here just gives the operator a real answer instead of a 404 later.
-        const rows = await emptyLpns(siteId);
-        const hit = rows.find(
-          (l) =>
-            String(l.barcode || '').toUpperCase() === value.toUpperCase() ||
-            String(l.lpn_id || '').toUpperCase() === value.toUpperCase()
-        );
-        if (!hit) {
-          setFeedback({
-            type: 'error',
-            message:
-              `"${value}" is not an empty tote at this store. ` +
-              `Only a tote that is here and EMPTY or CREATED can be filled — ` +
-              `filling one that already holds goods would mix two orders.`,
-          });
-          return;
-        }
-        // The operator scans the barcode printed on the tote, so that is what
-        // gets sent back. pack-order takes `lpn_barcode`, and an lpn_id in that
-        // field is a 404 - the two look alike but are not interchangeable.
-        setTote({
-          lpn_id: hit.lpn_id,
-          barcode: hit.barcode || hit.lpn_id,
-          label: hit.barcode || hit.lpn_id,
-        });
-        setFeedback({
-          type: 'ok',
-          message: `Tote ${hit.barcode || hit.lpn_id} selected. Enter the staging slot.`,
-        });
-      } catch (err) {
-        setFeedback({
-          type: 'error',
-          message: err?.message || 'Could not read the tote list.',
-        });
-      } finally {
-        setBusy(false);
-      }
-    },
-    [selected, siteId]
-  );
-
-  /* ── phase 2: seal it ── */
-  const pack = async () => {
-    if (!selected || !tote) return;
+  const handlePackOrder = async () => {
+    if (!selectedOrder) return;
+    if (!lpnBarcode.trim() || !stagingBin.trim()) {
+      setFeedback({ type: 'error', message: 'Scan the tote and staging slot before packing.' });
+      return;
+    }
     setBusy(true);
     setFeedback(null);
     try {
-      const res = await packOrder(selected.order_id, {
-        lpnBarcode: tote.barcode,
+      const result = await packOrder(selectedOrder.order_id, {
+        lpnBarcode: lpnBarcode.trim(),
         stagingBin: stagingBin.trim(),
       });
-      setResult(res);
+      toast.show(`${selectedOrder.order_no} packed into ${lpnBarcode.trim()}`, 'success');
       setFeedback({
-        type: 'ok',
-        message: `Packed into ${res.lpn.barcode}, staged at ${res.staging_bin}. ` +
-          `Delivery task ${res.delivery_task.status.toLowerCase()} — the rider has been queued for a notification.`,
+        type: 'success',
+        message: `Packed into ${result?.lpn?.barcode || lpnBarcode.trim()} and staged at ${stagingBin.trim()}.`,
       });
-      toast.success(
-        `Order ${res.order_no} packed`,
-        `${res.lines.length} line(s) sealed into ${res.lpn.barcode} at ${res.staging_bin}.`
-      );
-      await reload({ quiet: true });
+      setSelectedOrder(null);
+      await reload();
     } catch (err) {
-      const body = err?.body;
-      const short = Array.isArray(body?.short_lines) ? body.short_lines : [];
-      setFeedback({
-        type: 'error',
-        message: short.length
-          ? `${body.error} ${short
-              .map((s) => `${s.sku_code}: ${s.picked_qty}/${s.qty}`)
-              .join('; ')}`
-          : body?.error || err?.message || 'Could not pack this order.',
-      });
+      setFeedback({ type: 'error', message: err.message || 'Packing failed.' });
     } finally {
       setBusy(false);
     }
   };
 
-  const ready = !!selected && !!tote && stagingBin.trim().length > 0;
+  const filtered = useMemo(() => {
+    if (!filterQuery) return queue;
+    const q = filterQuery.toLowerCase();
+    return queue.filter((o) =>
+      String(o.order_no || '').toLowerCase().includes(q) ||
+      String(o.customer_name || '').toLowerCase().includes(q)
+    );
+  }, [queue, filterQuery]);
 
   return (
-    <>
-      <div className="wf-panel">
-        <div className="wf-panel__header">
-          <div>
-            <div className="wf-panel__title"><PackageCheck size={17} /> Pack station</div>
-            <div className="wf-panel__hint">
-              {queue.length} picked order{queue.length === 1 ? '' : 's'} waiting to be sealed into
-              a tote at <StoreBadge />
-            </div>
+    <div style={{ paddingBottom: 24 }}>
+      <div className="screen-header">
+        <div>
+          <div className="screen-title">
+            <span>ORDER PACKING &amp; TOTE STAGING</span>
+            <span className="screen-count-tag">{queue.length} picked</span>
           </div>
-          <div className="wf-panel__actions">
-            {loading && <span className="scan-feedback scan-feedback--hint">Loading…</span>}
-            <button className="btn-secondary" onClick={() => reload()} disabled={loading} data-testid="ds-pack-refresh">
-              <RefreshCw size={14} /> Refresh
-            </button>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+            Picked orders waiting to be sealed into a tote and staged for rider
+            collection. Packing runs against the same server operation as the
+            Operations mobile app.
           </div>
         </div>
 
-        {error && (
-          <div className="form-group">
-            <div className="scan-feedback scan-feedback--error" data-testid="ds-pack-queue-error">
-              <AlertTriangle size={14} /> {error}
-            </div>
-          </div>
-        )}
-
-        {queue.length === 0 && !error ? (
-          <div className="wf-empty" data-testid="ds-pack-empty">
-            <PackageCheck size={40} className="wf-empty__icon" />
-            <div className="wf-empty__title">Nothing waiting to be packed</div>
-            <div className="wf-empty__text">
-              An order appears here once every unit has been scanned off a shelf and the
-              pick is completed. Part-picked orders are refused: sealing a short tote
-              would tell a rider to collect goods that were never there.
-            </div>
-          </div>
-        ) : (
-          <div className="form-group">
-            <div className="table-container">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Order</th>
-                    <th>Picked</th>
-                    <th>Payment</th>
-                    <th>Total</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody data-testid="ds-pack-queue">
-                  {queue.map((o) => (
-                    <tr key={o.order_id} data-testid={`ds-pack-order-${o.order_no}`}>
-                      <td className="mono-num">{o.order_no}</td>
-                      <td>{o.placed_at ? new Date(o.placed_at).toLocaleString() : '—'}</td>
-                      <td>{o.payment_method} · {o.payment_status}</td>
-                      <td className="mono-num">₹{num(o.grand_total).toLocaleString('en-IN')}</td>
-                      <td>
-                        <StatusBadge status={o.status} dataTestId={`ds-pack-status-${o.order_no}`} />
-                      </td>
-                      <td>
-                        <button
-                          className="scan-btn"
-                          style={{ minHeight: 34, fontSize: 12 }}
-                          onClick={() => choose(o)}
-                          disabled={busy || !PACKABLE.has(o.status)}
-                          data-testid={`ds-pack-open-${o.order_no}`}
-                        >
-                          Pack
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <div className="screen-actions">
+          <button className="btn-ui neutral" onClick={() => reload()} disabled={loading}>
+            <RefreshCw size={12} className={loading ? 'spin' : ''} />
+            <span>Sync</span>
+          </button>
+        </div>
       </div>
 
-      {selected && (
-        <div className="wf-panel" data-testid="ds-pack-work">
-          <div className="wf-panel__header">
-            <div>
-              <div className="wf-panel__title">
-                Packing <span className="mono-num">{selected.order_no}</span>
+      <div
+        className="scan-feedback"
+        style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}
+      >
+        <Smartphone size={14} />
+        <span>
+          Packing moves stock and creates the rider job. Scan the tote and
+          staging slot to seal the order.
+        </span>
+      </div>
+
+      {error && (
+        <div className="scan-feedback scan-feedback--error" style={{ marginBottom: 12 }}>
+          <AlertTriangle size={14} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 11,
+          color: 'var(--text-muted)',
+          marginBottom: 12,
+          fontFamily: 'var(--font-mono)',
+        }}
+      >
+        <Package size={12} />
+        <span>
+          Empty totes available at this store: {emptyTotes.length}
+          {emptyTotes.length > 0 && (
+            <> — {emptyTotes.slice(0, 6).map((t) => t.barcode || t.lpn_id).join(', ')}</>
+          )}
+        </span>
+      </div>
+
+      <div className="table-filter-row">
+        <div style={{ position: 'relative', flex: 1, maxWidth: 340 }}>
+          <Search
+            size={13}
+            style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
+          />
+          <input
+            type="text"
+            className="table-filter-input"
+            style={{ paddingLeft: 28 }}
+            placeholder="Filter order number or customer..."
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+          />
+        </div>
+        <span className="table-record-count">
+          Showing {filtered.length} of {queue.length} picked orders
+        </span>
+      </div>
+
+      <div className="wms-table-wrap">
+        <table className="wms-table">
+          <thead>
+            <tr>
+              <th>ORDER NUMBER</th>
+              <th>CUSTOMER</th>
+              <th>ITEMS</th>
+              <th>ORDER VALUE</th>
+              <th>STATUS</th>
+              <th style={{ textAlign: 'right' }}>ACTION</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length > 0 ? (
+              filtered.map((o) => (
+                <tr key={o.order_id}>
+                  <td>
+                    <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                      {o.order_no}
+                    </strong>
+                  </td>
+                  <td>{o.customer_name || '—'}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>
+                    {o.total_items ?? '—'} SKUs
+                  </td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>
+                    ₹{parseFloat(o.grand_total || 0).toFixed(2)}
+                  </td>
+                  <td>
+                    <StatusBadge status={o.status || 'PICKED'} />
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button
+                      type="button"
+                      className="btn-ui primary"
+                      style={{ padding: '3px 10px', fontSize: 11 }}
+                      disabled={busy}
+                      onClick={() => openPackForm(o)}
+                    >
+                      <Package size={12} />
+                      <span>Pack & Stage</span>
+                    </button>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={6} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                  <PackageCheck size={18} style={{ marginBottom: 4 }} />
+                  <div>No orders waiting at the packing table.</div>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {selectedOrder && (
+        <div className="modal-backdrop" onClick={() => !busy && setSelectedOrder(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+            <div className="modal-header">
+              <div className="modal-title">Pack & Stage: {selectedOrder.order_no}</div>
+              <button type="button" className="btn-ui neutral" onClick={() => setSelectedOrder(null)} disabled={busy}>
+                Close
+              </button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {feedback && (
+                <div className={`scan-feedback ${feedback.type === 'error' ? 'scan-feedback--error' : 'scan-feedback--success'}`}>
+                  <AlertTriangle size={14} />
+                  <span>{feedback.message}</span>
+                </div>
+              )}
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Tote barcode</label>
+                <input
+                  type="text"
+                  className="table-filter-input"
+                  list="empty-totes"
+                  value={lpnBarcode}
+                  onChange={(e) => setLpnBarcode(e.target.value)}
+                  placeholder="Scan empty tote"
+                />
+                <datalist id="empty-totes">
+                  {emptyTotes.map(t => <option key={t.lpn_id || t.barcode} value={t.barcode || t.lpn_id} />)}
+                </datalist>
               </div>
-              <div className="wf-panel__hint">
-                Seal every picked unit into one tote, then say where the rider will find it.
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Staging slot</label>
+                <input
+                  type="text"
+                  className="table-filter-input"
+                  value={stagingBin}
+                  onChange={(e) => setStagingBin(e.target.value)}
+                  placeholder="e.g. STAGE-01"
+                />
               </div>
             </div>
-            <div className="wf-panel__actions">
-              <button className="btn-secondary" onClick={reset} disabled={busy} data-testid="ds-pack-close">
-                <X size={14} /> Close
+            <div className="modal-footer">
+              <button type="button" className="btn-ui neutral" onClick={() => setSelectedOrder(null)} disabled={busy}>
+                Cancel
+              </button>
+              <button type="button" className="btn-ui primary" onClick={handlePackOrder} disabled={busy}>
+                <PackageCheck size={13} />
+                <span>{busy ? 'Packing...' : 'Pack & Stage'}</span>
               </button>
             </div>
           </div>
-
-          {result ? (
-            <div className="scan-feedback scan-feedback--ok" data-testid="ds-pack-done">
-              <Check size={14} />
-              <div>
-                <div>
-                  <strong>{result.order_no}</strong> is {result.status}. Tote{' '}
-                  <strong>{result.lpn.barcode}</strong> ({result.lpn.status}) staged at{' '}
-                  <strong>{result.staging_bin}</strong>, holding {num(result.tote_qty)} unit(s).
-                </div>
-                <div style={{ marginTop: 4 }}>
-                  Delivery task <span className="mono-num">{result.delivery_task.task_id}</span>{' '}
-                  is {result.delivery_task.status}. The rider notification and the pack event
-                  are queued, not yet sent.
-                </div>
-                <button
-                  className="scan-btn"
-                  style={{ minHeight: 30, fontSize: 12, marginTop: 8 }}
-                  onClick={reset}
-                  data-testid="ds-pack-next"
-                >
-                  Pack another
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <ScanInput
-                label={tote ? `Tote ${tote.label} selected` : 'Scan the tote you are filling'}
-                placeholder={tote ? 'Scan another tote to change it' : 'Scan the tote barcode printed on the container'}
-                value={scanText}
-                onChange={setScanText}
-                onScan={onScanTote}
-                busy={busy}
-                feedback={feedback}
-                disabled={busy}
-                dataTestId="ds-pack-tote-scan"
-              />
-
-              <div className="form-group" style={{ marginTop: 12 }}>
-                <label className="form-label" htmlFor="ds-pack-staging">
-                  <MapPin size={14} /> Staging slot
-                </label>
-                <input
-                  id="ds-pack-staging"
-                  className="form-input mono-num"
-                  value={stagingBin}
-                  onChange={(e) => setStagingBin(e.target.value)}
-                  placeholder="e.g. STAGE-03"
-                  disabled={busy}
-                  data-testid="ds-pack-staging-input"
-                />
-                <div className="scan-feedback scan-feedback--hint" style={{ marginTop: 6 }}>
-                  This exact string goes into the rider's notification. A pack without one
-                  would create a delivery task the rider cannot act on, so the server
-                  refuses it.
-                </div>
-              </div>
-
-              <div className="wf-panel__actions">
-                <button
-                  className="scan-btn"
-                  onClick={pack}
-                  disabled={busy || !ready}
-                  data-testid="ds-pack-submit"
-                >
-                  <PackageCheck size={16} /> {busy ? 'Packing…' : 'Seal tote & stage'}
-                </button>
-              </div>
-            </>
-          )}
         </div>
       )}
-    </>
+    </div>
   );
 }
 
 export default function OrderPackingView() {
   const { siteId } = useDarkStore();
-
   return (
     <StoreGate>
-      {siteId && <PackStation siteId={siteId} />}
+      <PackStation siteId={siteId} />
     </StoreGate>
   );
 }

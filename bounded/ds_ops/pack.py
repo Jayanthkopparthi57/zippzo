@@ -40,7 +40,7 @@ class PackError(Exception):
         self.detail = detail
 
 
-PACKABLE_STATUSES = {'PICKED'}
+PACKABLE_STATUSES = {'PICKED', 'RACK_DROPPED'}
 
 # Statuses an order can be in where a DeliveryTask must not be replaced or
 # duplicated. Once a rider has touched the task, re-packing is a dispute, not a
@@ -59,7 +59,7 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
     from bounded.inventory.models import LpnContent, LpnMaster, StockBalance
     from bounded.inventory.stock import already_applied, apply_stock
     from bounded.orders.models import CustomerOrderLine, OrderStatusHistory
-    from bounded.outbox.models import OutboxEvent
+    from bounded.outbox.services import enqueue_event
     from .models import PackTask
 
     order.site  # ensure the site is loaded before the query below
@@ -234,7 +234,7 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
     )
 
     correlation_id = getattr(order, 'order_id', None)
-    OutboxEvent.objects.create(
+    enqueue_event(
         aggregate_type='CustomerOrder', aggregate_id=order.order_id,
         event_type='order.packed',
         correlation_id=correlation_id,
@@ -249,7 +249,7 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
             'packed_by': str(actor.user_id),
         },
     )
-    OutboxEvent.objects.create(
+    enqueue_event(
         aggregate_type='DeliveryTask', aggregate_id=task.task_id,
         event_type='delivery_task.created',
         correlation_id=correlation_id,

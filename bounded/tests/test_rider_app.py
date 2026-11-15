@@ -23,7 +23,7 @@ from bounded.delivery.models import DeliveryTask, RiderProfile, RiderShift
 from bounded.iam.models import User
 from bounded.lastmile.models import PODEvidence
 from bounded.money.models import CashMovement, RiderCustodyState, RiderEarnings
-from bounded.network.models import Site
+from bounded.network.models import EmployeeSiteAssignment, Site
 from bounded.notifications.models import Notification
 from bounded.orders.models import Customer, CustomerAddress, CustomerOrder, OrderStatusHistory
 from bounded.outbox.models import OutboxEvent
@@ -63,6 +63,16 @@ class RiderAppBase(TestCase):
         cls.ops = User.objects.create(
             email='ops-rider@zippzo.in', password_hash=make_password('Ride123!'),
             role='WAREHOUSE_STAFF', status='ACTIVE')
+        # A WMS operator only routes to the WMS console when they are assigned
+        # to a mother hub; the facility list is derived from the assignment's
+        # site type, and a DS assignment would route them to the dark store.
+        cls.ops_site = Site.objects.create(
+            code='MH-RIDER-OPS', site_type='MH', name='Rider App MH',
+            address='3 Ops Road', status='ACTIVE')
+        EmployeeSiteAssignment.objects.create(
+            employee='EMP-ops-rider', user=cls.ops, site=cls.ops_site,
+            mode='WAREHOUSE', role_at_site='OPERATOR',
+            is_primary=True, is_active=True)
 
         cls.customer = Customer.objects.create(user=cls.shopper, name='Buyer')
         cls.address = CustomerAddress.objects.create(
@@ -108,9 +118,18 @@ class LoginRoutingTests(RiderAppBase):
         self.assertEqual('SHOPPER', response.data['target_app'])
 
     def test_a_warehouse_operator_keeps_the_wms_console(self):
+        # Field staff always pass a second factor (staff_auth.otp_required_for),
+        # so a correct password returns the challenge, not a token. What this
+        # test guarantees is the routing: the operator is offered the mother
+        # hub, i.e. the WMS workspace, and nothing else.
         response = self.login('ops-rider@zippzo.in', 'Ride123!')
-        self.assertEqual(200, response.status_code, response.data)
-        self.assertEqual('WMS', response.data['target_app'])
+        # The challenge is deliberately a 403 (not a token) so a client cannot
+        # mistake "password accepted" for "signed in".
+        self.assertEqual(403, response.status_code, response.data)
+        self.assertEqual('otp_required', response.data['status'], response.data)
+        self.assertEqual('MH', response.data['facility']['site_type'], response.data)
+        self.assertEqual(['MH-RIDER-OPS'],
+                         [f['code'] for f in response.data['facilities']])
 
 
 class RiderProfileTests(RiderAppBase):
@@ -236,6 +255,19 @@ class RiderJobTests(RiderAppBase):
         self.assertEqual('RIDER_ASSIGNED', order.status,
                          'standing at the store is not movement to the customer')
 
+        # A rider cannot start the delivery until the store seals the hand-off
+        # at the counter (the picker scans the tote over). The bare AT_DS →
+        # EN_ROUTE move is refused by the server.
+        skipped = rider.post(f'{TASKS}{task.task_id}/advance/',
+                             {'to': 'EN_ROUTE'}, format='json')
+        self.assertEqual(409, skipped.status_code, skipped.data)
+
+        # The counter confirms the pickup — this is the hand-off. The rider is
+        # told the order is theirs via the picked-up notification.
+        handed = rider.post(PICKUP, {'task_id': str(task.task_id)},
+                            format='json')
+        self.assertEqual(200, handed.status_code, handed.data)
+
         en_route = rider.post(f'{TASKS}{task.task_id}/advance/',
                               {'to': 'EN_ROUTE'}, format='json')
         self.assertEqual(200, en_route.status_code, en_route.data)
@@ -250,7 +282,8 @@ class RiderJobTests(RiderAppBase):
 
         # The shopper's timeline, newest first (OrderStatusHistory.Meta).
         steps = [h.to_status for h in order.status_history.all()]
-        self.assertEqual(['ARRIVED', 'OUT_FOR_DELIVERY', 'RIDER_ASSIGNED'],
+        self.assertIn('PICKED_UP', steps, 'pickup step missing from order timeline')
+        self.assertEqual(['ARRIVED', 'OUT_FOR_DELIVERY', 'PICKED_UP', 'RIDER_ASSIGNED'],
                          steps)
 
     def test_a_task_cannot_skip_straight_to_arrived(self):
@@ -374,6 +407,76 @@ class InAppNotificationTests(RiderAppBase):
         rows = again.data if isinstance(again.data, list) else again.data['results']
         self.assertEqual(len(rows), len([r for r in rows if r['type'] == 'ORDER_PACKED']),
                          'the outbox was republished')
+
+    def test_order_placed_has_an_explicit_customer_inbox_notification(self):
+        order = self.make_order(status='CONFIRMED')
+        self.event(event_type='order.placed', payload={
+            'order_id': str(order.order_id), 'order_no': order.order_no,
+        })
+
+        response = self.api_for(self.shopper).get(NOTIFICATIONS)
+        rows = response.data if isinstance(response.data, list) else response.data['results']
+        placed = [row for row in rows if row['type'] == 'ORDER_PLACED']
+        self.assertEqual(1, len(placed))
+        self.assertEqual('IN_APP', placed[0]['channel'])
+        self.assertEqual(order.order_no, placed[0]['payload_json']['order_no'])
+
+    def test_rider_assignment_reaches_customer_and_assigned_rider(self):
+        order = self.make_order(status='RIDER_ASSIGNED')
+        self.event(event_type='delivery.rider_assigned', payload={
+            'order_id': str(order.order_id), 'order_no': order.order_no,
+            'rider_user_id': str(self.rider.user_id),
+        })
+
+        for user in (self.shopper, self.rider):
+            response = self.api_for(user).get(NOTIFICATIONS)
+            rows = response.data if isinstance(response.data, list) else response.data['results']
+            assigned = [row for row in rows if row['type'] == 'RIDER_ASSIGNED']
+            self.assertEqual(1, len(assigned), f'{user.email} missed assignment alert')
+            self.assertEqual(order.order_no, assigned[0]['payload_json']['order_no'])
+
+    def test_rider_accept_and_delivery_progress_notify_the_customer(self):
+        order = self.make_order(status='PACKED')
+        task = self.make_task(order)
+        rider = self.api_for(self.rider)
+
+        accepted = rider.post(f'{TASKS}{task.task_id}/accept/', {}, format='json')
+        self.assertEqual(200, accepted.status_code, accepted.data)
+        arrived_at_store = rider.post(
+            f'{TASKS}{task.task_id}/advance/', {'to': 'AT_DS'}, format='json')
+        self.assertEqual(200, arrived_at_store.status_code, arrived_at_store.data)
+
+        handed = rider.post(PICKUP, {'task_id': str(task.task_id)},
+                            format='json')
+        self.assertEqual(200, handed.status_code, handed.data)
+
+        en_route = rider.post(
+            f'{TASKS}{task.task_id}/advance/', {'to': 'EN_ROUTE'}, format='json')
+        self.assertEqual(200, en_route.status_code, en_route.data)
+        arrived = rider.post(
+            f'{TASKS}{task.task_id}/advance/', {'to': 'ARRIVED'}, format='json')
+        self.assertEqual(200, arrived.status_code, arrived.data)
+
+        response = self.api_for(self.shopper).get(NOTIFICATIONS)
+        rows = response.data if isinstance(response.data, list) else response.data['results']
+        types = [row['type'] for row in rows]
+        self.assertIn('RIDER_ASSIGNED', types)
+        self.assertIn('ORDER_ON_THE_WAY', types)
+        self.assertIn('RIDER_ARRIVED', types)
+
+    def test_staff_task_assignment_event_is_private_to_assignee(self):
+        self.event(event_type='warehouse.task.assigned', payload={
+            'recipient_user_id': str(self.ops.user_id), 'task_type': 'PUTAWAY',
+            'task_id': 'task-123', 'site_code': self.site.code,
+        })
+
+        own = self.api_for(self.ops).get(NOTIFICATIONS)
+        own_rows = own.data if isinstance(own.data, list) else own.data['results']
+        self.assertIn('WMS_TASK_ASSIGNED', [row['type'] for row in own_rows])
+
+        other = self.api_for(self.shopper).get(NOTIFICATIONS)
+        other_rows = other.data if isinstance(other.data, list) else other.data['results']
+        self.assertNotIn('WMS_TASK_ASSIGNED', [row['type'] for row in other_rows])
 
     def test_only_the_recipient_reads_their_inbox(self):
         order = self.make_order()

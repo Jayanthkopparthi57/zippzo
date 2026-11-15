@@ -70,6 +70,38 @@ def reserved_qty(site, location_id, sku_id, lot_id, exclude_order=None):
     return sum(max(0, a.qty - a.picked_qty) for a in rows)
 
 
+HOLD_BLOCKING_STATUSES = ('OPEN', 'UNDER_REVIEW', 'ESCALATED')
+
+
+def held_qty_by_bin(site, sku_id, lot_id):
+    """Units an open stock hold has taken out of circulation.
+
+    A hold is a quality/investigation stop: the stock is physically on the
+    shelf but must not be promised to a customer. Ignoring it here is what let
+    `allocate_order` route an order to a shelf whose units were quarantined.
+
+    Returns ``(per_bin, unassigned)``. Holds that name a container are pinned
+    to that bin; holds without one are a site-level reserve and are subtracted
+    from the line's total capacity once, not from every bin.
+    """
+    from bounded.holds.models import Hold
+
+    rows = Hold.objects.filter(
+        site__in=(site.code, str(site.site_id)),
+        sku=sku_id, lot=lot_id,
+        status__in=HOLD_BLOCKING_STATUSES,
+    )
+    per_bin = {}
+    unassigned = 0
+    for hold in rows:
+        if hold.container_ref:
+            per_bin[hold.container_ref] = (
+                per_bin.get(hold.container_ref, 0) + hold.qty)
+        else:
+            unassigned += hold.qty
+    return per_bin, unassigned
+
+
 @transaction.atomic
 def allocate_order(order, actor=None):
     """Allocate every outstanding unit of `order` to a bin at its own store.
@@ -112,15 +144,28 @@ def allocate_order(order, actor=None):
         )
         locked[line.line_id] = balances
         # What this order can still be given: what is on the shelf less what
-        # somebody else is holding. Our own allocations are excluded because the
-        # reuse loop below re-uses them rather than opening them twice.
+        # somebody else is holding and less anything under an open stock hold.
+        # Our own allocations are excluded because the reuse loop below re-uses
+        # them rather than opening them twice.
+        held, hold_pool = held_qty_by_bin(
+            order.site, line.sku_id, line.lot_id)
         free = {
             b.container_ref: max(
                 0, b.qty - reserved_qty(
                     order.site, b.container_ref, line.sku_id, line.lot_id,
-                    exclude_order=order))
+                    exclude_order=order) - held.get(b.container_ref, 0))
             for b in balances
         }
+        # A hold with no container is a site-level reserve. Deduct it from the
+        # bins in a stable order so the same inputs always produce the same
+        # route.
+        pool = hold_pool
+        for bin_ref in sorted(free):
+            if pool <= 0:
+                break
+            take = min(free[bin_ref], pool)
+            free[bin_ref] -= take
+            pool -= take
         free_by_line[line.line_id] = free
         available = sum(free.values())
         if available < needed:
@@ -157,7 +202,8 @@ def allocate_order(order, actor=None):
         # Re-use whatever is still allocated and usable before opening new bins,
         # so a re-allocation does not move a picker who has already started.
         free = free_by_line.get(line.line_id, {})
-        remaining = needed
+        kept_here = []
+        claimed = 0
         for location_id in sorted(existing):
             alloc = existing[location_id]
             still_needed = max(0, alloc.qty - alloc.picked_qty)
@@ -169,14 +215,26 @@ def allocate_order(order, actor=None):
                 alloc.status = 'RELEASED'
                 alloc.save(update_fields=['status'])
                 continue
-            # What this bin can still hold for us is what nobody else has been
-            # promised, less what we already claim on it and have not picked.
-            headroom = max(0, free.get(location_id, 0) - still_needed)
-            top_up = min(still_needed, headroom)
-            if top_up:
-                alloc.qty += top_up
+            kept_here.append(alloc)
+            claimed += still_needed
+
+        # Only look for more if the surviving promises do not already cover the
+        # line. The old loop topped up every claim by its own size whenever its
+        # bin had spare units, so re-running allocation — which the endpoint is
+        # documented to allow — doubled the quantity on a fully allocated order.
+        remaining = max(0, needed - claimed)
+        for alloc in kept_here:
+            if remaining <= 0:
+                break
+            still_needed = max(0, alloc.qty - alloc.picked_qty)
+            capacity = max(0, free.get(alloc.location_id, 0) - still_needed)
+            extra = min(remaining, capacity)
+            if extra:
+                alloc.qty += extra
                 alloc.save(update_fields=['qty'])
-            remaining -= max(0, alloc.qty - alloc.picked_qty)
+                remaining -= extra
+
+        for alloc in kept_here:
             kept.append(alloc)
 
         # Top up from the best remaining bin, largest first, so a line is spread

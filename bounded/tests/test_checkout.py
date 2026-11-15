@@ -20,11 +20,13 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from bounded.catalog.models import InventoryLot, Listing, Sku
+from bounded.delivery.models import DeliveryTask, RiderProfile
 from bounded.ds_ops.allocation import allocations_for_order
 from bounded.ds_ops.models import OrderLineAllocation
 from bounded.iam.models import User
 from bounded.inventory.models import StockBalance
 from bounded.network.models import EmployeeSiteAssignment, Location, Site
+from bounded.routing.models import DeliveryArea
 from bounded.orders.models import (
     Cart, CartLine, Customer, CustomerAddress, CustomerOrder,
     CustomerOrderLine, OrderStatusHistory,
@@ -51,7 +53,11 @@ class CheckoutBase(TestCase):
 
         cls.site = Site.objects.create(
             code='DS-SHOP', site_type='DARK_STORE', name='Shop Dark Store',
-            address='shop road')
+            address='shop road', is_accepting_orders=True, status='ACTIVE')
+        DeliveryArea.objects.create(site=cls.site, pincode='560001', band='CORE')
+        DeliveryArea.objects.create(site=cls.site, pincode='560002', band='CORE')
+        DeliveryArea.objects.create(site=cls.site, pincode='560003', band='CORE')
+        DeliveryArea.objects.create(site=cls.site, pincode='560004', band='CORE')
         cls.warehouse = Site.objects.create(
             code='WH-SHOP', site_type='WAREHOUSE', name='Shop Warehouse',
             address='warehouse road')
@@ -221,6 +227,17 @@ class CheckoutHappyPathTests(CheckoutBase):
             ).values_list('qty', flat=True)))
 
     def test_the_history_and_the_event_are_written(self):
+        rider_user = User.objects.create(
+            email='online-rider@zippzo.in',
+            password_hash=make_password('Rider123!'),
+            role='RIDER',
+            status='ACTIVE',
+        )
+        rider = RiderProfile.objects.create(
+            user=rider_user, name='Online Rider', phone='9000000001',
+            vehicle_type='BIKE', kyc_status='VERIFIED', is_online=True,
+            current_site=self.site,
+        )
         response = self.checkout()
 
         order = CustomerOrder.objects.get(order_no=response.data['order_no'])
@@ -231,6 +248,17 @@ class CheckoutHappyPathTests(CheckoutBase):
         event = OutboxEvent.objects.get(event_type='order.placed')
         self.assertEqual(str(order.order_id), event.payload_json['order_id'])
         self.assertEqual('PENDING', event.status)
+
+        picker_event = OutboxEvent.objects.get(event_type='warehouse.pick.assigned')
+        self.assertEqual(str(self.staff.user_id), picker_event.payload_json['recipient_user_id'])
+        self.assertEqual(str(order.order_id), picker_event.payload_json['order_id'])
+
+        delivery_task = DeliveryTask.objects.get(order=order)
+        self.assertEqual(rider.rider_id, delivery_task.rider_id)
+        self.assertEqual('OFFERED', delivery_task.status)
+        rider_event = OutboxEvent.objects.get(event_type='warehouse.delivery.offered')
+        self.assertEqual(str(rider_user.user_id), rider_event.payload_json['recipient_user_id'])
+        self.assertEqual(str(order.order_id), rider_event.payload_json['order_id'])
 
     def test_a_repeated_sku_becomes_one_line(self):
         response = self.checkout(items=[
@@ -350,7 +378,7 @@ class CheckoutRefusalTests(CheckoutBase):
     def test_a_warehouse_cannot_take_a_shopper_order(self):
         response = self.checkout(site=self.warehouse.code)
 
-        self.assertEqual(400, response.status_code)
+        self.assertEqual(409, response.status_code)
         self.assertIn('dark store', response.data['error'].lower())
 
     def test_staff_cannot_order_on_a_customers_behalf(self):
@@ -511,7 +539,7 @@ class CheckoutReservationTests(CheckoutBase):
         first = self.checkout(items=self.basket(cereal=2, milk=0))
         self.assertEqual(201, first.status_code, first.data)
 
-        storefront = self.api.get(f'{STOREFRONT}?site={self.site.code}').data
+        storefront = self.api.get(f'{STOREFRONT}?site={self.site.code}&pincode=560001').data
         cereal = next(i for i in storefront['items'] if i['sku_code'] == 'SHOP-CEREAL')
         # 9 physically on the shelf, of which the first order holds 2.
         self.assertEqual(7, cereal['available'])
@@ -532,7 +560,7 @@ class CheckoutReservationTests(CheckoutBase):
             {'sku_id': str(self.cereal.sku_id), 'qty': 4}])
         self.assertEqual(201, second.status_code, second.data)
 
-        storefront = self.api.get(f'{STOREFRONT}?site={self.site.code}').data
+        storefront = self.api.get(f'{STOREFRONT}?site={self.site.code}&pincode=560001').data
         codes = {i['sku_code'] for i in storefront['items']}
         self.assertNotIn(
             'SHOP-CEREAL', codes,
@@ -578,7 +606,7 @@ class CheckoutReservationTests(CheckoutBase):
 class StorefrontTests(CheckoutBase):
 
     def test_only_sold_and_stocked_items_are_offered(self):
-        response = self.api.get(f'{STOREFRONT}?site={self.site.code}')
+        response = self.api.get(f'{STOREFRONT}?site={self.site.code}&pincode=560001')
 
         self.assertEqual(200, response.status_code)
         codes = {i['sku_code'] for i in response.data['items']}
@@ -586,7 +614,7 @@ class StorefrontTests(CheckoutBase):
         self.assertEqual({'SHOP-CEREAL', 'SHOP-MILK'}, codes)
 
     def test_prices_come_from_the_listing(self):
-        response = self.api.get(f'{STOREFRONT}?site={self.site.code}').data
+        response = self.api.get(f'{STOREFRONT}?site={self.site.code}&pincode=560001').data
         cereal = next(i for i in response['items'] if i['sku_code'] == 'SHOP-CEREAL')
 
         self.assertEqual('30.00', cereal['price'])
@@ -602,9 +630,29 @@ class StorefrontTests(CheckoutBase):
             site=self.site, container='BIN',
             container_ref=self.bin_b.location_id, sku=ghost, lot=lot, qty=4)
 
-        response = self.api.get(f'{STOREFRONT}?site={self.site.code}').data
+        response = self.api.get(f'{STOREFRONT}?site={self.site.code}&pincode=560001').data
 
         self.assertNotIn('SHOP-GHOST', {i['sku_code'] for i in response['items']})
+
+    def test_bad_quality_stock_does_not_inflate_customer_availability(self):
+        quarantined = Sku.objects.create(
+            sku_code='SHOP-QUARANTINED', name='Quarantined', status='ACTIVE')
+        Listing.objects.create(
+            sku=quarantined, site=self.site, price=Decimal('10.00'),
+            mrp=Decimal('10.00'), is_listed=True, is_available=True)
+        lot = InventoryLot.objects.create(
+            sku=quarantined, site=self.site, batch_number='LOT-BAD',
+            bucket='BAD', inbound_type='PURCHASE', inbound_ref='PO-BAD')
+        StockBalance.objects.create(
+            site=self.site, container='BIN',
+            container_ref=self.bin_a.location_id, sku=quarantined, lot=lot, qty=7)
+
+        response = self.api.get(f'{STOREFRONT}?site={self.site.code}&pincode=560001')
+
+        self.assertEqual(200, response.status_code)
+        self.assertNotIn(
+            'SHOP-QUARANTINED',
+            {item['sku_code'] for item in response.data['items']})
 
     def test_the_store_is_required(self):
         self.assertEqual(400, self.api.get(STOREFRONT).status_code)
@@ -823,3 +871,26 @@ class CustomerDrawerScopingTests(CheckoutBase):
         self.assertEqual(
             before, (self.line.qty, self.line.unit_price, self.line.line_total),
             'an order line was re-priced after checkout approved it')
+
+
+class ShopperOrderCancellationTests(CheckoutBase):
+
+    def test_early_cancellation_releases_reservations_and_records_real_prior_state(self):
+        created = self.checkout(items=[{
+            'sku_id': str(self.cereal.sku_id), 'qty': 1,
+        }])
+        self.assertEqual(201, created.status_code, created.data)
+        order = CustomerOrder.objects.get(order_no=created.data['order_no'])
+
+        response = self.api.post(
+            f'/api/orders/orders/{order.order_id}/cancel/',
+            {'reason': 'Changed my mind'}, format='json')
+
+        self.assertEqual(200, response.status_code, response.data)
+        order.refresh_from_db()
+        self.assertEqual('CANCELLED', order.status)
+        history = OrderStatusHistory.objects.get(order=order, to_status='CANCELLED')
+        self.assertEqual('CONFIRMED', history.from_status)
+        self.assertTrue(
+            OrderLineAllocation.objects.filter(order=order, status='RELEASED').exists(),
+            'the cancelled order must release its store stock reservation')

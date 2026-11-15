@@ -53,6 +53,8 @@ class AuthenticatedSwaggerView(SpectacularSwaggerView):
 urlpatterns = [
     path('admin/', admin.site.urls),
     # Public liveness probe (see health() above).
+    path('health', health, name='health-root'),
+    path('health/', health, name='health-root-slash'),
     path('api/health/', health, name='health'),
     # API Schema
     path('api/schema/', AuthenticatedSchemaView.as_view(), name='schema'),
@@ -66,6 +68,11 @@ urlpatterns = [
     # Network
     path('api/network/', include('bounded.network.urls')),
     path('api/catalog/', include('bounded.catalog.urls')),
+    # Reference data & execution records that the design calls for.
+    path('api/master/', include('bounded.masterdata.urls')),
+    path('api/transport/', include('bounded.transport.urls')),
+    path('api/workforce/', include('bounded.workforce.urls')),
+    path('api/counting/', include('bounded.counting.urls')),
     # Supply Chain
     path('api/supply/', include('bounded.supply.urls')),
     path('api/inventory/', include('bounded.inventory.urls')),

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Scan-first picking for the dark store.
 
 Three pieces, all server-authoritative:
@@ -53,7 +53,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .access import require_order_access, require_site_access
+from bounded.iam.permissions import IsFieldSurface
+from .access import (
+    require_department, require_order_access, require_site_access,
+    require_session_facility,
+)
 
 # An order may only have stock lifted off the shelf while it is still being
 # picked. Once it is PACKED the units are in a tote, and after REFUNDED or
@@ -227,8 +231,8 @@ class DSResolveBinView(APIView):
     """Resolve a scanned bin label to a Location.location_id, for one store.
 
     Nearly every stock endpoint keys stock by `container_ref`, which stores the
-    bin's Location.location_id — not the barcode or the "A-01-02-03" printed on
-    the shelf — so a physical scan has to be translated before it means anything.
+    bin's Location.location_id â€” not the barcode or the "A-01-02-03" printed on
+    the shelf â€” so a physical scan has to be translated before it means anything.
 
     The generic /network/locations search cannot be used for this: that viewset
     is admin-only, and loosening it would publish the whole network's shelf
@@ -247,6 +251,7 @@ class DSResolveBinView(APIView):
         if not raw:
             return Response({'error': 'q is required'}, status=400)
         require_site_access(request.user, store_code)
+        require_session_facility(request.user, store_code)
 
         site = Site.objects.filter(code=store_code).first()
         if site is None:
@@ -278,7 +283,16 @@ class DSResolveBinView(APIView):
             'store_code': store_code,
             'scanned': raw,
             'matches': [
-                {'location_id': m.location_id, 'label': _bin_label(m)}
+                {
+                    'location_id': m.location_id,
+                    'label': _bin_label(m),
+                    # The pack station must put a sealed tote on a STAGING slot,
+                    # not back onto a pick face. The client cannot tell those
+                    # apart from a label alone, so the kind travels with the
+                    # match and the scan endpoint validates it server-side too.
+                    'location_type': m.location_type,
+                    'container': m.container,
+                }
                 for m in matches
             ],
         })
@@ -308,6 +322,7 @@ class DSAllocateOrderView(APIView):
             return Response({'error': 'Order not found'}, status=404)
 
         require_order_access(request.user, order)
+        require_session_facility(request.user, order.site.code)
 
         blocked = _order_pick_gate(order)
         if blocked:
@@ -339,11 +354,25 @@ class DSPickLinesView(APIView):
             return Response({'error': 'Order not found'}, status=404)
 
         require_order_access(request.user, order)
+        require_session_facility(request.user, order.site.code)
 
         by_line = allocations_for_order(order)
         blocked = _order_pick_gate(order)
+        # The picking screen shows the picker everything they need to identify
+        # the unit in their hand without walking back to a terminal: barcode,
+        # weight, MRP, the price the customer paid and the lot expiry. Fetch the
+        # lots in one query rather than one per line.
+        from bounded.catalog.models import InventoryLot
+        line_rows = list(
+            CustomerOrderLine.objects.filter(order=order).select_related('sku')
+        )
+        lot_ids = [row.lot_id for row in line_rows if row.lot_id]
+        lots = {
+            lot.lot_id: lot
+            for lot in InventoryLot.objects.filter(lot_id__in=lot_ids)
+        }
         lines = []
-        for line in CustomerOrderLine.objects.filter(order=order).select_related('sku'):
+        for line in line_rows:
             outstanding = max(0, line.qty - line.picked_qty)
             bins = _line_bins(line, order.site)
             target = _next_bin(bins) if outstanding else None
@@ -352,15 +381,33 @@ class DSPickLinesView(APIView):
                 located = None
             else:
                 located = target or _resolve_line_bin(order.site, line.sku_id, line.lot_id)
+            lot = lots.get(line.lot_id) if line.lot_id else None
+            # MRP belongs to the physical lot when there is one (the shelf price
+            # can differ from the master), otherwise to the SKU master.
+            mrp = lot.mrp if lot is not None and lot.mrp is not None else line.sku.mrp
             lines.append({
                 'line_id': str(line.line_id),
                 'line_no': line.line_no,
                 'sku': str(line.sku_id),
                 'sku_code': line.sku.sku_code,
                 'product_name': line.sku.name,
+                'image_url': line.sku.image_url or '',
+                'brand': line.sku.brand,
+                'pack_size': line.sku.pack_size,
+                'base_uom': line.sku.base_uom,
+                'weight_g': line.sku.weight_g,
+                'mrp': str(mrp) if mrp is not None else None,
+                'barcode': line.sku.ean or line.sku.sku_code,
+                'expiry_date': (lot.expiry_date.isoformat()
+                                if lot is not None and lot.expiry_date else None),
+                'batch_number': lot.batch_number if lot is not None else None,
                 'lot': str(line.lot_id) if line.lot_id else None,
                 'qty': line.qty,
                 'picked_qty': line.picked_qty,
+                'packed_qty': line.packed_qty,
+                'shipped_qty': line.shipped_qty,
+                'unit_price': str(line.unit_price),
+                'line_total': str(line.line_total),
                 'outstanding': outstanding,
                 'status': line.status,
                 # The bin the picker should walk to next, or None when the lot
@@ -394,7 +441,7 @@ class DSPickLinesView(APIView):
 
 
 class DSPickLineView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsFieldSurface]
 
     @transaction.atomic
     def post(self, request):
@@ -406,6 +453,7 @@ class DSPickLineView(APIView):
         order_id = data.get('order_id')
         line_id = data.get('line_id')
         bin_location_id = str(data.get('bin_location_id') or '').strip()
+        product_barcode = str(data.get('product_barcode') or '').strip()
         scan_id = str(data.get('scan_id') or '').strip() or str(uuid.uuid4())
         try:
             qty = int(data.get('qty', 1))
@@ -429,6 +477,8 @@ class DSPickLineView(APIView):
             return Response({'error': 'Order not found'}, status=404)
 
         require_order_access(request.user, order)
+        require_session_facility(request.user, order.site.code)
+        require_department(request.user, order.site, 'PICK')
 
         blocked = _order_pick_gate(order)
         if blocked:
@@ -443,6 +493,20 @@ class DSPickLineView(APIView):
         except (CustomerOrderLine.DoesNotExist, ValueError, TypeError):
             return Response({'error': 'Order line not found on this order'}, status=404)
 
+        if product_barcode:
+            matches_sku = (
+                product_barcode == line.sku.sku_code
+                or product_barcode == (line.sku.ean or '')
+                or line.sku.barcodes.filter(
+                    barcode=product_barcode, is_active=True,
+                ).exists()
+            )
+            if not matches_sku:
+                return Response({
+                    'error': 'Scanned product does not match the order line.',
+                    'expected_sku_code': line.sku.sku_code,
+                }, status=409)
+
         if line.lot_id is None:
             return Response(
                 {'error': f'{line.sku.sku_code} has no lot allocated, so it cannot '
@@ -451,27 +515,14 @@ class DSPickLineView(APIView):
             )
 
         outstanding = line.qty - line.picked_qty
-        if outstanding <= 0:
-            return Response(
-                {'error': f'{line.sku.sku_code} is already fully picked on this order.',
-                 'picked_qty': line.picked_qty, 'qty': line.qty},
-                status=409,
-            )
-        if qty > outstanding:
-            return Response(
-                {'error': f'Only {outstanding} more unit(s) of {line.sku.sku_code} are needed.',
-                 'outstanding': outstanding, 'requested': qty},
-                status=409,
-            )
 
-        # Replay has to be answered BEFORE the bin check, not after.
+        # Replay has to be answered BEFORE the quantity and bin checks.
         #
-        # The bin check legitimately refuses a scan against an allocation that
-        # no longer owes anything, so a device retrying its last scan - which is
-        # exactly what happens when the response is lost - would get an opaque
-        # "wrong bin" 409 for a scan the ledger had already committed. Reporting
-        # that as a wrong bin sends the picker back to the shelf to re-scan stock
-        # that is already in their hands.
+        # A device retrying its last scan - which is exactly what happens when the
+        # response is lost or times out - committed the ledger and incremented
+        # picked_qty on the server. If outstanding <= 0 or the bin check ran first,
+        # the replay would be refused with 409 "already fully picked" or "wrong bin",
+        # instead of returning the successful already_applied response.
         if already_applied(
             site=order.site, sku=line.sku, lot=line.lot,
             movement_type='PICK', ref_type=f'ORDERLINE:{scan_id}',
@@ -488,6 +539,19 @@ class DSPickLineView(APIView):
                 'outstanding': outstanding,
                 'line_status': line.status,
             })
+
+        if outstanding <= 0:
+            return Response(
+                {'error': f'{line.sku.sku_code} is already fully picked on this order.',
+                 'picked_qty': line.picked_qty, 'qty': line.qty},
+                status=409,
+            )
+        if qty > outstanding:
+            return Response(
+                {'error': f'Only {outstanding} more unit(s) of {line.sku.sku_code} are needed.',
+                 'outstanding': outstanding, 'requested': qty},
+                status=409,
+            )
 
         # The operator must be standing at a bin that is allocated to this line
         # and still owes units. resolveBin() on the client turns a scanned
@@ -596,7 +660,7 @@ class DSPickLineView(APIView):
 
 
 class DSPickAbandonView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsFieldSurface]
 
     @transaction.atomic
     def post(self, request):
@@ -618,6 +682,8 @@ class DSPickAbandonView(APIView):
             return Response({'error': 'Order not found'}, status=404)
 
         require_order_access(request.user, order)
+        require_session_facility(request.user, order.site.code)
+        require_department(request.user, order.site, 'PICK')
 
         blocked = _order_pick_gate(order)
         if blocked:

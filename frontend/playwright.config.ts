@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const webPort = Number(process.env.E2E_WEB_PORT || 3000);
+const baseURL = process.env.E2E_BASE_URL || `http://localhost:${webPort}`;
+
 export default defineConfig({
   testDir: './tests',
   fullyParallel: true,
@@ -8,7 +11,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['html', { outputFolder: 'playwright-report' }], ['list']],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -22,8 +25,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
+    command: `npm run dev -- --port ${webPort}`,
+    url: baseURL,
     reuseExistingServer: true,
     timeout: 120000,
     env: {

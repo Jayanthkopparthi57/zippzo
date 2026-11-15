@@ -5,10 +5,14 @@ import { Bell, CheckCheck, Package, Truck, KeyRound, Info } from 'lucide-react';
 const NOTIFICATIONS = '/notifications/notifications/';
 
 const LABELS = {
+  ORDER_PLACED: 'Order received',
   ORDER_PACKED: 'Your order is packed',
+  ORDER_PICKED_UP: 'Rider picked up your order',
   ORDER_ON_THE_WAY: 'Your order is on the way',
   ORDER_DELIVERED: 'Delivered',
   DELIVERY_OTP: 'Delivery code ready',
+  RIDER_ASSIGNED: 'Your rider is assigned',
+  RIDER_ARRIVED: 'Your rider has arrived',
   RIDER_JOB_OFFERED: 'Rider assignment',
   ORDER_UPDATE: 'Order update',
 };
@@ -36,9 +40,9 @@ export default function NotificationsView() {
   const [busy, setBusy] = useState(false);
   const [onlyUnread, setOnlyUnread] = useState(false);
 
-  const load = useCallback(async (unreadOnly = onlyUnread) => {
+  const load = useCallback(async (unreadOnly = onlyUnread, quiet = false) => {
     setError(null);
-    setLoading(true);
+    if (!quiet) setLoading(true);
     // 15s: the dev proxy queues behind other tabs' requests over HTTP/1.1.
     const withTimeout = (p, ms = 15000) => Promise.race([
       p,
@@ -52,7 +56,7 @@ export default function NotificationsView() {
       setRows(Array.isArray(list.value) ? list.value : []);
     } else { console.error(list.reason); setError(describeError(list.reason)); }
     if (count.status === 'fulfilled') setUnread(count.value?.unread || 0);
-    setLoading(false);
+    if (!quiet) setLoading(false);
   }, [onlyUnread]);
 
   const didLoad = useRef(false);
@@ -65,8 +69,14 @@ export default function NotificationsView() {
   // Refresh every 30 s so order-status notifications (packed, on-the-way, OTP)
   // appear without the shopper manually pulling to refresh.
   useEffect(() => {
-    const id = setInterval(() => load(onlyUnread), 30000);
+    const id = setInterval(() => load(onlyUnread, true), 30000);
     return () => clearInterval(id);
+  }, [load, onlyUnread]);
+
+  useEffect(() => {
+    const refresh = () => load(onlyUnread, true);
+    window.addEventListener('zippzo:live-event', refresh);
+    return () => window.removeEventListener('zippzo:live-event', refresh);
   }, [load, onlyUnread]);
 
   const markOne = async (n) => {
@@ -108,7 +118,11 @@ export default function NotificationsView() {
           )}
         </h1>
         <div className="shop-toggle">
-          <button aria-pressed={onlyUnread} onClick={() => setOnlyUnread(v => !v)}>Unread</button>
+          <button aria-pressed={onlyUnread} onClick={() => {
+            const next = !onlyUnread;
+            setOnlyUnread(next);
+            load(next);
+          }}>Unread</button>
           {unread > 0 && (
             <button onClick={markAll} disabled={busy}>{busy ? 'Marking…' : 'Mark all read'}</button>
           )}
@@ -138,6 +152,15 @@ export default function NotificationsView() {
             <div key={n.notification_id}
                  className={`shop-notif-row ${n.read_at ? 'shop-notif-row--read' : ''}`}
                  onClick={() => markOne(n)}
+                 role="button"
+                 tabIndex={n.read_at ? -1 : 0}
+                 onKeyDown={(event) => {
+                   if (event.key === 'Enter' || event.key === ' ') {
+                     event.preventDefault();
+                     markOne(n);
+                   }
+                 }}
+                 aria-label={`${LABELS[n.type] || n.type}${n.read_at ? ', read' : ', mark as read'}`}
                  style={{ background: n.read_at ? 'transparent' : tone.bg }}>
               <div className="shop-notif-row__icon" style={{ background: tone.dot }}>
                 <Icon size={17} />

@@ -59,8 +59,8 @@ class CartLine(models.Model):
         unique_together = [('cart', 'line_no')]
 
 class CustomerOrder(models.Model):
-    STATUS_CHOICES = [('PLACED','Placed'),('PAYMENT_PENDING','Payment Pending'),('PAYMENT_FAILED','Payment Failed'),('CONFIRMED','Confirmed'),('PICKING','Picking'),('INTERRUPTED','Interrupted'),('PICKED','Picked'),('PARTIALLY_FULFILLED','Partially Fulfilled'),('PACKED','Packed'),('PRICE_FINALIZED','Price Finalized'),('STAGED','Staged'),('RIDER_ASSIGNED','Rider Assigned'),('PICKED_UP','Picked Up'),('OUT_FOR_DELIVERY','Out for Delivery'),('ARRIVED','Arrived'),('DELIVERED','Delivered'),('CANCELLED','Cancelled'),('CANCELLED_PENDING_RETURN','Cancelled Pending Return'),('EXPIRED','Expired'),('FAILED','Failed'),('CLOSED_RTO','Closed RTO'),('REFUNDED','Refunded')]
-    PAYMENT_METHODS = [('COD','Cash on Delivery'),('UPI','UPI'),('CARD','Card')]
+    STATUS_CHOICES = [('PLACED','Placed'),('PAYMENT_PENDING','Payment Pending'),('PAYMENT_FAILED','Payment Failed'),('CONFIRMED','Confirmed'),('PICKING','Picking'),('INTERRUPTED','Interrupted'),('PICKED','Picked'),('RACK_DROPPED','Rack Dropped'),('PARTIALLY_FULFILLED','Partially Fulfilled'),('PACKED','Packed'),('PRICE_FINALIZED','Price Finalized'),('STAGED','Staged'),('RIDER_ASSIGNED','Rider Assigned'),('PICKED_UP','Picked Up'),('OUT_FOR_DELIVERY','Out for Delivery'),('ARRIVED','Arrived'),('DELIVERED','Delivered'),('CANCELLED','Cancelled'),('CANCELLED_PENDING_RETURN','Cancelled Pending Return'),('EXPIRED','Expired'),('FAILED','Failed'),('CLOSED_RTO','Closed RTO'),('REFUNDED','Refunded')]
+    PAYMENT_METHODS = [('COD','Cash on Delivery'),('CASHFREE','Cashfree (UPI/Card)')]
     PAYMENT_STATUS = [('PENDING','Pending'),('CAPTURED','Captured'),('FAILED','Failed'),('REFUNDED','Refunded')]
     order_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order_no = models.CharField(max_length=20, unique=True)
@@ -73,12 +73,21 @@ class CustomerOrder(models.Model):
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
     delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    coupon_discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    combo_discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    combo_offer_details = models.JSONField(default=list, blank=True)
     tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     grand_total = models.DecimalField(max_digits=10, decimal_places=2)
     short_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     cancel_reason = models.TextField(blank=True)
     cancel_actor = models.CharField(max_length=64, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
+    # Rack Drop is the store-floor hand-off: a picker has carried the picked
+    # units to the packing rack and confirmed the drop. It is deliberately
+    # distinct from PACKED, which still means the tote is sealed with an LPN and
+    # waiting at a staging slot for a rider.
+    rack_location = models.CharField(max_length=50, null=True, blank=True)
+    rack_dropped_at = models.DateTimeField(null=True, blank=True)
     picked_up_at = models.DateTimeField(null=True, blank=True)
     returned_at = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
@@ -92,11 +101,37 @@ class CustomerOrder(models.Model):
     delivery_slot = models.CharField(max_length=60, blank=True)
     coupon_code = models.CharField(max_length=30, blank=True)
     placed_at = models.DateTimeField(auto_now_add=True)
+    promise_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         db_table = 'customer_orders'
         ordering = ['-placed_at']
     def __str__(self):
         return self.order_no
+
+
+class PaymentAttempt(models.Model):
+    """Server-owned Cashfree attempt linked to one shopper order."""
+    STATUS_CHOICES = [
+        ('CREATED', 'Created'), ('PENDING', 'Pending'),
+        ('PAID', 'Paid'), ('FAILED', 'Failed'), ('EXPIRED', 'Expired'),
+    ]
+    attempt_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.ForeignKey(CustomerOrder, on_delete=models.CASCADE,
+                              related_name='payment_attempts')
+    provider_order_id = models.CharField(max_length=64, unique=True)
+    payment_session_id = models.TextField()
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default='INR')
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='CREATED')
+    provider_payment_id = models.CharField(max_length=80, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payment_attempts'
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['order', 'status'], name='ix_payattempt_order_status')]
 
 class CustomerOrderLine(models.Model):
     STATUS_CHOICES = [('PENDING','Pending'),('PICKED','Picked'),('SHORT','Short'),('CANCELLED','Cancelled')]
