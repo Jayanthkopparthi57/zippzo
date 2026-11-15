@@ -119,4 +119,4 @@ databases:
     user: zippzo_user
     plan: starter
     region: singapore
-    version: "16"
+    postgresMajorVersion: "16"
