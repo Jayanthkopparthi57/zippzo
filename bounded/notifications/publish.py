@@ -63,6 +63,8 @@ def _deliver_out_of_app(notification):
 # told them about.
 ROUTES = {
     # The durable in-app inbox is the customer-facing source for order state.
+    'order.payment_pending': ('ORDER_UPDATE', [], 'none'),
+    'payment.captured': ('ORDER_PLACED', ['PUSH', 'WS'], 'customer'),
     'order.placed': ('ORDER_PLACED', ['PUSH', 'WS'], 'customer'),
     'order.packed': ('ORDER_PACKED', ['SMS', 'PUSH', 'WS'], 'customer'),
     'order.picked_up': ('ORDER_ON_THE_WAY', ['PUSH', 'WS', 'SMS'], 'customer'),
@@ -93,6 +95,9 @@ DEFAULT_ROUTE = ('ORDER_UPDATE', ['PUSH', 'WS'], 'customer')
 def _recipients(event, audience, payload):
     """User ids for this event, or an empty list when nobody should be told."""
     from bounded.delivery.models import RiderProfile
+
+    if audience == 'none':
+        return []
 
     if audience == 'riders_at_site':
         assigned_rider = payload.get('rider_user_id')
