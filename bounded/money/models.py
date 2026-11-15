@@ -155,6 +155,10 @@ class RiderPayout(models.Model):
 # Keeping the flat number here rather than in checkout means the fallback and
 # the modelled path are decided in one place.
 DEFAULT_DELIVERY_FEE = Decimal('20.00')
+# The standing rule for a store that nobody has priced: a small-basket charge,
+# waived once the basket reaches this amount. A store that publishes its own
+# rule replaces this entirely.
+DEFAULT_FREE_ABOVE = Decimal('150.00')
 
 
 class DeliveryPricingRule(models.Model):
@@ -206,6 +210,9 @@ def resolve_delivery_fee(site, subtotal=None):
     rule = DeliveryPricingRule.objects.filter(
         site_id=getattr(site, 'site_id', None), is_active=True).first()
     if rule is None:
+        if (subtotal is not None and DEFAULT_FREE_ABOVE > 0
+                and subtotal >= DEFAULT_FREE_ABOVE):
+            return Decimal('0.00')
         return DEFAULT_DELIVERY_FEE
     if (subtotal is not None and rule.free_above
             and rule.free_above > 0 and subtotal >= rule.free_above):

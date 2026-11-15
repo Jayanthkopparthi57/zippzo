@@ -1013,7 +1013,9 @@ class StorefrontView(APIView):
         # waive the fee above a basket threshold. The shelf also answers the
         # address question when a pincode is supplied, so a shopper is told
         # "not here" before they fill a basket.
-        from bounded.money.models import DeliveryPricingRule, resolve_delivery_fee
+        from bounded.money.models import (
+            DeliveryPricingRule, resolve_delivery_fee, DEFAULT_FREE_ABOVE,
+        )
         from bounded.routing.models import DeliveryArea
 
         rule = DeliveryPricingRule.objects.filter(site=site, is_active=True).first()
@@ -1024,7 +1026,7 @@ class StorefrontView(APIView):
             'name': site.name,
             'delivery_fee': str(resolve_delivery_fee(site)),
             'promise_minutes': int(rule.promise_minutes) if rule and getattr(rule, 'promise_minutes', None) else 15,
-            'free_above': str(rule.free_above) if rule else '0.00',
+            'free_above': str(rule.free_above) if rule else str(DEFAULT_FREE_ABOVE),
             'delivery_configured': DeliveryArea.configured(site),
             'pincode': pincode,
             'serviceable': serviceable,

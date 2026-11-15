@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search, X, Plus, Minus, Trash2, MapPin, Clock, ChevronRight, ChevronLeft,
   ShoppingBasket, Package, Truck, Smartphone, Banknote,
-  Check, Star, AlertTriangle, RefreshCw, Store, Tag, ArrowRight,
+  Check, Star, AlertTriangle, Tag, ArrowRight,
   Apple, Milk, Cookie, CupSoda, Soup, SprayCan, Baby, Croissant, Pill, Wheat,
   LocateFixed,
 } from 'lucide-react';
@@ -153,7 +153,7 @@ function ProductCard({ item, qty, onAdd, onInc, onDec, onOpen }) {
 
 /* ── product detail page ─────────────────────────────────────────────────── */
 
-function ProductPage({ item, qty, onAdd, onInc, onDec, promiseMinutes = 15,
+function ProductPage({ item, qty, onAdd, onInc, onDec,
                        onBack, siteName, onBuyNow, placing, refusal, clearRefusal }) {
   const [reviews, setReviews] = useState([]);
   const [imageIndex, setImageIndex] = useState(0);
@@ -230,24 +230,6 @@ function ProductPage({ item, qty, onAdd, onInc, onDec, promiseMinutes = 15,
             {off && <span className="shop-pdp__save">Save {rupees(Number(item.mrp) - Number(item.price))} ({pct}% off)</span>}
           </div>
           {unitPrice != null && <div className="shop-pdp__unit">{rupees(unitPrice)} / 100 g</div>}
-
-          <div className="shop-pdp__eta">
-            <Truck size={15} />
-            <span>Delivery in about <strong>{promiseMinutes || 10} minutes</strong> · from {siteName || 'this store'}</span>
-          </div>
-
-          <div className="shop-pdp__badges">
-            {[
-              { label: 'Quality checked', sub: 'picked and checked at the store' },
-              { label: 'Best price', sub: 'MRP or lower, always' },
-              { label: 'Easy returns', sub: 'not happy — we replace it' },
-            ].map((b) => (
-              <div key={b.label} className="shop-pdp__badge">
-                <strong>{b.label}</strong>
-                <span>{b.sub}</span>
-              </div>
-            ))}
-          </div>
 
           <div className="shop-pdp__buyrow">
             {item.available > 0 ? (
@@ -441,23 +423,20 @@ function ReceiptScreen({ placed, onDone }) {
 
 export default function ShopperStorefrontView() {
   const { user } = useAuth();
-  const [picked, setPicked] = useState('');
-
   if (!user) {
     return <div className="alert alert-error">Sign in to order.</div>;
   }
-  return <StorefrontScreen siteCode={picked} onPick={setPicked} />;
+  return <StorefrontScreen siteCode="" />;
 }
 
-function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
+function StorefrontScreen({ siteCode: requestedSiteCode }) {
   const toast = useToast();
   const { user } = useAuth();
   const basketStorageKey = `zippzo:basket:${user?.user_id || 'guest'}`;
   const [shop, setShop] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [nearbyCoordinates, setNearbyCoordinates] = useState(null);
-  const [useCurrentLocation, setUseCurrentLocation] = useState(false);
-  const [locating, setLocating] = useState(false);
+  const [nearbyCoordinates] = useState(null);
+  const [useCurrentLocation] = useState(false);
   const [locationError, setLocationError] = useState('');
   const [loadError, setLoadError] = useState(null);
   const [basket, setBasket] = useState(() => {
@@ -488,7 +467,13 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
   const [addrErr, setAddrErr] = useState('');
   const [addrGeoBusy, setAddrGeoBusy] = useState(false);
   const [addrGeoStatus, setAddrGeoStatus] = useState('');
-  const searchRef = useRef(null);
+  /* The top bar owns search: every keystroke from its input lands here as the
+     shelf's query, and submitting jumps to the storefront tab. */
+  useEffect(() => {
+    const handler = (e) => setQuery(String(e.detail ?? ''));
+    window.addEventListener('zippzo:search', handler);
+    return () => window.removeEventListener('zippzo:search', handler);
+  }, []);
   // StrictMode remounts in dev; guard so each loader fires once per key.
   const shopLoadedFor = useRef(null);
   const shopRequestSequence = useRef(0);
@@ -546,9 +531,6 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
   }, [distanceOrigin, coveredStores]);
   const siteCode = (coveredStores.some((store) => store.code === requestedSiteCode)
     ? requestedSiteCode : '') || nearestStore?.code || coveredStores[0]?.code || '';
-  const storeDistance = distanceKm(distanceOrigin,
-    coveredStores.find((store) => store.code === siteCode));
-  const usingNearestStore = Boolean(nearestStore?.code === siteCode && storeDistance !== null);
 
   const loadShop = useCallback((force = false) => {
     // A shopper with no published store has no shelf to ask about. Say so
@@ -656,6 +638,19 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
     return [...seen.entries()].sort((a, b) => b[1] - a[1]);
   }, [items]);
 
+  // One representative image per category — the tile the shelf picked for
+  // itself, from its own listings. Falls back to the icon when a category
+  // has no imagery.
+  const catImages = useMemo(() => {
+    const map = {};
+    items.forEach((i) => {
+      const c = i.category || 'Others';
+      const img = i.image || (Array.isArray(i.images) && i.images[0]);
+      if (img && !map[c]) map[c] = img;
+    });
+    return map;
+  }, [items]);
+
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return items.filter((i) => {
@@ -715,11 +710,12 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
     requestedCouponDiscount,
     Math.max(0, subtotal - comboSavings.total),
   );
-  // The store's own rule, including the "free above ₹X" waiver. The server
-  // recomputes this at checkout; showing the same arithmetic here means the
-  // amount on the button is the amount charged.
+  // Handling charge: ₹20 below ₹150 basket, free above — the standing rule
+  // for stores without their own rule; a store's rule overrides this.
+  // The server recomputes this at checkout; showing the same arithmetic
+  // here means the amount on the button is the amount charged.
   const deliveryFee = Number(shop?.delivery_fee ?? 20);
-  const freeAbove = Number(shop?.free_above ?? 0);
+  const freeAbove = Number(shop?.free_above ?? 150);
   const feeWaived = freeAbove > 0 && subtotal >= freeAbove;
   const fee = feeWaived ? 0 : (Number.isFinite(deliveryFee) ? deliveryFee : 20);
   const serviceable = shop?.serviceable !== false;
@@ -939,37 +935,6 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
     }, { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 });
   };
 
-  const locateNearbyStore = () => {
-    if (!navigator.geolocation) {
-      setLocationError('Location is not available on this device. Choose a store from the list instead.');
-      return;
-    }
-    setLocating(true);
-    setLocationError('');
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        const currentPosition = { geo_lat: coords.latitude, geo_lng: coords.longitude };
-        setNearbyCoordinates(currentPosition);
-        setUseCurrentLocation(true);
-        const closest = coveredStores
-          .map((store) => ({ store, distance: distanceKm(currentPosition, store) }))
-          .filter((entry) => entry.distance !== null)
-          .sort((a, b) => a.distance - b.distance)[0]?.store;
-        if (closest && basketCount === 0) onPick(closest.code);
-        else if (closest) setLocationError('Nearest eligible store found. Your current store is unchanged so your basket stays intact.');
-        else setLocationError('No covered store has coordinates. Products are still limited to stores serving your pincode.');
-        setLocating(false);
-      },
-      (error) => {
-        setLocationError(error.code === error.PERMISSION_DENIED
-          ? 'Location permission was not granted. Choose a store from the list instead.'
-          : 'Could not determine your location. Please try again or choose a store.');
-        setLocating(false);
-      },
-      { enableHighAccuracy: false, maximumAge: 300000, timeout: 10000 },
-    );
-  };
-
   /* receipt */
   if (placed) {
     return <ReceiptScreen placed={placed} onDone={() => setPlaced(null)} />;
@@ -1050,7 +1015,7 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
                 </div>
               )}
               <div className="shop-bill__row">
-                <span>Delivery fee</span>
+                <span>Handling charge</span>
                 <span className="num" data-testid="basket-fee-value">
                   {feeWaived
                     ? <><s style={{ color: 'var(--shop-ink-3)', marginRight: 6 }}>{rupees(deliveryFee)}</s>FREE</>
@@ -1059,7 +1024,7 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
               </div>
               {freeAbove > 0 && !feeWaived && (
                 <div style={{ fontSize: 11.5, color: 'var(--shop-ink-3)', marginTop: -2, marginBottom: 6 }}>
-                  Free delivery on baskets over {rupees(freeAbove)}
+                  Free handling above {rupees(freeAbove)}
                 </div>
               )}
               <hr className="shop-bill__divider" />
@@ -1237,7 +1202,6 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
         item={sheetItem}
         qty={basket[sheetItem.sku_id] || 0}
         onAdd={add} onInc={inc} onDec={dec}
-        promiseMinutes={shop?.promise_minutes || 10}
         siteName={shop?.name}
         onBack={() => setSheetItem(null)}
         onBuyNow={buyNow}
@@ -1268,37 +1232,6 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
         {addressPincode && <button className="shop-location-check__change" onClick={() => { setShowAddrPanel(true); setCartOpen(true); }}>Change address</button>}
         {!addressPincode && <span aria-live="polite" style={{ fontSize: 12, color: 'var(--shop-ink-3)' }}>{coverageLoading ? 'Checking service area…' : coverageChecked ? `${coveredStores.length} serving store${coveredStores.length === 1 ? '' : 's'}` : 'Enter a valid 6-digit pincode'}</span>}
       </div>
-      {/* store row */}
-      {siteCode && <div className="shop-storerow">
-        {coveredStores.length > 1 ? (
-          <label className="shop-chip" htmlFor="shop-select">
-            <Store size={14} />
-          <select id="shop-select" value={siteCode}
-              onChange={(e) => { setCat(''); setQuery(''); onPick(e.target.value); }}>
-              {coveredStores.map((s) => (
-                <option key={s.code} value={s.code}>{s.name || s.code}</option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <span className="shop-chip"><Store size={14} /> {shop?.name || siteCode}</span>
-        )}
-        {usingNearestStore && (
-          <span className="shop-chip shop-chip--nearest" data-testid="nearest-store">
-            <MapPin size={14} /> Nearest · {storeDistance.toFixed(1)} km
-          </span>
-        )}
-        <span className="shop-chip shop-chip--quiet">
-          <Truck size={14} /> {fee > 0 ? `${rupees(fee)} delivery` : 'Free delivery'}
-        </span>
-        <button className="shop-refresh" onClick={() => loadShop(true)} disabled={loading}>
-          <RefreshCw size={14} /> Refresh
-        </button>
-        <button className="shop-location" onClick={locateNearbyStore} disabled={locating}>
-          <LocateFixed size={14} /> {locating ? 'Locating…' : 'Find nearby store'}
-        </button>
-      </div>}
-
       {locationError && (
         <div className="shop-location-error" role="status">{locationError}</div>
       )}
@@ -1328,15 +1261,6 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
         </div>
       )}
 
-      {/* delivery banner */}
-      {siteCode && <div className="shop-banner">
-        <div className="shop-banner__icon"><Truck size={22} /></div>
-        <div>
-          <div className="shop-banner__title">Groceries delivered in {shop?.promise_minutes || 10} minutes</div>
-          <div className="shop-banner__sub">Fresh produce, dairy and daily essentials from {shop?.name || 'your nearest dark store'}</div>
-        </div>
-      </div>}
-
       {(shop?.banners || []).length > 0 && (
         <div className="shop-promos">
           {(shop.banners || []).map((banner) => (
@@ -1357,31 +1281,29 @@ function StorefrontScreen({ siteCode: requestedSiteCode, onPick }) {
         </div>
       )}
 
-      {/* search */}
-      <div className="shop-search">
-        <Search size={18} />
-        <input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search for atta, dal, coke, maggi…" aria-label="Search products" />
-        {query && (
-          <button className="shop-search__clear" onClick={() => { setQuery(''); searchRef.current?.focus(); }}
-            aria-label="Clear search"><X size={14} /></button>
-        )}
-      </div>
+      {/* search lives in the top bar now (zippzo:search) */}
 
       {/* category rail — above the offers so the shelf is one tap away */}
       {categories.length > 1 && (
         <div className="shop-cats">
           <button className="shop-cat" aria-pressed={cat === ''} onClick={() => setCat('')}>
-            <span className={`shop-cat__disc ${CAT_TINT[0]}`}><Package size={24} /></span>
+            <span className="shop-cat__disc shop-cat__disc--img">
+              <img src="/zippzo-logo-192.png" alt="" className="shop-cat__img" />
+            </span>
             <span className="shop-cat__label">All</span>
           </button>
-          {categories.map(([name, count]) => {
-            const { Icon } = catMeta(name);
+          {categories.map(([name]) => {
             const m = catMeta(name);
+            const Icon = m.Icon;
+            const img = catImages[name];
             return (
               <button key={name} className="shop-cat" aria-pressed={cat === name}
                 onClick={() => setCat(cat === name ? '' : name)}>
-                <span className={`shop-cat__disc ${CAT_TINT[m.tint]}`}><Icon size={24} /></span>
+                <span className="shop-cat__disc shop-cat__disc--img">
+                  {img
+                    ? <img src={img} alt="" className="shop-cat__img" loading="lazy" />
+                    : <Icon size={24} />}
+                </span>
                 <span className="shop-cat__label">{name}</span>
               </button>
             );
