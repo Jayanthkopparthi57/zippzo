@@ -15,6 +15,7 @@ const LABELS = {
   RIDER_ARRIVED: 'Your rider has arrived',
   RIDER_JOB_OFFERED: 'Rider assignment',
   ORDER_UPDATE: 'Order update',
+  ORDER_CANCELLED: 'Order cancelled',
 };
 
 const ICONS = {
@@ -24,6 +25,7 @@ const ICONS = {
   DELIVERY_OTP: KeyRound,
   RIDER_JOB_OFFERED: Truck,
   ORDER_UPDATE: Info,
+  ORDER_CANCELLED: Info,
 };
 
 const tint = (n) => {

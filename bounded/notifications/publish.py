@@ -63,6 +63,10 @@ def _deliver_out_of_app(notification):
 # told them about.
 ROUTES = {
     # The durable in-app inbox is the customer-facing source for order state.
+    # Internal DS milestones (pack/rack/putaway) are not customer-grade noise:
+    # the customer gets ORDER_PLACED and ORDER_PACKED and nothing in between.
+    'order.rack_dropped': ('ORDER_UPDATE', [], 'none'),
+    'order.cancelled': ('ORDER_CANCELLED', ['PUSH', 'WS'], 'customer'),
     'order.payment_pending': ('ORDER_UPDATE', [], 'none'),
     'payment.captured': ('ORDER_PLACED', ['PUSH', 'WS'], 'customer'),
     'order.placed': ('ORDER_PLACED', ['PUSH', 'WS'], 'customer'),

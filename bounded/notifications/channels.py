@@ -51,6 +51,10 @@ TEMPLATES = {
         'Delivered',
         'Order {order_no} was delivered. Thanks for shopping with Zippzo.',
     ),
+    'ORDER_CANCELLED': (
+        'Order cancelled',
+        'Order {order_no} was cancelled. Nothing was charged.',
+    ),
     'DELIVERY_OTP': (
         'Your delivery code',
         '{otp} is your delivery code for order {order_no}. Share it with the rider.',
