@@ -22,24 +22,18 @@ class ShopperAccountFlowTests(TestCase):
         self.assertIsNotNone(match)
         return match.group(1)
 
-    def test_register_email_verify_and_login(self):
+    def test_register_creates_active_account_without_mail(self):
+        # Email verification is removed for launch: registration must not
+        # depend on (or attempt) mail delivery.
         response = self.client.post('/api/iam/auth/shopper/register', {
             'email': self.email, 'name': 'Asha Rao', 'phone': '9876543210',
             'password': 'Shopper!Account2026',
         }, format='json')
         self.assertEqual(response.status_code, 202)
         self.assertNotIn('code', response.data)
+        self.assertEqual(len(mail.outbox), 0)
         user = User.objects.get(email=self.email)
-        self.assertEqual(user.status, 'PENDING')
-        denied = self.client.post('/api/iam/auth/login', {
-            'email': self.email, 'password': 'Shopper!Account2026',
-            'app': 'SHOPPER',
-        }, format='json')
-        self.assertEqual(denied.status_code, 403)
-        verify = self.client.post('/api/iam/auth/shopper/verify-email', {
-            'email': self.email, 'code': self.code_from_email(),
-        }, format='json')
-        self.assertEqual(verify.status_code, 200)
+        self.assertEqual(user.status, 'ACTIVE')
         logged_in = self.client.post('/api/iam/auth/login', {
             'email': self.email, 'password': 'Shopper!Account2026',
             'app': 'SHOPPER', 'surface': 'mobile',
@@ -82,7 +76,9 @@ class ShopperAccountFlowTests(TestCase):
             'app': 'SHOPPER',
         }, format='json').status_code, 200)
 
-    def test_invalid_email_code_is_rejected_and_never_returned(self):
+    def test_verify_email_endpoint_accepts_any_code_for_launch(self):
+        # Compatibility shim: email verification is removed for launch, so
+        # the endpoint accepts any code (keeps installed shopper builds usable).
         self.client.post('/api/iam/auth/shopper/register', {
             'email': self.email, 'name': 'Asha Rao', 'phone': '9876543210',
             'password': 'Shopper!Account2026',
@@ -90,14 +86,14 @@ class ShopperAccountFlowTests(TestCase):
         response = self.client.post('/api/iam/auth/shopper/verify-email', {
             'email': self.email, 'code': '000000',
         }, format='json')
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200)
         self.assertNotIn('code', response.data)
 
     @override_settings(EMAIL_BACKEND='django.core.mail.backends.console.EmailBackend')
-    def test_registration_fails_closed_without_real_mail(self):
+    def test_registration_does_not_depend_on_mail(self):
         response = self.client.post('/api/iam/auth/shopper/register', {
             'email': self.email, 'name': 'Asha Rao', 'phone': '9876543210',
             'password': 'Shopper!Account2026',
         }, format='json')
-        self.assertEqual(response.status_code, 503)
-        self.assertFalse(User.objects.filter(email=self.email).exists())
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(User.objects.get(email=self.email).status, 'ACTIVE')

@@ -623,7 +623,7 @@ def _verify_shopper_challenge(email, code, purpose):
 
 
 class ShopperRegisterView(APIView):
-    """Create an email-unverified customer account; never return its OTP."""
+    """Create a customer account directly; email verification is removed for launch."""
     authentication_classes = []
     permission_classes = []
 
@@ -642,28 +642,21 @@ class ShopperRegisterView(APIView):
             return Response({'error': 'Use a password with at least 12 characters.'}, status=400)
         if User.objects.filter(email__iexact=email).exists():
             # Same response shape avoids disclosing which addresses are registered.
-            return Response({'message': 'If this address can be registered, a verification code will be sent.'}, status=202)
+            return Response({'message': 'If this address can be registered, your account is ready to use.'}, status=202)
+        # Email verification is deliberately removed for launch: shoppers are
+        # created active without mail delivery. Re-introduce a challenge here
+        # when an email provider is wired up.
         user = User(email=email, full_name=name, phone=phone, role='CUSTOMER',
-                    status='PENDING', password_hash=make_password(password))
+                    status='ACTIVE', password_hash=make_password(password))
         try:
             validate_password(password, user=user)
         except DjangoValidationError as exc:
             return Response({'error': list(exc.messages)}, status=400)
         from bounded.orders.models import Customer
-        try:
-            with transaction.atomic():
-                user.save()
-                Customer.objects.create(user=user, name=name)
-                _new_shopper_challenge(user, 'VERIFY_EMAIL')
-        except RuntimeError:
-            # The atomic block rolls back the new account if email cannot be
-            # delivered, so the caller can safely retry after configuration.
-            return Response({'error': 'Email verification is unavailable. Try again later.'}, status=503)
-        except Exception:
-            if User.objects.filter(email__iexact=email).exists():
-                return Response({'message': 'If this address can be registered, a verification code will be sent.'}, status=202)
-            raise
-        return Response({'message': 'Check your email for a verification code.'}, status=202)
+        with transaction.atomic():
+            user.save()
+            Customer.objects.create(user=user, name=name)
+        return Response({'message': 'Account created. You can now sign in.'}, status=202)
 
 
 class ShopperVerifyEmailView(APIView):
@@ -674,15 +667,9 @@ class ShopperVerifyEmailView(APIView):
         email = str(request.data.get('email') or '').strip().lower()
         if not _shopper_auth_allowed(request, email):
             return Response({'error': 'Too many requests. Try again later.'}, status=429)
-        with transaction.atomic():
-            challenge = _verify_shopper_challenge(email, request.data.get('code'), 'VERIFY_EMAIL')
-            if challenge is None:
-                return Response({'error': 'That code is invalid or expired.'}, status=400)
-            user = User.objects.select_for_update().get(pk=challenge.user_id)
-            if user.status != 'PENDING':
-                return Response({'error': 'This account cannot be verified.'}, status=409)
-            user.status = 'ACTIVE'
-            user.save(update_fields=['status', 'updated_at'])
+        # No-op shim: email verification is removed for launch. Kept (accepts
+        # any code) so installed shopper builds that show a verify screen can
+        # still complete the flow; tighten when a provider is configured.
         return Response({'verified': True, 'message': 'Email verified. You can now sign in.'})
 
 
