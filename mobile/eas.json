@@ -5,7 +5,7 @@
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_APP_VARIANT": "shopper",
-        "EXPO_PUBLIC_API_BASE": "https://zippzo-wms.onrender.com/api"
+        "EXPO_PUBLIC_API_BASE": "https://zippzo-wms-ha2c.onrender.com/api"
       },
       "android": { "buildType": "apk" }
     },
@@ -13,7 +13,7 @@
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_APP_VARIANT": "shopper",
-        "EXPO_PUBLIC_API_BASE": "https://zippzo-wms.onrender.com/api"
+        "EXPO_PUBLIC_API_BASE": "https://zippzo-wms-ha2c.onrender.com/api"
       },
       "ios": { "simulator": false }
     },

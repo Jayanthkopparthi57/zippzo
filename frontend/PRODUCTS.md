@@ -45,14 +45,14 @@ backend that is reachable by the iPhone and pass it at build time.
 PowerShell (Windows project generation/sync):
 
 ```powershell
-$env:IOS_API_BASE_URL = 'https://zippzo-wms.onrender.com/api'
+$env:IOS_API_BASE_URL = 'https://zippzo-wms-ha2c.onrender.com/api'
 npm run ios:sync
 ```
 
 macOS (simulator build):
 
 ```bash
-IOS_API_BASE_URL=https://zippzo-wms.onrender.com/api npm run ios:build
+IOS_API_BASE_URL=https://zippzo-wms-ha2c.onrender.com/api npm run ios:build
 ```
 
 `ios:sync` prepares `ios/App/App.xcodeproj` on Windows. `ios:build` needs
