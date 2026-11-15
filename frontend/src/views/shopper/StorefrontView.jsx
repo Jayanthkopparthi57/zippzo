@@ -1048,6 +1048,10 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
     }, { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 });
   };
 
+  // Declared ahead of every early return — placeLines() closes over this
+  // and renders below may never reach the bottom definition otherwise.
+  const addr = addresses.find((a) => a.address_id === addressId);
+
   const cartPanel = (
     <>
       {cartOpen && (
@@ -1502,9 +1506,6 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
   }
 
   /* receipt */
-  const addr = addresses.find((a) => a.address_id === addressId);
-
-  /* ── cart panel (shared desktop sidebar / mobile sheet) ── */
 
   /* ── main ── */
   if (sheetItem) {

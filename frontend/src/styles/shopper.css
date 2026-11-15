@@ -3048,3 +3048,24 @@
 .shop-railcard__pack { font-size: 10.5px; color: var(--shop-ink-3); }
 
 .shop-railcard__price { font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* ── hero: decorative pattern + bigger type ─────────────────────────────── */
+
+.shop-hero__slide {
+  background-image:
+    radial-gradient(circle at 86% 20%, rgb(255 255 255 / .28) 0 30px, transparent 31px),
+    radial-gradient(circle at 68% 88%, rgb(255 255 255 / .16) 0 44px, transparent 45px),
+    radial-gradient(circle at 30% -8%, rgb(255 255 255 / .16) 0 56px, transparent 57px);
+}
+
+.shop-hero--amber { background-image:
+    radial-gradient(circle at 88% 18%, rgb(0 0 0 / .14) 0 26px, transparent 27px),
+    radial-gradient(circle at 62% 88%, rgb(0 0 0 / .08) 0 40px, transparent 41px),
+    radial-gradient(circle at 24% -10%, rgb(255 255 255 / .25) 0 54px, transparent 55px);
+}
+
+.shop-hero__eyebrow { font-size: 12px; opacity: .75; }
+.shop-hero__title { font-size: 32px; line-height: 1.12; }
+.shop-hero__sub { font-size: 13px; opacity: .92; }
+
+@media (max-width: 720px) { .shop-hero__title { font-size: 23px; } }
