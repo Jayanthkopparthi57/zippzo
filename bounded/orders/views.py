@@ -732,6 +732,33 @@ class CheckoutView(APIView):
         return Response({'success': True, **result['summary']}, status=201)
 
 
+class CashfreeAbandonView(APIView):
+    """POST /api/orders/payments/<order_id>/abandon/ — the shopper closes the payment screen before completing it.
+
+    Flips the order out of PAYMENT_PENDING without pretending the shopper
+    finished anything: the failed-attempt release happens, the cart line is
+    freed and My Orders stops showing an order that will never be paid.
+    Reuses abort_unstarted_payment (idempotent on non-PAYMENT_PENDING).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, order_id):
+        from .models import CustomerOrder
+        from .payments import abort_unstarted_payment
+
+        order = CustomerOrder.objects.filter(
+            order_id=order_id,
+            customer__user_id=request.user.user_id,
+        ).first()
+        if order is None:
+            return Response({'error': 'No such order on your account.'}, status=404)
+        if order.status != 'PAYMENT_PENDING':
+            return Response({'success': True, 'status': order.status})
+        abort_unstarted_payment(order, 'Shopper stopped the payment screen before completing it.')
+        order.refresh_from_db()
+        return Response({'success': True, 'status': order.status})
+
+
 class CashfreePaymentStatusView(APIView):
     """Refresh a shopper's own Cashfree order using server credentials."""
     permission_classes = [IsAuthenticated]

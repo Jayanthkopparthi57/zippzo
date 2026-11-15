@@ -54,6 +54,10 @@ export const placeOrder = (payload) => postApi('/orders/checkout', payload);
 export const cashfreePaymentStatus = (orderId) =>
   fetchApi(`/orders/payments/${encodeURIComponent(orderId)}/status`);
 
+/** Drop an unpaid online order after the shopper stops at the payment screen. */
+export const abandonPayment = (orderId) =>
+  postApi(`/orders/payments/${encodeURIComponent(orderId)}/abandon/`, {});
+
 /** The signed-in shopper's own orders, newest first. */
 export const myOrders = () => fetchApi('/orders/orders/');
 

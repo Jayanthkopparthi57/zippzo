@@ -12,7 +12,7 @@ import { describeError } from '../../api/client';
 import {
   storefront, placeOrder, myAddresses, saveAddress,
   setDefaultAddress, removeAddress, activeCoupons, skuReviews, postReview,
-  deliveryCoverage, cashfreePaymentStatus, asList,
+  deliveryCoverage, cashfreePaymentStatus, abandonPayment, asList,
 } from '../darkstore/useDarkStore';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -909,14 +909,18 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
         await openCashfreeCheckout(provider.payment_session_id, provider.environment);
         const verified = await cashfreePaymentStatus(res.order_id);
         if (verified.payment_status !== 'CAPTURED') {
-          if (verified.payment_status === 'FAILED') {
-            setPendingPayment(null);
-            setRefusal(clearBasket
-              ? 'Cashfree could not complete the payment. Your basket is still here; you can try again or choose Cash on Delivery.'
-              : 'Cashfree could not complete the payment. Place the order again or choose Cash on Delivery.');
-          } else {
-            setRefusal('Payment is still being confirmed. Check its status before placing another order.');
+          // The shopper stopped at the payment step — do not leave a
+          // PAYMENT_PENDING ghost behind. The server flips it to FAILED,
+          // frees the reserved stock, and My Orders shows nothing placed.
+          try {
+            await abandonPayment(res.order_id);
+          } catch {
+            // Already confirmed/cancelled — whatever wins is what the backend recorded.
           }
+          setPendingPayment(null);
+          setRefusal(clearBasket
+            ? 'Payment was not completed — nothing was charged and the order was dropped. Your basket is still here.'
+            : 'Payment was not completed — nothing was charged and the order was dropped.');
         } else {
           if (clearBasket) { setBasket({}); setAppliedCoupon(null); }
           setPlaced({ ...res, payment_method: 'Cashfree', status: 'CONFIRMED' });
