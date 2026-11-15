@@ -109,57 +109,98 @@ function ProductImg({ item, className }) {
 
 /* ── product card ────────────────────────────────────────────────────────── */
 
-function ProductCard({ item, qty, onAdd, onInc, onDec, onOpen }) {
+function ProductCard({ item, onOpen }) {
   const off = item.on_offer && Number(item.mrp) > Number(item.price);
   const pct = off ? Math.round((1 - Number(item.price) / Number(item.mrp)) * 100) : 0;
   const low = item.available > 0 && item.available <= 5;
   const unitPrice = item.weight_g && Number(item.weight_g) > 0 ? Number(item.price) / (Number(item.weight_g) / 100) : null;
   return (
-    <article className="shop-pcard" data-testid="product-card">
-      <div className="shop-pcard__imgwrap" onClick={() => onOpen(item)}>
+    <button type="button" className="shop-pcard" onClick={() => onOpen(item)}
+      data-testid="product-card" aria-label={`View ${item.name}`}>
+      <div className="shop-pcard__imgwrap">
         <ProductImg item={item} className="shop-pcard__img" />
         {off && <span className="shop-pcard__badge">{pct}% OFF</span>}
         {low && <span className="shop-pcard__low">Only {item.available} left</span>}
       </div>
       <div className="shop-pcard__body">
-        <span className="shop-pcard__name" onClick={() => onOpen(item)}>{item.name}</span>
+        <span className="shop-pcard__name">{item.name}</span>
         <span className="shop-pcard__pack">{item.pack_size}</span>
         <div className="shop-pcard__pricerow">
           <span className="shop-pcard__price" data-testid="product-price">{rupees(item.price)}</span>
           {off && <span className="shop-pcard__mrp">{rupees(item.mrp)}</span>}
         </div>
-        {unitPrice != null && <span className="shop-pcard__unit">{rupees(unitPrice)} / 100g</span>}
+        <span className="shop-pcard__unit">{unitPrice != null ? `${rupees(unitPrice)} / 100 g` : '\u00a0'}</span>
       </div>
-      <div className="shop-pcard__foot">
-        {qty > 0 ? (
-          <div className="shop-step">
-            <button onClick={() => onDec(item)} aria-label="Remove one">
-              {qty === 1 ? <Trash2 size={14} /> : <Minus size={14} />}
-            </button>
-            <span className="shop-step__qty">{qty}</span>
-            <button onClick={() => onInc(item)} disabled={qty >= item.available}
-              aria-label="Add one"><Plus size={14} /></button>
-          </div>
-        ) : (
-          <button className="shop-add" data-testid="product-add"
-            onClick={() => onAdd(item)} disabled={item.available <= 0}>
-            ADD
+    </button>
+  );
+}
+
+/* ── PDP rail card ───────────────────────────────────────────────────────── */
+
+function PdpRail({ title, items, onOpen }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <section className="shop-rail">
+      <div className="shop-rail__head">
+        <span className="shop-rail__title">{title}</span>
+        <span className="shop-rail__meta">{items.length} shown</span>
+      </div>
+      <div className="shop-rail__scroller">
+        {items.map((i) => (
+          <button key={i.sku_id} type="button" className="shop-railcard" onClick={() => onOpen(i)}>
+            <img src={i.image || (i.images || [])[0] || '/zippzo-logo-192.png'}
+                 alt={i.name} className="shop-railcard__img" loading="lazy" />
+            <span className="shop-railcard__name">{i.name}</span>
+            <span className="shop-railcard__pack">{i.pack_size}</span>
+            <span className="shop-railcard__price">{rupees(i.price)}</span>
           </button>
-        )}
+        ))}
       </div>
-    </article>
+    </section>
   );
 }
 
 /* ── product detail page ─────────────────────────────────────────────────── */
 
 function ProductPage({ item, qty, onAdd, onInc, onDec,
-                       onBack, siteName, onBuyNow, placing, refusal, clearRefusal }) {
+                       onBack, siteName, onBuyNow, placing, refusal, clearRefusal,
+                       shelf, userId = 'guest', onOpen }) {
   const [reviews, setReviews] = useState([]);
   const [imageIndex, setImageIndex] = useState(0);
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
+
+  /* Remember what's been viewed; render it at the bottom of every PDP. */
+  useEffect(() => {
+    const key = `zippzo:recently:${userId}`;
+    try {
+      const seen = JSON.parse(localStorage.getItem(key) || '[]');
+      const next = [item.sku_id, ...seen.filter((id) => id !== item.sku_id)].slice(0, 10);
+      localStorage.setItem(key, JSON.stringify(next));
+    } catch { /* private mode */ }
+  }, [item.sku_id, userId]);
+
+  const recentProducts = useMemo(() => {
+    if (!shelf || shelf.length === 0) return [];
+    const key = `zippzo:recently:${userId}`;
+    let ids = [];
+    try { ids = JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; }
+    const byId = new Map(shelf.map((i) => [i.sku_id, i]));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((i) => i && i.sku_id !== item.sku_id)
+      .slice(0, 10);
+  }, [shelf, item.sku_id, userId]);
+
+  const relatedProducts = useMemo(() => {
+    if (!shelf || shelf.length === 0) return [];
+    const mine = item.category || 'Others';
+    return shelf
+      .filter((i) => (i.category || 'Others') === mine && i.sku_id !== item.sku_id)
+      .slice(0, 10);
+  }, [shelf, item.category, item.sku_id]);
+
   useEffect(() => {
     skuReviews(item.sku_id).then((r) => setReviews(asList(r, 'reviews') || []))
       .catch(() => setReviews([]));
@@ -323,6 +364,9 @@ function ProductPage({ item, qty, onAdd, onInc, onDec,
           </div>
         </div>
       </div>
+
+      <PdpRail title="Recently viewed" items={recentProducts} onOpen={onOpen} />
+      <PdpRail title="More like this" items={relatedProducts} onOpen={onOpen} />
     </div>
   );
 }
@@ -889,7 +933,7 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
     } catch (e) {
       const message = onlineOrderCreated
         ? `Payment for ${onlineOrderCreated.order_no || 'your order'} did not finish. The order is saved as pending; check its status before trying again.`
-        : (e.message || 'The order could not be placed.');
+        : describeError(e);
       setRefusal(message);
       toast.error(onlineOrderCreated ? 'Payment needs confirmation' : 'Order could not be placed', message);
     }
@@ -1004,214 +1048,6 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
     }, { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 });
   };
 
-  /* receipt */
-  if (placed) {
-    return <ReceiptScreen placed={placed} onDone={() => setPlaced(null)} />;
-  }
-
-  /* Buy now review — the order is not placed until the shopper confirms. */
-  if (confirmOrder) {
-    const item = confirmOrder.item;
-    const qty = confirmOrder.qty;
-    const unitPrice = Number(item.price);
-    const subtotalBN = unitPrice * qty;
-    const handlingBN = subtotalBN >= 150 ? 0 : 20;
-    const totalBN = subtotalBN + handlingBN;
-    const canPlace = Boolean(addressId) && serviceable && !placing;
-    const img = (item.images || [])[0] || item.image;
-
-    return (
-      <div className="view-container shop-buynow">
-        <header className="view-header">
-          <div>
-            <h1 className="page-title">Review your order</h1>
-            <p className="view-subtitle">Nothing is charged until you confirm.</p>
-          </div>
-          <button type="button" className="btn btn-secondary" onClick={() => setConfirmOrder(null)}>
-            Back to shop
-          </button>
-        </header>
-
-        {refusal && (
-          <div className="alert alert-error" role="alert" style={{ marginBottom: 16 }}>
-            <AlertTriangle size={16} /> {refusal}
-          </div>
-        )}
-
-        <div className="shop-buynow__grid">
-          {/* left: line items + totals + payment + address */}
-          <div className="shop-buynow__card">
-            <div className="shop-buynow__overline">Your order</div>
-            <div className="shop-buynow__items">
-              <div className="shop-buynow__row">
-                <img src={img} alt={item.name} className="shop-buynow__img" />
-                <div>
-                  <span className="shop-buynow__name">{item.name}</span>
-                  <span className="shop-buynow__pack">{item.pack_size || 'Each'} · {rupees(unitPrice)} each</span>
-                  <div className="shop-buynow__qty">
-                    <button type="button" onClick={() => setConfirmOrder((c) => ({ ...c, qty: Math.max(0, c.qty - 1) }))}
-                      disabled={confirmOrder.qty <= 1} aria-label="Remove one"><Minus size={13} /></button>
-                    <span>{confirmOrder.qty}</span>
-                    <button type="button" onClick={() => setConfirmOrder((c) => ({ ...c, qty: Math.min(item.available || 99, c.qty + 1) }))}
-                      disabled={confirmOrder.qty >= (item.available || 99)} aria-label="Add one"><Plus size={13} /></button>
-                  </div>
-                </div>
-                <button type="button" className="shop-buynow__trash" aria-label="Remove item"
-                  onClick={() => setConfirmOrder(null)}><Trash2 size={17} /></button>
-              </div>
-            </div>
-
-            {/* bill */}
-            <div className="shop-bill" style={{ borderTop: '1px solid var(--shop-line)', paddingTop: 12 }}>
-              <div className="shop-bill__row">
-                <span>Subtotal</span>
-                <span className="num">{rupees(subtotalBN)}</span>
-              </div>
-              <div className="shop-bill__row">
-                <span>Handling charge</span>
-                <span className="num">{handlingBN === 0 ? 'FREE' : rupees(handlingBN)}</span>
-              </div>
-              {handlingBN > 0 && (
-                <div style={{ fontSize: 11.5, color: 'var(--shop-ink-3)' }}>
-                  Free handling above {rupees(150)}
-                </div>
-              )}
-              <hr className="shop-bill__divider" />
-              <div className="shop-bill__row shop-bill__row--total">
-                <span>To pay</span>
-                <span className="num">{rupees(totalBN)}</span>
-              </div>
-            </div>
-
-            {/* payment */}
-            <div>
-              <div className="shop-buynow__overline" style={{ marginBottom: 8 }}>Payment method</div>
-              <div className="shop-choice-grid">
-                {[
-                  { id: 'COD', icon: Banknote, title: 'Cash on Delivery', sub: 'Pay the rider when it arrives' },
-                  { id: 'CASHFREE', icon: Smartphone, title: 'UPI or Card', sub: 'Secure checkout by Cashfree' },
-                ].map((p) => {
-                  const Icon = p.icon;
-                  const on = payMethod === p.id;
-                  return (
-                    <button key={p.id} type="button" className="shop-choice"
-                      aria-pressed={on} onClick={() => setPayMethod(p.id)}>
-                      <span className="shop-choice__icon"><Icon size={18} /></span>
-                      <span className="shop-choice__body">
-                        <span className="shop-choice__title">{p.title}</span>
-                        <span className="shop-choice__sub">{p.sub}</span>
-                      </span>
-                      <Check size={16} className="shop-choice__tick" />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* delivery address */}
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <span className="shop-buynow__overline">Deliver to</span>
-                {addresses.length > 0 && (
-                  <button type="button" onClick={() => setConfirmAddrOpen((v) => !v)}
-                    style={{ background: 'none', border: 0, color: 'var(--shop-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                    {confirmAddrOpen ? 'Done' : 'Change'}
-                  </button>
-                )}
-              </div>
-              {confirmAddrOpen || addresses.length === 0 ? (
-                <div className="shop-buynow__addrlist">
-                  {addresses.map((a) => (
-                    <button key={a.address_id} type="button"
-                      className={`shop-buynow__addr${addressId === a.address_id ? ' shop-buynow__addr--on' : ''}`}
-                      onClick={() => { setAddressId(a.address_id); setConfirmAddrOpen(false); }}>
-                      <MapPin size={16} />
-                      <span>
-                        <label>{a.label || 'Address'}</label>
-                        <span>{a.line1}, {a.city} {a.pincode}</span>
-                      </span>
-                    </button>
-                  ))}
-                  {(confirmAddrOpen || addresses.length === 0) && (
-                    <div style={{ marginTop: 8 }}>
-                      <input className="shop-field" placeholder="Flat, building, street *"
-                        value={addrDraft.line1} onChange={(e) => setAddrDraft((d) => ({ ...d, line1: e.target.value }))}
-                        style={{ width: '100%', border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13, marginBottom: 8 }} />
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                        <input placeholder="City *" value={addrDraft.city}
-                          onChange={(e) => setAddrDraft((d) => ({ ...d, city: e.target.value }))}
-                          style={{ border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13 }} />
-                        <input placeholder="PIN *" value={addrDraft.pincode} maxLength={6}
-                          onChange={(e) => setAddrDraft((d) => ({ ...d, pincode: e.target.value }))}
-                          style={{ border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13 }} />
-                      </div>
-                      <button type="button" className="btn btn-primary btn-block" style={{ marginTop: 8 }}
-                        onClick={saveAddr} disabled={addrBusy || !addrDraft.line1 || !addrDraft.city || !addrDraft.pincode}>
-                        {addrBusy ? 'Saving…' : 'Add address'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="shop-buynow__addr shop-buynow__addr--view">
-                  {(() => {
-                    const d = addresses.find((a) => a.address_id === addressId);
-                    return d ? (
-                      <>
-                        <MapPin size={16} />
-                        <span>
-                          <label>{d.label || 'Address'}</label>
-                          <span>{d.line1}, {d.city} {d.pincode}</span>
-                        </span>
-                      </>
-                    ) : <span style={{ fontSize: 12.5, color: 'var(--shop-ink-3)' }}>No delivery address yet</span>;
-                  })()}
-                </div>
-              )}
-            </div>
-
-            {/* actions */}
-            <div className="shop-buynow__buttons">
-              <button type="button" className="btn btn-primary btn-block" data-testid="confirm-buy-now"
-                onClick={buyNowConfirm} disabled={!canPlace}>
-                {placing ? 'Placing…' : `Place order · ${rupees(totalBN)}`}
-              </button>
-              <button type="button" className="btn btn-secondary btn-block" onClick={adoptBuyNowIntoBasket}>
-                Add more products
-              </button>
-              <p className="shop-buynow__hint">
-                Add more products and checked-out items go out together as one order.
-              </p>
-            </div>
-          </div>
-
-          {/* right: invoice */}
-          <div className="shop-buynow__card">
-            <div className="shop-buynow__overline">Invoice information</div>
-            <div className="shop-buynow__invoice">
-              <div className="shop-buynow__invoice-row"><span>Order number</span><strong>Assigned at delivery</strong></div>
-              <div className="shop-buynow__invoice-row"><span>Items</span><strong>1 line · {confirmOrder.qty} unit{confirmOrder.qty === 1 ? '' : 's'}</strong></div>
-              <div className="shop-buynow__invoice-row"><span>Subtotal</span><strong className="num">{rupees(subtotalBN)}</strong></div>
-              <div className="shop-buynow__invoice-row"><span>Handling charge</span><strong className="num">{handlingBN === 0 ? 'FREE' : rupees(handlingBN)}</strong></div>
-              <div className="shop-buynow__invoice-row"><span>To pay</span><strong className="num">{rupees(totalBN)}</strong></div>
-              <div className="shop-buynow__invoice-row"><span>Payment</span><strong>{payMethod === 'COD' ? 'Cash on delivery' : 'UPI / Card on delivery'}</strong></div>
-              <div className="shop-buynow__invoice-foot">
-                A GST invoice is not issued at checkout — you will receive the formal bill at delivery. Tax (CGST/SGST) is shown on the physical invoice where applicable.
-              </div>
-            </div>
-            <p className="shop-buynow__hint" style={{ textAlign: 'left' }}>
-              Want to change payment method? Pick one in the panel on the left; the invoice above updates automatically.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  /* receipt */
-  const addr = addresses.find((a) => a.address_id === addressId);
-
-  /* ── cart panel (shared desktop sidebar / mobile sheet) ── */
   const cartPanel = (
     <>
       {cartOpen && (
@@ -1460,22 +1296,238 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
     </>
   );
 
+  /* receipt */
+  if (placed) {
+    return <ReceiptScreen placed={placed} onDone={() => setPlaced(null)} />;
+  }
+
+  /* Buy now review — the order is not placed until the shopper confirms. */
+  if (confirmOrder) {
+    const item = confirmOrder.item;
+    const qty = confirmOrder.qty;
+    const unitPrice = Number(item.price);
+    const subtotalBN = unitPrice * qty;
+    const handlingBN = subtotalBN >= 150 ? 0 : 20;
+    const totalBN = subtotalBN + handlingBN;
+    const canPlace = Boolean(addressId) && serviceable && !placing;
+    const img = (item.images || [])[0] || item.image;
+
+    return (
+      <div className="view-container shop-buynow">
+        <header className="view-header">
+          <div>
+            <h1 className="page-title">Review your order</h1>
+            <p className="view-subtitle">Nothing is charged until you confirm.</p>
+          </div>
+          <button type="button" className="btn btn-secondary" onClick={() => setConfirmOrder(null)}>
+            Back to shop
+          </button>
+        </header>
+
+        {refusal && (
+          <div className="alert alert-error" role="alert" style={{ marginBottom: 16 }}>
+            <AlertTriangle size={16} /> {refusal}
+          </div>
+        )}
+
+        <div className="shop-buynow__grid">
+          {/* left: line items + totals + payment + address */}
+          <div className="shop-buynow__card">
+            <div className="shop-buynow__overline">Your order</div>
+            <div className="shop-buynow__items">
+              <div className="shop-buynow__row">
+                <img src={img} alt={item.name} className="shop-buynow__img" />
+                <div>
+                  <span className="shop-buynow__name">{item.name}</span>
+                  <span className="shop-buynow__pack">{item.pack_size || 'Each'} · {rupees(unitPrice)} each</span>
+                  <div className="shop-buynow__qty">
+                    <button type="button" onClick={() => setConfirmOrder((c) => ({ ...c, qty: Math.max(0, c.qty - 1) }))}
+                      disabled={confirmOrder.qty <= 1} aria-label="Remove one"><Minus size={13} /></button>
+                    <span>{confirmOrder.qty}</span>
+                    <button type="button" onClick={() => setConfirmOrder((c) => ({ ...c, qty: Math.min(item.available || 99, c.qty + 1) }))}
+                      disabled={confirmOrder.qty >= (item.available || 99)} aria-label="Add one"><Plus size={13} /></button>
+                  </div>
+                </div>
+                <button type="button" className="shop-buynow__trash" aria-label="Remove item"
+                  onClick={() => setConfirmOrder(null)}><Trash2 size={17} /></button>
+              </div>
+            </div>
+
+            {/* bill */}
+            <div className="shop-bill" style={{ borderTop: '1px solid var(--shop-line)', paddingTop: 12 }}>
+              <div className="shop-bill__row">
+                <span>Subtotal</span>
+                <span className="num">{rupees(subtotalBN)}</span>
+              </div>
+              <div className="shop-bill__row">
+                <span>Handling charge</span>
+                <span className="num">{handlingBN === 0 ? 'FREE' : rupees(handlingBN)}</span>
+              </div>
+              {handlingBN > 0 && (
+                <div style={{ fontSize: 11.5, color: 'var(--shop-ink-3)' }}>
+                  Free handling above {rupees(150)}
+                </div>
+              )}
+              <hr className="shop-bill__divider" />
+              <div className="shop-bill__row shop-bill__row--total">
+                <span>To pay</span>
+                <span className="num">{rupees(totalBN)}</span>
+              </div>
+            </div>
+
+            {/* payment */}
+            <div>
+              <div className="shop-buynow__overline" style={{ marginBottom: 8 }}>Payment method</div>
+              <div className="shop-choice-grid">
+                {[
+                  { id: 'COD', icon: Banknote, title: 'Cash on Delivery', sub: 'Pay the rider when it arrives' },
+                  { id: 'CASHFREE', icon: Smartphone, title: 'UPI or Card', sub: 'Secure checkout by Cashfree' },
+                ].map((p) => {
+                  const Icon = p.icon;
+                  const on = payMethod === p.id;
+                  return (
+                    <button key={p.id} type="button" className="shop-choice"
+                      aria-pressed={on} onClick={() => setPayMethod(p.id)}>
+                      <span className="shop-choice__icon"><Icon size={18} /></span>
+                      <span className="shop-choice__body">
+                        <span className="shop-choice__title">{p.title}</span>
+                        <span className="shop-choice__sub">{p.sub}</span>
+                      </span>
+                      <Check size={16} className="shop-choice__tick" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* delivery address */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span className="shop-buynow__overline">Deliver to</span>
+                {addresses.length > 0 && (
+                  <button type="button" onClick={() => setConfirmAddrOpen((v) => !v)}
+                    style={{ background: 'none', border: 0, color: 'var(--shop-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                    {confirmAddrOpen ? 'Done' : 'Change'}
+                  </button>
+                )}
+              </div>
+              {confirmAddrOpen || addresses.length === 0 ? (
+                <div className="shop-buynow__addrlist">
+                  {addresses.map((a) => (
+                    <button key={a.address_id} type="button"
+                      className={`shop-buynow__addr${addressId === a.address_id ? ' shop-buynow__addr--on' : ''}`}
+                      onClick={() => { setAddressId(a.address_id); setConfirmAddrOpen(false); }}>
+                      <MapPin size={16} />
+                      <span>
+                        <label>{a.label || 'Address'}</label>
+                        <span>{a.line1}, {a.city} {a.pincode}</span>
+                      </span>
+                    </button>
+                  ))}
+                  {(confirmAddrOpen || addresses.length === 0) && (
+                    <div style={{ marginTop: 8 }}>
+                      <input className="shop-field" placeholder="Flat, building, street *"
+                        value={addrDraft.line1} onChange={(e) => setAddrDraft((d) => ({ ...d, line1: e.target.value }))}
+                        style={{ width: '100%', border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13, marginBottom: 8 }} />
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <input placeholder="City *" value={addrDraft.city}
+                          onChange={(e) => setAddrDraft((d) => ({ ...d, city: e.target.value }))}
+                          style={{ border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13 }} />
+                        <input placeholder="PIN *" value={addrDraft.pincode} maxLength={6}
+                          onChange={(e) => setAddrDraft((d) => ({ ...d, pincode: e.target.value }))}
+                          style={{ border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13 }} />
+                      </div>
+                      <button type="button" className="btn btn-primary btn-block" style={{ marginTop: 8 }}
+                        onClick={saveAddr} disabled={addrBusy || !addrDraft.line1 || !addrDraft.city || !addrDraft.pincode}>
+                        {addrBusy ? 'Saving…' : 'Add address'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="shop-buynow__addr shop-buynow__addr--view">
+                  {(() => {
+                    const d = addresses.find((a) => a.address_id === addressId);
+                    return d ? (
+                      <>
+                        <MapPin size={16} />
+                        <span>
+                          <label>{d.label || 'Address'}</label>
+                          <span>{d.line1}, {d.city} {d.pincode}</span>
+                        </span>
+                      </>
+                    ) : <span style={{ fontSize: 12.5, color: 'var(--shop-ink-3)' }}>No delivery address yet</span>;
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* actions */}
+            <div className="shop-buynow__buttons">
+              <button type="button" className="btn btn-primary btn-block" data-testid="confirm-buy-now"
+                onClick={buyNowConfirm} disabled={!canPlace}>
+                {placing ? 'Placing…' : `Place order · ${rupees(totalBN)}`}
+              </button>
+              <button type="button" className="btn btn-secondary btn-block" onClick={adoptBuyNowIntoBasket}>
+                Add more products
+              </button>
+              <p className="shop-buynow__hint">
+                Add more products and checked-out items go out together as one order.
+              </p>
+            </div>
+          </div>
+
+          {/* right: invoice */}
+          <div className="shop-buynow__card">
+            <div className="shop-buynow__overline">Invoice information</div>
+            <div className="shop-buynow__invoice">
+              <div className="shop-buynow__invoice-row"><span>Order number</span><strong>Assigned at delivery</strong></div>
+              <div className="shop-buynow__invoice-row"><span>Items</span><strong>1 line · {confirmOrder.qty} unit{confirmOrder.qty === 1 ? '' : 's'}</strong></div>
+              <div className="shop-buynow__invoice-row"><span>Subtotal</span><strong className="num">{rupees(subtotalBN)}</strong></div>
+              <div className="shop-buynow__invoice-row"><span>Handling charge</span><strong className="num">{handlingBN === 0 ? 'FREE' : rupees(handlingBN)}</strong></div>
+              <div className="shop-buynow__invoice-row"><span>To pay</span><strong className="num">{rupees(totalBN)}</strong></div>
+              <div className="shop-buynow__invoice-row"><span>Payment</span><strong>{payMethod === 'COD' ? 'Cash on delivery' : 'UPI / Card on delivery'}</strong></div>
+              <div className="shop-buynow__invoice-foot">
+                A GST invoice is not issued at checkout — you will receive the formal bill at delivery. Tax (CGST/SGST) is shown on the physical invoice where applicable.
+              </div>
+            </div>
+            <p className="shop-buynow__hint" style={{ textAlign: 'left' }}>
+              Want to change payment method? Pick one in the panel on the left; the invoice above updates automatically.
+            </p>
+          </div>
+          </div>
+          {cartPanel}
+        </div>
+      );
+  }
+
+  /* receipt */
+  const addr = addresses.find((a) => a.address_id === addressId);
+
+  /* ── cart panel (shared desktop sidebar / mobile sheet) ── */
+
   /* ── main ── */
   if (sheetItem) {
     // Clicking a product opens the dedicated detail page instead of the
     // old bottom sheet — same information model as the app.
     return (
-      <ProductPage
-        item={sheetItem}
-        qty={basket[sheetItem.sku_id] || 0}
-        onAdd={add} onInc={inc} onDec={dec}
-        siteName={shop?.name}
-        onBack={() => setSheetItem(null)}
-        onBuyNow={buyNow}
-        placing={placing}
-        refusal={refusal}
-        clearRefusal={Boolean(refusal)}
-      />
+      <div className="view-container shop-pdp-view">
+        <ProductPage
+          item={sheetItem}
+          qty={basket[sheetItem.sku_id] || 0}
+          onAdd={add} onInc={inc} onDec={dec}
+          siteName={shop?.name}
+          onBack={() => setSheetItem(null)}
+          onBuyNow={buyNow}
+          placing={placing}
+          refusal={refusal}
+          clearRefusal={Boolean(refusal)}
+          shelf={items}
+          userId={user?.user_id || 'guest'}
+          onOpen={setSheetItem}
+        />
+        {cartPanel}
+      </div>
     );
   }
 
@@ -1690,9 +1742,7 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
                 </div>
                 <div className="shop-grid">
                   {list.map((item) => (
-                    <ProductCard key={item.sku_id} item={item}
-                      qty={basket[item.sku_id] || 0}
-                      onAdd={add} onInc={inc} onDec={dec} onOpen={setSheetItem} />
+                    <ProductCard key={item.sku_id} item={item} onOpen={setSheetItem} />
                   ))}
                 </div>
               </section>
