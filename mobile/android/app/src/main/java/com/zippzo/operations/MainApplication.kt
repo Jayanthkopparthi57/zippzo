@@ -1,4 +1,4 @@
-package com.zippzo.rider
+package com.zippzo.operations
 
 import android.app.Application
 import android.content.res.Configuration
