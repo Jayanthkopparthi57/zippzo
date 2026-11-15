@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchApi, postApi, describeError } from '../../api/client';
-import { Bell, CheckCheck, Package, Truck, KeyRound, Info } from 'lucide-react';
+import { Bell, CheckCheck, Package, Truck, KeyRound, Info, Trash2 } from 'lucide-react';
 
 const NOTIFICATIONS = '/notifications/notifications/';
 
@@ -39,6 +39,8 @@ export default function NotificationsView() {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [onlyUnread, setOnlyUnread] = useState(false);
+  const [clearArmed, setClearArmed] = useState(false);
+  const clearTimer = useRef(null);
 
   const load = useCallback(async (unreadOnly = onlyUnread, quiet = false) => {
     setError(null);
@@ -104,6 +106,29 @@ export default function NotificationsView() {
     }
   };
 
+  /* Two-step clear: first press arms ("Confirm clear?"), second wipes the
+     inbox. The backend scopes the delete to the signed-in shopper. */
+  const clearAll = async () => {
+    if (!clearArmed) {
+      setClearArmed(true);
+      if (clearTimer.current) clearTimeout(clearTimer.current);
+      clearTimer.current = setTimeout(() => setClearArmed(false), 3000);
+      return;
+    }
+    clearTimeout(clearTimer.current);
+    setBusy(true);
+    try {
+      await postApi(`${NOTIFICATIONS}clear_all/`, {});
+      setRows([]);
+      setUnread(0);
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
+      setClearArmed(false);
+    }
+  };
+
   if (loading) {
     return <div className="shop-page" style={{ textAlign: 'center', color: 'var(--shop-ink-3)' }}>Loading…</div>;
   }
@@ -125,6 +150,15 @@ export default function NotificationsView() {
           }}>Unread</button>
           {unread > 0 && (
             <button onClick={markAll} disabled={busy}>{busy ? 'Marking…' : 'Mark all read'}</button>
+          )}
+          {rows.length > 0 && (
+            <button
+              onClick={clearAll}
+              disabled={busy}
+              className={clearArmed ? 'shop-toggle__danger shop-toggle__danger--armed' : 'shop-toggle__danger'}
+            >
+              <Trash2 size={13} /> {clearArmed ? 'Confirm clear?' : 'Clear all'}
+            </button>
           )}
         </div>
       </div>

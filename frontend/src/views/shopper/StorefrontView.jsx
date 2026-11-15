@@ -421,6 +421,17 @@ function ReceiptScreen({ placed, onDone }) {
 
 /* ── main storefront ─────────────────────────────────────────────────────── */
 
+/* ── hero slides (all flat, all self-owned) ─────────────────────────────── */
+
+const HERO_SLIDES = [
+  { key: 'save50', tag: 'SAVE50', title: 'Flat ₹50 off on baskets over ₹199',
+    sub: 'Apply the code in your basket before checkout', cta: 'Use code', ctaAction: 'apply-save50', tint: 'shop-hero--amber' },
+  { key: 'handling', tag: 'FREE HANDLING', title: 'No handling charge above ₹150',
+    sub: 'Baskets above ₹150 ship without the ₹20 charge', cta: 'Start shopping', ctaAction: 'shop-all', tint: 'shop-hero--deep' },
+  { key: 'fresh', tag: 'FRESH TO DOOR', title: 'Fresh groceries, in minutes',
+    sub: 'Picked, packed and delivered from your dark store', cta: 'Shop now', ctaAction: 'shop-all', tint: 'shop-hero--soft' },
+];
+
 export default function ShopperStorefrontView() {
   const { user } = useAuth();
   if (!user) {
@@ -456,6 +467,10 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
   const [appliedCoupon, setAppliedCoupon] = useState(null);
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
+  const [confirmOrder, setConfirmOrder] = useState(null);
+  const [confirmAddrOpen, setConfirmAddrOpen] = useState(false);
+  const [heroIndex, setHeroIndex] = useState(0);
+  const [heroPaused, setHeroPaused] = useState(false);
   const [payMethod, setPayMethod] = useState('COD');
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState('');
@@ -608,10 +623,46 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
     return () => { active = false; };
   }, [siteCode, toast]);
 
-  // persist the basket across tab switches and page reloads
+  // persist the basket across tab switches and page reloads; the top bar
+  // badge reads the same key and refreshes from this event.
   useEffect(() => {
     try { localStorage.setItem(basketStorageKey, JSON.stringify(basket)); } catch { /* private mode */ }
+    window.dispatchEvent(new Event('zippzo:basket-changed'));
   }, [basket, basketStorageKey]);
+
+  // Top bar cart button: sessionStorage flag covers the switch to the
+  // storefront tab, the event covers clicks that land while we are mounted.
+  useEffect(() => {
+    const handler = () => setCartOpen(true);
+    window.addEventListener('zippzo:open-basket', handler);
+    try {
+      if (sessionStorage.getItem('zippzo:open-basket') === '1') {
+        sessionStorage.removeItem('zippzo:open-basket');
+        handler();
+      }
+    } catch { /* private mode */ }
+    return () => window.removeEventListener('zippzo:open-basket', handler);
+  }, []);
+
+  // Hero auto-advance; pauses on hover.
+  useEffect(() => {
+    if (heroPaused) return undefined;
+    const t = setInterval(() => setHeroIndex((i) => (i + 1) % HERO_SLIDES.length), 4200);
+    return () => clearInterval(t);
+  }, [heroPaused]);
+
+  const heroAction = (key) => {
+    if (key === 'apply-save50') {
+      setCouponInput('SAVE50');
+      setCartOpen(true);
+      toast.success('SAVE50 ready in your basket',
+        'Orders above ₹199 pick up the discount at checkout.');
+      return;
+    }
+    // 'shop-all' and anything unmapped: show everything, close the basket.
+    setCat('');
+    setCartOpen(false);
+  };
 
   // reorder from MyOrders pushes items in, then jumps to the Shop tab
   useEffect(() => {
@@ -851,12 +902,30 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
     clearBasket: true,
   });
 
-  const buyNow = (item, qty) => placeLines({
-    items: [{ sku_id: item.sku_id, qty }],
-    coupon: '',
-    clearBasket: false,
-    onPlaced: () => setSheetItem(null),
-  });
+  /* PDP Buy now routes to the review screen — nothing is placed until the
+     shopper confirms there. */
+  const buyNow = (item, qty) => setConfirmOrder({ item, qty });
+
+  const buyNowConfirm = () => {
+    const item = confirmOrder?.item;
+    if (!item) return;
+    placeLines({
+      items: [{ sku_id: item.sku_id, qty: confirmOrder.qty }],
+      coupon: '',
+      clearBasket: false,
+      onPlaced: () => setConfirmOrder(null),
+    });
+  };
+
+  /* Adopt the buy-now line into the basket — the shopper can then keep
+     browsing; checkout will send everything as one order, as N products. */
+  const adoptBuyNowIntoBasket = () => {
+    const item = confirmOrder?.item;
+    if (!item) return;
+    setBasket((prev) => ({ ...prev, [item.sku_id]: (prev[item.sku_id] || 0) + confirmOrder.qty }));
+    toast.success('Added to your basket', 'Everything in the basket goes out as one order.');
+    setConfirmOrder(null);
+  };
 
   const refreshPendingPayment = async () => {
     if (!pendingPayment?.orderId) return;
@@ -940,6 +1009,206 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
     return <ReceiptScreen placed={placed} onDone={() => setPlaced(null)} />;
   }
 
+  /* Buy now review — the order is not placed until the shopper confirms. */
+  if (confirmOrder) {
+    const item = confirmOrder.item;
+    const qty = confirmOrder.qty;
+    const unitPrice = Number(item.price);
+    const subtotalBN = unitPrice * qty;
+    const handlingBN = subtotalBN >= 150 ? 0 : 20;
+    const totalBN = subtotalBN + handlingBN;
+    const canPlace = Boolean(addressId) && serviceable && !placing;
+    const img = (item.images || [])[0] || item.image;
+
+    return (
+      <div className="view-container shop-buynow">
+        <header className="view-header">
+          <div>
+            <h1 className="page-title">Review your order</h1>
+            <p className="view-subtitle">Nothing is charged until you confirm.</p>
+          </div>
+          <button type="button" className="btn btn-secondary" onClick={() => setConfirmOrder(null)}>
+            Back to shop
+          </button>
+        </header>
+
+        {refusal && (
+          <div className="alert alert-error" role="alert" style={{ marginBottom: 16 }}>
+            <AlertTriangle size={16} /> {refusal}
+          </div>
+        )}
+
+        <div className="shop-buynow__grid">
+          {/* left: line items + totals + payment + address */}
+          <div className="shop-buynow__card">
+            <div className="shop-buynow__overline">Your order</div>
+            <div className="shop-buynow__items">
+              <div className="shop-buynow__row">
+                <img src={img} alt={item.name} className="shop-buynow__img" />
+                <div>
+                  <span className="shop-buynow__name">{item.name}</span>
+                  <span className="shop-buynow__pack">{item.pack_size || 'Each'} · {rupees(unitPrice)} each</span>
+                  <div className="shop-buynow__qty">
+                    <button type="button" onClick={() => setConfirmOrder((c) => ({ ...c, qty: Math.max(0, c.qty - 1) }))}
+                      disabled={confirmOrder.qty <= 1} aria-label="Remove one"><Minus size={13} /></button>
+                    <span>{confirmOrder.qty}</span>
+                    <button type="button" onClick={() => setConfirmOrder((c) => ({ ...c, qty: Math.min(item.available || 99, c.qty + 1) }))}
+                      disabled={confirmOrder.qty >= (item.available || 99)} aria-label="Add one"><Plus size={13} /></button>
+                  </div>
+                </div>
+                <button type="button" className="shop-buynow__trash" aria-label="Remove item"
+                  onClick={() => setConfirmOrder(null)}><Trash2 size={17} /></button>
+              </div>
+            </div>
+
+            {/* bill */}
+            <div className="shop-bill" style={{ borderTop: '1px solid var(--shop-line)', paddingTop: 12 }}>
+              <div className="shop-bill__row">
+                <span>Subtotal</span>
+                <span className="num">{rupees(subtotalBN)}</span>
+              </div>
+              <div className="shop-bill__row">
+                <span>Handling charge</span>
+                <span className="num">{handlingBN === 0 ? 'FREE' : rupees(handlingBN)}</span>
+              </div>
+              {handlingBN > 0 && (
+                <div style={{ fontSize: 11.5, color: 'var(--shop-ink-3)' }}>
+                  Free handling above {rupees(150)}
+                </div>
+              )}
+              <hr className="shop-bill__divider" />
+              <div className="shop-bill__row shop-bill__row--total">
+                <span>To pay</span>
+                <span className="num">{rupees(totalBN)}</span>
+              </div>
+            </div>
+
+            {/* payment */}
+            <div>
+              <div className="shop-buynow__overline" style={{ marginBottom: 8 }}>Payment method</div>
+              <div className="shop-choice-grid">
+                {[
+                  { id: 'COD', icon: Banknote, title: 'Cash on Delivery', sub: 'Pay the rider when it arrives' },
+                  { id: 'CASHFREE', icon: Smartphone, title: 'UPI or Card', sub: 'Secure checkout by Cashfree' },
+                ].map((p) => {
+                  const Icon = p.icon;
+                  const on = payMethod === p.id;
+                  return (
+                    <button key={p.id} type="button" className="shop-choice"
+                      aria-pressed={on} onClick={() => setPayMethod(p.id)}>
+                      <span className="shop-choice__icon"><Icon size={18} /></span>
+                      <span className="shop-choice__body">
+                        <span className="shop-choice__title">{p.title}</span>
+                        <span className="shop-choice__sub">{p.sub}</span>
+                      </span>
+                      <Check size={16} className="shop-choice__tick" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* delivery address */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span className="shop-buynow__overline">Deliver to</span>
+                {addresses.length > 0 && (
+                  <button type="button" onClick={() => setConfirmAddrOpen((v) => !v)}
+                    style={{ background: 'none', border: 0, color: 'var(--shop-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                    {confirmAddrOpen ? 'Done' : 'Change'}
+                  </button>
+                )}
+              </div>
+              {confirmAddrOpen || addresses.length === 0 ? (
+                <div className="shop-buynow__addrlist">
+                  {addresses.map((a) => (
+                    <button key={a.address_id} type="button"
+                      className={`shop-buynow__addr${addressId === a.address_id ? ' shop-buynow__addr--on' : ''}`}
+                      onClick={() => { setAddressId(a.address_id); setConfirmAddrOpen(false); }}>
+                      <MapPin size={16} />
+                      <span>
+                        <label>{a.label || 'Address'}</label>
+                        <span>{a.line1}, {a.city} {a.pincode}</span>
+                      </span>
+                    </button>
+                  ))}
+                  {(confirmAddrOpen || addresses.length === 0) && (
+                    <div style={{ marginTop: 8 }}>
+                      <input className="shop-field" placeholder="Flat, building, street *"
+                        value={addrDraft.line1} onChange={(e) => setAddrDraft((d) => ({ ...d, line1: e.target.value }))}
+                        style={{ width: '100%', border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13, marginBottom: 8 }} />
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <input placeholder="City *" value={addrDraft.city}
+                          onChange={(e) => setAddrDraft((d) => ({ ...d, city: e.target.value }))}
+                          style={{ border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13 }} />
+                        <input placeholder="PIN *" value={addrDraft.pincode} maxLength={6}
+                          onChange={(e) => setAddrDraft((d) => ({ ...d, pincode: e.target.value }))}
+                          style={{ border: '1px solid var(--shop-line-2)', borderRadius: 8, padding: 10, fontSize: 13 }} />
+                      </div>
+                      <button type="button" className="btn btn-primary btn-block" style={{ marginTop: 8 }}
+                        onClick={saveAddr} disabled={addrBusy || !addrDraft.line1 || !addrDraft.city || !addrDraft.pincode}>
+                        {addrBusy ? 'Saving…' : 'Add address'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="shop-buynow__addr shop-buynow__addr--view">
+                  {(() => {
+                    const d = addresses.find((a) => a.address_id === addressId);
+                    return d ? (
+                      <>
+                        <MapPin size={16} />
+                        <span>
+                          <label>{d.label || 'Address'}</label>
+                          <span>{d.line1}, {d.city} {d.pincode}</span>
+                        </span>
+                      </>
+                    ) : <span style={{ fontSize: 12.5, color: 'var(--shop-ink-3)' }}>No delivery address yet</span>;
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* actions */}
+            <div className="shop-buynow__buttons">
+              <button type="button" className="btn btn-primary btn-block" data-testid="confirm-buy-now"
+                onClick={buyNowConfirm} disabled={!canPlace}>
+                {placing ? 'Placing…' : `Place order · ${rupees(totalBN)}`}
+              </button>
+              <button type="button" className="btn btn-secondary btn-block" onClick={adoptBuyNowIntoBasket}>
+                Add more products
+              </button>
+              <p className="shop-buynow__hint">
+                Add more products and checked-out items go out together as one order.
+              </p>
+            </div>
+          </div>
+
+          {/* right: invoice */}
+          <div className="shop-buynow__card">
+            <div className="shop-buynow__overline">Invoice information</div>
+            <div className="shop-buynow__invoice">
+              <div className="shop-buynow__invoice-row"><span>Order number</span><strong>Assigned at delivery</strong></div>
+              <div className="shop-buynow__invoice-row"><span>Items</span><strong>1 line · {confirmOrder.qty} unit{confirmOrder.qty === 1 ? '' : 's'}</strong></div>
+              <div className="shop-buynow__invoice-row"><span>Subtotal</span><strong className="num">{rupees(subtotalBN)}</strong></div>
+              <div className="shop-buynow__invoice-row"><span>Handling charge</span><strong className="num">{handlingBN === 0 ? 'FREE' : rupees(handlingBN)}</strong></div>
+              <div className="shop-buynow__invoice-row"><span>To pay</span><strong className="num">{rupees(totalBN)}</strong></div>
+              <div className="shop-buynow__invoice-row"><span>Payment</span><strong>{payMethod === 'COD' ? 'Cash on delivery' : 'UPI / Card on delivery'}</strong></div>
+              <div className="shop-buynow__invoice-foot">
+                A GST invoice is not issued at checkout — you will receive the formal bill at delivery. Tax (CGST/SGST) is shown on the physical invoice where applicable.
+              </div>
+            </div>
+            <p className="shop-buynow__hint" style={{ textAlign: 'left' }}>
+              Want to change payment method? Pick one in the panel on the left; the invoice above updates automatically.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* receipt */
   const addr = addresses.find((a) => a.address_id === addressId);
 
   /* ── cart panel (shared desktop sidebar / mobile sheet) ── */
@@ -950,10 +1219,8 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
           onClick={() => setCartOpen(false)} />
       )}
     <aside className={`shop-cart-panel ${cartOpen ? 'shop-cart--open' : ''}`}>
+      <h2 className="shop-a11y">Basket</h2>
       <div className="shop-cart-panel__head">
-        <h2>
-          My Basket <span style={{ color: 'var(--shop-ink-3)', fontWeight: 500 }}>({basketCount})</span>
-        </h2>
         <button className="shop-sheet__close" style={{ position: 'static' }}
           onClick={() => setCartOpen(false)} aria-label="Close basket">
           <X size={16} />
@@ -1232,6 +1499,32 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
         {addressPincode && <button className="shop-location-check__change" onClick={() => { setShowAddrPanel(true); setCartOpen(true); }}>Change address</button>}
         {!addressPincode && <span aria-live="polite" style={{ fontSize: 12, color: 'var(--shop-ink-3)' }}>{coverageLoading ? 'Checking service area…' : coverageChecked ? `${coveredStores.length} serving store${coveredStores.length === 1 ? '' : 's'}` : 'Enter a valid 6-digit pincode'}</span>}
       </div>
+      {/* hero offers carousel */}
+      <div className="shop-hero" aria-roledescription="carousel" aria-label="Offers"
+        onMouseEnter={() => setHeroPaused(true)}
+        onMouseLeave={() => setHeroPaused(false)}
+      >
+        <div className="shop-hero__track" style={{ transform: `translateX(-${heroIndex * 100}%)` }}>
+          {HERO_SLIDES.map((s) => (
+            <button key={s.key} type="button" className={`shop-hero__slide ${s.tint}`}
+              onClick={() => heroAction(s.ctaAction)}>
+              <span className="shop-hero__eyebrow">{s.tag}</span>
+              <span className="shop-hero__title">{s.title}</span>
+              <span className="shop-hero__sub">{s.sub}</span>
+              <span className="shop-hero__cta">{s.cta} →</span>
+            </button>
+          ))}
+        </div>
+        <div className="shop-hero__dots" role="tablist" aria-label="Offer slides">
+          {HERO_SLIDES.map((s, i) => (
+            <button key={s.key} type="button" role="tab" aria-selected={i === heroIndex}
+              aria-label={`Slide ${i + 1}: ${s.tag}`}
+              className={`shop-hero__dot${i === heroIndex ? ' shop-hero__dot--on' : ''}`}
+              onClick={() => setHeroIndex(i)} />
+          ))}
+        </div>
+      </div>
+
       {locationError && (
         <div className="shop-location-error" role="status">{locationError}</div>
       )}

@@ -84,3 +84,11 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
             updated = self.get_queryset().filter(read_at__isnull=True).update(
                 read_at=now)
         return Response({'updated': updated})
+
+    @action(detail=False, methods=['post'])
+    def clear_all(self, request):
+        # Scoped delete: get_queryset() already filters to this user, so this
+        # can never clear another shopper's inbox.
+        with transaction.atomic():
+            deleted, _ = self.get_queryset().delete()
+        return Response({'deleted': deleted})

@@ -1,20 +1,17 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ShoppingBasket, ClipboardList, Bell, Users, MapPin, ChevronDown,
   Search, X, LogOut, BellRing,
 } from 'lucide-react';
 import { useTabs } from '../context/TabContext';
 import { useAuth } from '../context/AuthContext';
-import { myAddresses, asList } from '../views/darkstore/useDarkStore';
 import { fetchApi } from '../api/client';
 
 /**
- * Fired on `window` by the storefront and the address book whenever the saved
- * addresses change, so the top bar never sits there claiming "Add an address"
- * while the basket next to it is using one.
+ * Top bar search. The shelf owns the query state, so this dispatches the
+ * term and (on Enter) switches to the storefront tab. Reads like one search
+ * box even though the two components don't share ownership of the string.
  */
-const ADDRESSES_CHANGED = 'zippzo:addresses-changed';
-
 const SEARCH_EVENT = 'zippzo:search';
 
 /**
@@ -40,23 +37,10 @@ const BOTTOM_NAV = [
 export default function ShopShell({ children }) {
   const { activeTabId, openTab } = useTabs();
   const { user, logout } = useAuth();
-  const [addresses, setAddresses] = useState([]);
   const [unread, setUnread] = useState(0);
   const [term, setTerm] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
-
-  const loadAddresses = useCallback(() => {
-    myAddresses()
-      .then((rows) => setAddresses(asList(rows, 'addresses') || []))
-      .catch(() => { /* the chip shows "Add address"; the basket still blocks */ });
-  }, []);
-
-  useEffect(() => { loadAddresses(); }, [loadAddresses, activeTabId]);
-  useEffect(() => {
-    window.addEventListener(ADDRESSES_CHANGED, loadAddresses);
-    return () => window.removeEventListener(ADDRESSES_CHANGED, loadAddresses);
-  }, [loadAddresses]);
 
   useEffect(() => {
     let mounted = true;
@@ -86,12 +70,39 @@ export default function ShopShell({ children }) {
     };
   }, [menuOpen]);
 
-  const home = addresses.find((a) => a.is_default) || addresses[0] || null;
-  const where = home ? [home.line1, home.city].filter(Boolean).join(', ') : 'Add an address';
-
   const go = (id, title) => { setMenuOpen(false); openTab(id, title, 'Boxes'); };
   const goAddress = () => { setMenuOpen(false); openTab('shop-account', 'Account & Address Book', 'Users'); };
   const browse = () => openTab('shop-storefront', 'Order Groceries', 'ShoppingBasket');
+
+  /* Live basket count: reads the same localStorage key the storefront writes. */
+  const [cartCount, setCartCount] = useState(0);
+  useEffect(() => {
+    const read = () => {
+      try {
+        const key = `zippzo:basket:${user?.user_id || 'guest'}`;
+        const b = JSON.parse(localStorage.getItem(key) || '{}');
+        setCartCount(Object.values(b).reduce((s, q) => s + (Number(q) || 0), 0));
+      } catch { /* private mode */ }
+    };
+    read();
+    const t = setInterval(read, 2000);
+    window.addEventListener('zippzo:live-event', read);
+    window.addEventListener('zippzo:basket-changed', read);
+    window.addEventListener('storage', read);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('zippzo:live-event', read);
+      window.removeEventListener('zippzo:basket-changed', read);
+      window.removeEventListener('storage', read);
+    };
+  }, [user?.user_id]);
+
+  const openBasket = () => {
+    setMenuOpen(false);
+    try { sessionStorage.setItem('zippzo:open-basket', '1'); } catch { /* private mode */ }
+    window.dispatchEvent(new Event('zippzo:open-basket'));
+    openTab('shop-storefront', 'Order Groceries', 'ShoppingBasket');
+  };
 
   const name = (user?.full_name || '').trim();
   const firstName = name ? name.split(' ')[0] : 'Shopper';
@@ -142,21 +153,21 @@ export default function ShopShell({ children }) {
 
         {searchBar('shop-searchbar shop-searchbar--desktop')}
 
+        <div className="shop-topbar__spacer" />
+
         <button
           type="button"
-          className="shop-deliver"
-          onClick={goAddress}
-          title={home ? where : 'Add a delivery address'}
+          className="shop-cartbtn"
+          onClick={openBasket}
+          aria-label={cartCount > 0 ? `Open basket, ${cartCount} item${cartCount === 1 ? '' : 's'}` : 'Open basket'}
+          title="Basket"
         >
-          <MapPin size={17} className="shop-deliver__pin" />
-          <span className="shop-deliver__body">
-            <span className="shop-deliver__label">DELIVER TO</span>
-            <span className="shop-deliver__text">{where}</span>
-          </span>
-          <ChevronDown size={15} className="shop-deliver__chev" />
+          <ShoppingBasket size={19} />
+          <span className="shop-cartbtn__label">Basket</span>
+          {cartCount > 0 && (
+            <span className="shop-cartbtn__badge">{cartCount > 99 ? '99+' : cartCount}</span>
+          )}
         </button>
-
-        <div className="shop-topbar__spacer" />
 
         <button
           type="button"
