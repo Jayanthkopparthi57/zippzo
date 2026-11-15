@@ -34,7 +34,7 @@ export default function ShopperAccessView() {
   };
 
   const input = { width: '100%', boxSizing: 'border-box', padding: '13px 14px', marginBottom: 12, borderRadius: 10, border: '1px solid #dce5de', background: '#fff', color: '#16251b', fontSize: 14 };
-  const button = { width: '100%', border: 0, borderRadius: 10, padding: 14, color: '#fff', background: '#6d4aff', fontSize: 15, fontWeight: 700, cursor: busy ? 'wait' : 'pointer' };
+  const button = { width: '100%', border: 0, borderRadius: 10, padding: 14, color: '#fff', background: '#177a45', fontSize: 15, fontWeight: 700, cursor: busy ? 'wait' : 'pointer' };
   const title = { login: 'Groceries at your door', register: 'Create your shopper account', reset: 'Reset your password', 'reset-confirm': 'Choose a new password' }[stage];
 
   return <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f4f7f4', fontFamily: 'Inter, system-ui, sans-serif' }}>
