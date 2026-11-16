@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { useAuth } from '../context/AuthContext';
 import {
   fetchApi, postApi, unwrapList, describeError
 } from '../api/client';
 import {
-  Truck, Bell, Package, MapPin, CheckCircle, Clock, Bike,
-  LogOut, Wifi, WifiOff, Inbox, Wallet, Banknote, QrCode
+  Bike, Bell, Package, MapPin, Clock, Navigation,
+  Wallet, QrCode, History, Home, LogOut
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -19,10 +21,8 @@ const EARNINGS = '/money/rider-earnings/';
 const CUSTODY = '/money/rider-custody/';
 
 /**
- * The remote Neon pooler plus the browser's HTTP/1.1 connection cap can leave
- * one fetch in a Promise.all hanging for minutes under StrictMode's double
- * mount. Bound every load so the console always settles into setup/shell/error
- * instead of sitting on the spinner.
+ * The remote pooler plus the browser's connection cap can leave one fetch
+ * hanging; bound every load so the console always settles into setup/shell.
  */
 function withTimeout(p, ms = 45000) {
   return Promise.race([
@@ -42,26 +42,20 @@ const VEHICLES = [
   ['BIKE', 'Bike'], ['SCOOTER', 'Scooter'], ['CYCLE', 'Cycle'], ['MINI_VAN', 'Mini Van'],
 ];
 
-// The next thing the rider has to do, in the order the backend allows it.
-// Each entry is the API action that makes it true.
-const STEPS = [
-  { status: 'ACCEPTED', label: 'Head to the store', to: 'AT_DS', button: "I'm at the store" },
-  { status: 'AT_DS', label: 'Collect the tote', action: 'pickup', button: 'Collect tote' },
-  { status: 'PICKED_UP', label: 'On the way', to: 'EN_ROUTE', button: 'Start delivery' },
-  { status: 'EN_ROUTE', label: 'At the door', to: 'ARRIVED', button: "I've arrived" },
-  { status: 'ARRIVED', label: 'Hand it over', action: 'pod', button: 'Complete delivery' },
-  { status: 'POD_PENDING', label: 'Hand it over', action: 'pod', button: 'Enter pickup code' },
-];
+// What the rider's next move is, in the order the backend allows it.
+const JOURNEY = {
+  ACCEPTED: { eyebrow: 'Pickup at the store', cta: "I'm at the store", to: 'AT_DS' },
+  AT_DS: { eyebrow: 'The store handed it to you', cta: 'Pick up order', pickup: true },
+  PICKED_UP: { eyebrow: 'On the way', cta: 'Start delivery', to: 'EN_ROUTE' },
+  EN_ROUTE: { eyebrow: 'At the door', cta: "I've arrived", to: 'ARRIVED' },
+  ARRIVED: { eyebrow: 'Hand it over', cta: 'Complete delivery', pod: true },
+  POD_PENDING: { eyebrow: 'Hand it over', cta: 'Enter pickup code', pod: true },
+};
 
-function StatTile({ label, value, sub, warn }) {
-  return (
-    <div className={`rd-stat${warn ? ' rd-stat--warn' : ''}`}>
-      <div className="rd-stat__label">{label}</div>
-      <div className="rd-stat__value">{value}</div>
-      {sub && <div className="rd-stat__sub">{sub}</div>}
-    </div>
-  );
-}
+const PIN_SVG = {
+  store: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f2b33d" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 6.2 5h11.6L20 10.5M5 10.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8.5M9.5 20v-5h5v5"/></svg>',
+  customer: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 11 12 4.5 19.5 11M6.5 9.5V19h11V9.5"/></svg>',
+};
 
 export default function RiderDashboardView() {
   const { user, logout, facilitiesList } = useAuth();
@@ -74,30 +68,22 @@ export default function RiderDashboardView() {
   const [unread, setUnread] = useState(0);
   const [earnings, setEarnings] = useState([]);
   const [custody, setCustody] = useState(null);
-  const [tab, setTab] = useState('jobs');
+  const [tab, setTab] = useState('home');
 
-  // Personal scan code, fetched only when the rider asks for it: the code
-  // doubles as the rider's acceptance at the store counter, so it is not
-  // sitting on screen from the moment the console opens.
   const [qrInfo, setQrInfo] = useState(null);
-  const [qrOpen, setQrOpen] = useState(false);
-  const [qrLoading, setQrLoading] = useState(false);
   const [qrError, setQrError] = useState('');
 
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Pickup / POD dialogs
-  const [toteOpen, setToteOpen] = useState(false);
-  const [toteBarcode, setToteBarcode] = useState('');
+  // POD dialog
   const [podOpen, setPodOpen] = useState(false);
   const [podOtp, setPodOtp] = useState('');
   const [podCod, setPodCod] = useState('');
   const [podSig, setPodSig] = useState('');
   const [podNote, setPodNote] = useState('');
 
-  // First-run rider setup
   const [form, setForm] = useState({
     name: '', phone: '', vehicle_type: 'BIKE', vehicle_number: '', site_code: '',
   });
@@ -144,22 +130,19 @@ export default function RiderDashboardView() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Live notifications refresh jobs immediately. A slower poll recovers cleanly
-  // after a network interruption or when the device suspends the socket.
+  // Live events refresh jobs immediately; the poll recovers from sockets
+  // suspended by the OS or a dropped tunnel.
   useEffect(() => {
     const refresh = () => load();
     window.addEventListener('zippzo:live-event', refresh);
-    const id = setInterval(refresh, 45000);
+    const id = setInterval(refresh, 30000);
     return () => {
       window.removeEventListener('zippzo:live-event', refresh);
       clearInterval(id);
     };
   }, [load]);
 
-  // While online, keep the store's fleet board fed with where this rider
-  // actually is. A browser that refuses the permission, or a device with no
-  // GPS, just leaves the board showing "no location" - the console itself
-  // keeps working either way, so the failure is never surfaced as an error.
+  // Keep the store's fleet board fed with a 1-pin location while online.
   const [locSharing, setLocSharing] = useState(false);
   useEffect(() => {
     if (!profile?.is_online || !navigator.geolocation) return undefined;
@@ -168,7 +151,6 @@ export default function RiderDashboardView() {
     const push = (pos) => {
       if (cancelled) return;
       const now = Date.now();
-      // One pin every 20 s is plenty for a board that only shows "last seen".
       if (now - lastPush < 20000) return;
       lastPush = now;
       postApi(`${RIDERS}me/location/`, {
@@ -197,7 +179,7 @@ export default function RiderDashboardView() {
   const bootstrap = () => run(async () => {
     const created = await postApi(`${RIDERS}bootstrap/`, form);
     setProfile({ has_profile: true, ...created });
-    setNotice('Profile created. Go online to start receiving jobs.');
+    setNotice('Profile created. Go online to start getting jobs.');
     await load();
   });
 
@@ -220,37 +202,19 @@ export default function RiderDashboardView() {
   });
 
   // ── job actions ──
-  const accept = (task) => run(async () => {
-    await postApi(`${TASKS}${task.task_id}/accept/`, {});
-    setNotice(`Job ${task.order_no || ''} accepted.`);
-    await load();
-  });
-
-  const decline = (task) => run(async () => {
-    await postApi(`${TASKS}${task.task_id}/decline/`, {});
-    setNotice('Job handed back to the pool.');
-    await load();
-  });
-
   const advance = (task, to) => run(async () => {
     await postApi(`${TASKS}${task.task_id}/advance/`, { to });
     await load();
   });
 
-  const collectTote = (task) => run(async () => {
-    await postApi(PICKUP, {
-      task_id: task.task_id,
-      lpn_barcode: toteBarcode.trim() || undefined,
-    });
-    setToteOpen(false);
-    setToteBarcode('');
-    setNotice('Collected. The order is now yours.');
+  const pickup = (task) => run(async () => {
+    await postApi(PICKUP, { task_id: task.task_id });
+    setNotice('Order collected. The customer is waiting.');
     await load();
   });
 
-  // Deliberately not wrapped in run(): the POD form needs the 409 body so it
-  // can show "ask the customer for the code" inside the dialog rather than as
-  // a banner above the fold.
+  // Deliberately not wrapped in run(): the POD form needs the 409 body so the
+  // "ask the customer for their code" note renders inside the sheet.
   const closePod = async (task) => {
     setBusy(true);
     setError('');
@@ -283,45 +247,136 @@ export default function RiderDashboardView() {
     }
   };
 
-  // ── my QR ──
-  const loadQr = async () => {
-    setQrLoading(true);
+  // ── my QR (store scan = consent at the counter) ──
+  const loadQr = useCallback(async () => {
     setQrError('');
     try {
       const info = await withTimeout(fetchApi(`${RIDERS}me/qr/`));
       setQrInfo(info);
-      setQrOpen(true);
     } catch (err) {
       setQrError(describeError(err));
-    } finally {
-      setQrLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => { if (tab === 'qr') loadQr(); }, [tab, loadQr]);
 
   const markAllRead = () => run(async () => {
     await postApi(`${NOTIFICATIONS}mark_all_read/`, {});
     await load();
   });
 
-  // ── derived views ──
+  // ── derived ──
   const mine = tasks.filter(t => t.rider === profile?.rider_id);
-  // A direct offer is stamped with the rider it was offered to (fulfilment picks
-  // one rider and writes their id before the status flips to OFFERED), so
-  // filtering on "has no rider yet" hid every offer this rider actually had:
-  // the store board said the job was theirs while the console said "Nothing
-  // waiting". An offer belongs here when it is unclaimed at my store, or when
-  // it was offered to me.
-  const offers = tasks.filter(t =>
-    ['UNASSIGNED', 'OFFERED'].includes(t.status) &&
-    (!t.rider || t.rider === profile?.rider_id) &&
-    (t.rider === profile?.rider_id || t.site === profile?.current_site));
   const active = mine.filter(t => ACTIVE_STATES.includes(t.status));
   const done = mine.filter(t => DONE_STATES.includes(t.status));
+  const current = active[0] || null;
+  const journey = current ? JOURNEY[current.status] : null;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todays = earnings.filter(e => String(e.created_at || '').slice(0, 10) === today);
+  const todayTotal = todays.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+  // ── map ──
+  const mapRef = useRef(null);
+  const mapEl = useRef(null);
+  const layerRef = useRef({});
+
+  // Destroy/recreate the map on tab change or when the job changes; the rider
+  // moves while a job is open, but the map keeps its frame until the next job.
+  useEffect(() => {
+    if (tab !== 'home') return undefined;
+    if (!mapEl.current || mapRef.current) return undefined;
+
+    const mePos = (profile?.last_lat && profile?.last_lng)
+      ? [Number(profile.last_lat), Number(profile.last_lng)] : null;
+    const storePos = profile?.current_site_geo
+      ? [profile.current_site_geo.lat, profile.current_site_geo.lng] : null;
+    const custPos = (current?.geo_lat && current?.geo_lng)
+      ? [Number(current.geo_lat), Number(current.geo_lng)] : null;
+    const start = mePos || storePos || custPos;
+    if (!start) return undefined; // the fallback panel stands in
+
+    const map = L.map(mapEl.current, {
+      zoomControl: false,
+      attributionControl: true,
+    }).setView(start, 15);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+    }).addTo(map);
+
+    if (mePos) {
+      layerRef.current.me = L.marker(mePos, {
+        icon: L.divIcon({ className: '', html: '<div class="rv3-pin rv3-pin--me"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+        interactive: false,
+      }).addTo(map);
+    }
+    if (storePos) {
+      layerRef.current.store = L.marker(storePos, {
+        icon: L.divIcon({ className: '', html: `<div class="rv3-pin rv3-pin--store">${PIN_SVG.store}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] }),
+      }).addTo(map).bindTooltip('Store', { direction: 'top', offset: [0, -16] });
+    }
+    if (custPos) {
+      layerRef.current.cust = L.marker(custPos, {
+        icon: L.divIcon({ className: '', html: `<div class="rv3-pin rv3-pin--customer">${PIN_SVG.customer}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] }),
+      }).addTo(map).bindTooltip('Customer', { direction: 'top', offset: [0, -16] });
+    }
+    if (mePos && storePos && map.hasLayer(layerRef.current.me)) {
+      // subtle line me -> store while heading to the store
+      layerRef.current.line = L.polyline([mePos, custPos || storePos], {
+        color: '#8b3df0', weight: 4, opacity: 0.9, dashArray: '2 10', lineCap: 'round',
+      }).addTo(map);
+    } else if (storePos && custPos) {
+      layerRef.current.line = L.polyline([storePos, custPos], {
+        color: '#8b3df0', weight: 4, opacity: 0.9, dashArray: '2 10', lineCap: 'round',
+      }).addTo(map);
+    }
+    if (mePos && custPos) {
+      map.fitBounds(L.latLngBounds([mePos, custPos]).pad(0.3));
+    } else if (storePos && custPos) {
+      map.fitBounds(L.latLngBounds([storePos, custPos]).pad(0.3));
+    }
+
+    mapRef.current = map;
+    // Leaflet needs a nudge after the container settles on slower phones.
+    setTimeout(() => map.invalidateSize(), 120);
+    return () => {
+      try {
+        map.remove();
+      } finally {
+        mapRef.current = null;
+        layerRef.current = {};
+      }
+    };
+  }, [tab, current?.task_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const recenter = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (profile?.last_lat && profile?.last_lng) {
+      map.setView([Number(profile.last_lat), Number(profile.last_lng)], 16);
+    }
+  };
+
+  const routeToStore = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    const mePos = profile?.last_lat && profile?.last_lng
+      ? [Number(profile.last_lat), Number(profile.last_lng)] : null;
+    const storePos = profile?.current_site_geo
+      ? [profile.current_site_geo.lat, profile.current_site_geo.lng] : null;
+    const custPos = current?.geo_lat && current?.geo_lng
+      ? [Number(current.geo_lat), Number(current.geo_lng)] : null;
+    const pts = [mePos, custPos || storePos, storePos, custPos].filter(Boolean);
+    if (pts.length >= 2) {
+      map.fitBounds(L.latLngBounds(pts).pad(0.3));
+    }
+  };
 
   if (loading) {
     return (
-      <div data-testid="rider-loading" className="rd-loading">
-        Loading the rider console...
+      <div data-testid="rider-loading" className="rv3-loading">
+        <span>Loading the rider console…</span>
       </div>
     );
   }
@@ -330,509 +385,367 @@ export default function RiderDashboardView() {
   if (!profile?.has_profile) {
     const stores = (facilitiesList.all_facilities || []).filter(s => s.site_type === 'DS');
     return (
-      <div data-testid="rider-setup" className="rd-setup">
-        <div className="rd-setup__card">
-          <h1 className="rd-setup__title">
-            <Bike size={19} color="#6d4aff" /> Set up your rider profile
-          </h1>
-          <p className="rd-setup__sub">
-            Your account has no delivery profile yet. These details are what the
-            store checks before handing you a tote.
+      <div data-testid="rider-setup" className="rv3-setup">
+        <div className="rv3-setup-card">
+          <div className="rv3-setup-badge">
+            <Bike size={13} /> Delivery partner
+          </div>
+          <h1 className="rv3-setup-title">Deliver.<br />Get paid.<br />Back to it.</h1>
+          <p className="rv3-setup-sub">
+            Set up your delivery profile. Jobs at your store reach you automatically —
+            nothing to accept, nothing to scan.
           </p>
 
           {error && (
-            <div role="alert" className="rd-banner rd-banner--error">
-              <span className="rd-banner__icon">{error}</span>
+            <div role="alert" className="rv3-banner rv3-banner--error" style={{ position: 'static', marginBottom: 10 }}>
+              {error}
             </div>
           )}
 
-          <label className="rd-label">Full name</label>
-          <input className="rd-input" value={form.name} placeholder={user?.full_name || ''}
+          <label className="rv3-field-label">Full name</label>
+          <input className="rv3-input" value={form.name} placeholder={user?.full_name || ''}
                  onChange={e => setForm({ ...form, name: e.target.value })} />
 
-          <label className="rd-label">Phone</label>
-          <input className="rd-input" value={form.phone} inputMode="tel" placeholder="10-digit number"
+          <label className="rv3-field-label">Phone</label>
+          <input className="rv3-input" value={form.phone} inputMode="tel" placeholder="10-digit number"
                  onChange={e => setForm({ ...form, phone: e.target.value })} />
 
-          <label className="rd-label">Vehicle</label>
-          <div className="rd-vehicles">
+          <label className="rv3-field-label">Vehicle</label>
+          <div className="rv3-vehicles">
             {VEHICLES.map(([value, text]) => (
               <button key={value} onClick={() => setForm({ ...form, vehicle_type: value })}
-                      className={`rd-vehicle ${form.vehicle_type === value ? 'rd-vehicle--on' : 'rd-vehicle--off'}`}>
+                      className={`rv3-vehicle ${form.vehicle_type === value ? 'rv3-vehicle--on' : ''}`}>
                 {text}
               </button>
             ))}
           </div>
 
-          <label className="rd-label">Vehicle number</label>
-          <input className="rd-input" value={form.vehicle_number} placeholder="KA-01-AB-1234"
+          <label className="rv3-field-label">Vehicle number</label>
+          <input className="rv3-input" value={form.vehicle_number} placeholder="TS-08-AB-1234"
                  onChange={e => setForm({ ...form, vehicle_number: e.target.value })} />
 
-          <label className="rd-label">Home store</label>
-          <select className="rd-input" value={form.site_code}
-                  onChange={e => setForm({ ...form, site_code: e.target.value })}>
+          <label className="rv3-field-label">Home store</label>
+          <select className="rv3-input" value={form.site_code}
+                  onChange={e => setForm({ ...form, site_code: e.target.value })}
+                  style={{ appearance: 'none' }}>
             <option value="">Select a dark store…</option>
             {stores.map(s => (
               <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
             ))}
           </select>
           {stores.length === 0 && (
-            <p className="rd-setup__hint">
-              No stores loaded. Refresh after logging in again.
+            <p style={{ fontSize: 12, color: '#8a857a', marginTop: 6 }}>
+              No stores loaded. Sign in again after the store assigns you one.
             </p>
           )}
 
           <button onClick={bootstrap} disabled={busy}
-                  className="rd-btn rd-btn--primary rd-btn--block rd-setup__submit">
-            {busy ? 'Saving…' : 'Create profile'}
+                  className="rv3-cta" style={{ marginTop: 18 }}>
+            {busy ? 'Saving…' : 'Create profile & go online'}
           </button>
         </div>
       </div>
     );
   }
 
-  const step = active[0] ? STEPS.find(s => s.status === active[0].status) : null;
-
   return (
-    <div data-testid="rider-shell" className="rd-shell">
-      {(error || notice) && (
-        <div role="alert" className={`rd-banner ${error ? 'rd-banner--error' : 'rd-banner--ok'}`}>
-          <span className="rd-banner__icon">{error || notice}</span>
+    <div data-testid="rider-shell" className="rv3-shell">
+      {/* ── map base (home only) ── */}
+      {tab === 'home' && (
+        <div className="rv3-map-wrap">
+          <div ref={mapEl} className="rv3-map" />
+          {!(profile?.last_lat && profile?.last_lng)
+            && !profile?.current_site_geo && !current?.geo_lat && (
+            <div className="rv3-map-fallback">
+              <Bike size={30} strokeWidth={1.4} color="#f2b33d" />
+              <strong>Waiting for GPS</strong>
+              <span>Your route appears here as soon as this device shares a location.</span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Header */}
-      <div className="rd-header">
-        <div>
-          <h1 className="rd-header__title">
-            <Truck size={17} color="#6d4aff" /> Zippzo Rider
-          </h1>
-          <p className="rd-header__sub">
-            {profile.is_online
-              ? <Wifi size={12} color="#16a34a" />
-              : <WifiOff size={12} color="#a1a1aa" />}
-            {profile.is_online ? 'Online' : 'Offline'} · {profile.name}
-            {profile.is_online && (
-              <span data-testid="rd-loc" style={{ marginLeft: 6 }}>
-                {locSharing ? '· sharing location' : '· location off'}
-              </span>
-            )}
-          </p>
-        </div>
-        <div className="rd-header__actions">
-          <button onClick={() => setTab('alerts')} title="Notifications"
-                  className="rd-btn rd-btn--quiet rd-btn--icon">
-            <Bell size={16} />
-            {unread > 0 && <span className="rd-badge-dot">{unread}</span>}
-          </button>
-          <button onClick={toggleOnline}
-                  className={`rd-btn ${profile.is_online ? 'rd-btn--quiet' : 'rd-btn--go'}`}>
-            {profile.is_online ? 'Go offline' : 'Go online'}
-          </button>
-          <button onClick={logout} className="rd-btn rd-btn--quiet rd-btn--icon" title="Sign out">
-            <LogOut size={15} />
-          </button>
-        </div>
-      </div>
+      {/* legibility fades over the map */}
+      {tab === 'home' && <div className="rv3-fade-top" />}
+      {tab === 'home' && <div className="rv3-fade-bottom" />}
 
-      {/* Shift bar */}
-      <div className={`rd-shift ${shift ? 'rd-shift--open' : 'rd-shift--closed'}`}>
-        <span className="rd-shift__text">
-          <Clock size={12} />
-          {shift
-            ? <>Shift started {new Date(shift.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</>
-            : 'No open shift'}
-          {profile.current_site_code && <> · {profile.current_site_code}</>}
-        </span>
-        <button onClick={toggleShift} disabled={busy}
-                className={`rd-btn rd-btn--sm ${shift ? 'rd-btn--stop' : 'rd-btn--primary'}`}>
-          {shift ? 'End shift' : 'Start shift'}
-        </button>
-      </div>
-
-      {/* Tabs */}
-      <div className="rd-tabs">
-        {[['jobs', 'Jobs', Package], ['history', 'History', CheckCircle], ['money', 'Money', Wallet], ['qr', 'My QR', QrCode], ['alerts', `Alerts${unread ? ` (${unread})` : ''}`, Bell]].map(([id, label, Icon]) => (
-          <button key={id} onClick={() => setTab(id)}
-                  className={`rd-tab ${tab === id ? 'rd-tab--active' : ''}`}>
-            <Icon size={14} /> {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="rd-main">
-
-        {tab === 'jobs' && (
-          <>
-            {/* Offers */}
-            {offers.length > 0 && (
-              <section className="rd-section">
-                <h3 className="rd-section__head">
-                  Waiting for a rider ({offers.length})
-                </h3>
-                {offers.map(t => (
-                  <div key={t.task_id} className="rd-card" data-testid={`rd-offer-${t.order_no}`}>
-                    <div className="rd-offer__top">
-                      <div>
-                        <div className="rd-offer__no">{t.order_no}</div>
-                        <div className="rd-offer__meta">
-                          {t.order_weight_kg ? `${t.order_weight_kg} kg` : 'Weight pending'}
-                          {t.requires_cold_chain && ' · cold chain'}
-                          {t.staging_bin && ` · staged at ${t.staging_bin}`}
-                        </div>
-                      </div>
-                      <div className="rd-offer__cod">
-                        {t.payment_method === 'COD' && t.grand_total ? `₹${t.grand_total}` : ''}
-                      </div>
-                    </div>
-                    <div className="rd-offer__actions">
-                      <button onClick={() => decline(t)} disabled={busy}
-                              className="rd-btn rd-btn--quiet">
-                        Not me
-                      </button>
-                      <button onClick={() => accept(t)} disabled={busy}
-                              className="rd-btn rd-btn--primary">
-                        Accept job
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </section>
-            )}
-
-            {/* Active job */}
-            {active.length > 0 ? (
-              <div className="rd-job">
-                <div className="rd-job__head">
-                  <div>
-                    <div className="rd-job__no">{active[0].order_no}</div>
-                    <div className="rd-job__status">
-                      {active[0].status.replace(/_/g, ' ').toLowerCase()}
-                      {active[0].staging_bin && ` · ${active[0].staging_bin}`}
-                    </div>
-                  </div>
-                  <Package size={20} />
-                </div>
-
-                <div className="rd-job__body">
-                  {/* Progress */}
-                  <div className="rd-progress">
-                    {['ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'DELIVERED'].map(s => {
-                      const order = ['ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED'];
-                      const current = active[0].status === 'POD_PENDING' ? 'ARRIVED' : active[0].status;
-                      const idx = order.indexOf(current);
-                      const thisIdx = order.indexOf(s === 'DELIVERED' ? 'ARRIVED' : s);
-                      const reached = s === 'DELIVERED' ? false : thisIdx <= idx;
-                      return (
-                        <div key={s} className={`rd-progress__seg${reached ? ' rd-progress__seg--on' : ''}`} />
-                      );
-                    })}
-                  </div>
-
-                  {step && (
-                    <div className="rd-step rd-step--accent">
-                      <span className="rd-step__icon"><Clock size={15} /></span>
-                      <div>
-                        <strong>{step.label}</strong>
-                        <div className="rd-step__hint">
-                          {active[0].status === 'AT_DS' && 'Scan the tote barcode to take custody of the goods.'}
-                          {active[0].status === 'PICKED_UP' && 'Goods are with you. Cash orders collect on handover.'}
-                          {active[0].status === 'ARRIVED' && 'Ask the customer for their pickup code.'}
-                          {active[0].status === 'POD_PENDING' && 'A code has been sent to the customer.'}
-                          {active[0].status === 'ACCEPTED' && 'Get to the store, then confirm you are there.'}
-                          {active[0].status === 'EN_ROUTE' && 'Confirm when you are at the delivery address.'}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Address */}
-                  <div className="rd-addr">
-                    <span className="rd-addr__icon"><MapPin size={15} /></span>
-                    <div>
-                      <div className="rd-addr__name">
-                        {active[0].customer_name || 'Customer'}
-                      </div>
-                      <div className="rd-addr__line">
-                        {active[0].delivery_address ||
-                          'The delivery address appears once you are assigned this job.'}
-                      </div>
-                    </div>
-                  </div>
-
-                  {active[0].payment_method === 'COD' && active[0].grand_total && (
-                    <div className="rd-cod">
-                      <span className="rd-cod__label">Cash to collect</span>
-                      <span className="rd-cod__value">
-                        ₹{Number(active[0].grand_total).toFixed(2)}
-                      </span>
-                    </div>
-                  )}
-
-                  {step && (
-                    <button
-                      disabled={busy}
-                      onClick={() => {
-                        if (step.action === 'pickup') setToteOpen(true);
-                        else if (step.action === 'pod') { setPodOpen(true); setPodNote(''); setPodOtp(''); setPodCod(''); }
-                        else advance(active[0], step.to);
-                      }}
-                      className="rd-btn rd-btn--go rd-btn--block">
-                      {busy ? 'Working…' : step.button}
-                    </button>
-                  )}
-
-                  {/* Pickup dialog */}
-                  {toteOpen && (
-                    <div className="rd-dialog">
-                      <h4 className="rd-dialog__title">Collect tote</h4>
-                      <input
-                        value={toteBarcode}
-                        onChange={e => setToteBarcode(e.target.value)}
-                        placeholder="Tote barcode (optional — confirms the right bag)"
-                        className="rd-input" />
-                      <div className="rd-dialog__row">
-                        <button onClick={() => { setToteOpen(false); setToteBarcode(''); }}
-                                className="rd-btn rd-btn--quiet">Cancel</button>
-                        <button onClick={() => collectTote(active[0])} disabled={busy}
-                                className="rd-btn rd-btn--go">
-                          {busy ? 'Checking…' : 'Confirm pickup'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* POD dialog */}
-                  {podOpen && (
-                    <div className="rd-dialog">
-                      <h4 className="rd-dialog__title">Proof of delivery</h4>
-
-                      <label className="rd-label">Pickup code from the customer</label>
-                      <input
-                        value={podOtp}
-                        onChange={e => setPodOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                        placeholder="6-digit code" inputMode="numeric"
-                        className="rd-input rd-input--code" />
-
-                      {active[0].payment_method === 'COD' && (
-                        <>
-                          <label className="rd-label">Cash collected</label>
-                          <input
-                            value={podCod}
-                            onChange={e => setPodCod(e.target.value)}
-                            placeholder={`₹${active[0].grand_total || '0.00'} due`}
-                            inputMode="decimal"
-                            className="rd-input rd-input--money" />
-                        </>
-                      )}
-
-                      <label className="rd-label">Customer name / signature (optional)</label>
-                      <input
-                        value={podSig}
-                        onChange={e => setPodSig(e.target.value.slice(0, 120))}
-                        placeholder="Who took the bag"
-                        className="rd-input" />
-
-                      {podNote && (
-                        <div className="rd-note">{podNote}</div>
-                      )}
-
-                      <div className="rd-dialog__row">
-                        <button onClick={() => { setPodOpen(false); setPodNote(''); }}
-                                className="rd-btn rd-btn--quiet">Cancel</button>
-                        <button onClick={() => closePod(active[0])} disabled={busy}
-                                className="rd-btn rd-btn--go">
-                          {busy ? 'Closing…' : 'Confirm delivery'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : offers.length === 0 && (
-              <div className="rd-empty">
-                <div className="rd-empty__icon">
-                  <Inbox size={26} />
-                </div>
-                <h2 className="rd-empty__title">Nothing waiting</h2>
-                <p className="rd-empty__text">
-                  {profile.is_online
-                    ? 'You are online. New jobs at this store show up here.'
-                    : 'You are offline. Go online to receive jobs.'}
-                </p>
-              </div>
-            )}
-          </>
-        )}
-
-        {tab === 'history' && (
-          <div className="rd-list">
-            {done.length === 0 && (
-              <div className="rd-list__empty">No completed jobs yet.</div>
-            )}
-            {done.map((d) => (
-              <div key={d.task_id} className="rd-row">
-                <div className="rd-row__main">
-                  <div className="rd-row__title">{d.order_no}</div>
-                  <div className="rd-row__sub">
-                    {d.delivered_at ? new Date(d.delivered_at).toLocaleString() : ''}
-                  </div>
-                </div>
-                <span className={`rd-pill ${d.status === 'DELIVERED' ? 'rd-pill--ok' : 'rd-pill--bad'}`}>
-                  {d.status}
-                </span>
-              </div>
-            ))}
+      {/* ── top bar ── */}
+      <div className="rv3-top">
+        <div className="rv3-top-left">
+          <div className="rv3-avatar">{String(profile.name || 'R').slice(0, 1).toUpperCase()}</div>
+          <div className="rv3-top-meta">
+            <div className="rv3-top-name">{profile.name}</div>
+            <div className="rv3-top-store">
+              {profile.current_site_code || 'NO STORE'}
+              {locSharing ? ' · GPS ON' : ''}
+            </div>
           </div>
-        )}
-
-        {tab === 'money' && (
-          <>
-            <div className="rd-stats">
-              <StatTile
-                label="Cash in hand"
-                value={`₹${Number(custody?.current_cash || 0).toFixed(2)}`}
-                sub={custody
-                  ? `ceiling ₹${Number(custody.ceiling_amount || 0).toFixed(2)}`
-                  : 'nothing collected yet'}
-                warn={custody && Number(custody.current_cash) >= Number(custody.ceiling_amount)} />
-              <StatTile
-                label="Float"
-                value={`₹${Number(custody?.current_float || 0).toFixed(2)}`} />
-              <StatTile
-                label="Bags carried"
-                value={String(custody?.bags_in_custody ?? 0)} />
-              <StatTile
-                label="Earned"
-                value={`₹${earnings.reduce((t, e) => t + Number(e.amount || 0), 0).toFixed(2)}`}
-                sub={`${earnings.length} delivery${earnings.length === 1 ? '' : 'ies'}`} />
-            </div>
-
-            <div className="rd-list">
-              <div className="rd-list__head">
-                <Banknote size={15} color="#16a34a" /> Delivery earnings
-              </div>
-              {earnings.length === 0 && (
-                <div className="rd-list__empty">
-                  Earnings are credited when you close a delivery.
-                </div>
-              )}
-              {earnings.map((e) => (
-                <div key={e.earning_id} className="rd-row">
-                  <div className="rd-row__main">
-                    <div className="rd-row__title">
-                      Order {e.order_no || String(e.order).slice(0, 8)}
-                    </div>
-                    <div className="rd-row__sub">
-                      {e.created_at ? new Date(e.created_at).toLocaleString() : ''}
-                    </div>
-                  </div>
-                  <div className="rd-row__end">
-                    <div className="rd-row__amount">
-                      ₹{Number(e.amount || 0).toFixed(2)}
-                    </div>
-                    <div className={`rd-row__state ${e.status === 'PAID' ? 'rd-row__state--paid' : 'rd-row__state--due'}`}>
-                      {e.status}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-
-        {tab === 'qr' && (
-          <section className="rd-section" data-testid="rd-qr-section">
-            <h3 className="rd-section__head">My rider QR</h3>
-            <div className="rd-qr">
-              {qrError && (
-                <div className="rd-banner rd-banner--error" data-testid="rd-qr-error">
-                  <span className="rd-banner__icon">{qrError}</span>
-                </div>
-              )}
-              {!qrOpen && (
-                <button onClick={loadQr} disabled={qrLoading}
-                        className="rd-btn rd-btn--primary" data-testid="rd-qr-show">
-                  {qrLoading ? 'Loading…' : 'Show my QR code'}
-                </button>
-              )}
-              {qrOpen && qrInfo && (
-                <div className="rd-qr__card">
-                  <div className="rd-qr__svg" data-testid="rd-qr-svg">
-                    <QRCodeSVG value={qrInfo.payload || qrInfo.code} size={220} marginSize={2} />
-                  </div>
-                  <div className="rd-qr__code" data-testid="rd-qr-code">{qrInfo.code}</div>
-                  <div className="rd-qr__meta">
-                    {qrInfo.name}
-                    {qrInfo.site ? ` · ${qrInfo.site}` : ' · no store yet'}
-                    {' · scanned '}{qrInfo.scan_count ?? 0} time{(qrInfo.scan_count ?? 0) === 1 ? '' : 's'}
-                    {qrInfo.is_online ? ' · online' : ' · offline'}
-                  </div>
-                  <div className="rd-qr__hint">
-                    The store scans this at the handoff counter to give you a job —
-                    the scan itself is your acceptance, so there is nothing to tap here.
-                  </div>
-                  <button onClick={loadQr} disabled={qrLoading}
-                          className="rd-btn rd-btn--quiet rd-btn--sm" data-testid="rd-qr-refresh">
-                    {qrLoading ? 'Refreshing…' : 'Refresh'}
-                  </button>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {tab === 'alerts' && (
-          <>
-            <div className="rd-section__bar">
-              <h3 className="rd-section__head">Notifications</h3>
-              {unread > 0 && (
-                <button onClick={markAllRead} disabled={busy}
-                        className="rd-btn rd-btn--quiet rd-btn--sm">
-                  Mark all read
-                </button>
-              )}
-            </div>
-            <div className="rd-list">
-              {notifications.length === 0 && (
-                <div className="rd-list__empty">
-                  Nothing yet. Job offers and order updates land here.
-                </div>
-              )}
-              {notifications.map((n) => (
-                <div key={n.notification_id}
-                     className={`rd-notif${n.read_at ? '' : ' rd-notif--unread'}`}>
-                  <div className="rd-notif__top">
-                    <span className="rd-notif__title">
-                      {NOTIF_LABELS[n.type] || n.type}
-                    </span>
-                    <span className="rd-notif__time">
-                      {new Date(n.created_at).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="rd-notif__body">
-                    {n.payload_json?.order_no && `Order ${n.payload_json.order_no}`}
-                    {n.payload_json?.staging_bin && ` · collect from ${n.payload_json.staging_bin}`}
-                    {!n.payload_json?.order_no && !n.payload_json?.staging_bin && '—'}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button onClick={toggleOnline} disabled={busy}
+                  className={`rv3-online-pill${profile.is_online ? '' : ' rv3-online-pill--off'}`}>
+            <span className="rv3-online-dot" />
+            {profile.is_online ? 'Online' : 'Offline'}
+          </button>
+          <button onClick={logout} className="rv3-icon-btn"
+                  aria-label="Sign out" title="Sign out">
+            <LogOut size={17} strokeWidth={2} />
+          </button>
+        </div>
       </div>
+
+      {error && (
+        <div role="alert" className="rv3-banner rv3-banner--error">{error}</div>
+      )}
+      {notice && (
+        <div role="status" className="rv3-banner rv3-banner--ok">{notice}</div>
+      )}
+
+      {/* ── floating actions on the map ── */}
+      {tab === 'home' && (
+        <div className="rv3-fab-stack">
+          {current && (
+            <button className="rv3-fab rv3-fab--purple" onClick={routeToStore}
+                    aria-label="Frame the route" title="Frame the route">
+              <Navigation size={21} strokeWidth={2} />
+            </button>
+          )}
+          <button className="rv3-fab" onClick={recenter} aria-label="Re-center" title="Re-center">
+            <MapPin size={20} strokeWidth={2} />
+          </button>
+        </div>
+      )}
+
+      {/* ══════════ HOME ══════════ */}
+      {tab === 'home' && (
+        <div className="rv3-sheet">
+          <div className="rv3-sheet-handle" />
+          {current && journey ? (
+            <div data-testid={`rd-job-${current.order_no}`}>
+              <div className="rv3-sheet-eyebrow">
+                <span className="rv3-eyebrow-label">{journey.eyebrow}</span>
+                {current.eta_at && (
+                  <span className="rv3-eta"><Clock size={11} /> {new Date(current.eta_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                )}
+              </div>
+              <h2 className="rv3-job-title">{current.order_no}</h2>
+              <div className="rv3-job-orderno">{current.shipped_qty ?? 1} item{(current.shipped_qty ?? 1) === 1 ? '' : 's'}{current.distance_m ? ` · ${(Number(current.distance_m) / 1000).toFixed(1)} km` : ''} · {current.staging_bin ? `staged ${current.staging_bin}` : 'loose bag'}</div>
+
+              <div className="rv3-meta-row">
+                <div className="rv3-meta-icon"><MapPin size={18} /></div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="rv3-meta-label">Deliver to</div>
+                  <div className="rv3-meta-value">{current.delivery_address || 'Address on file'}</div>
+                </div>
+              </div>
+
+              <div className="rv3-amount-row">
+                <div className="rv3-amount-tile">
+                  <div className="rv3-amount-label">Collect</div>
+                  <div className="rv3-amount-value rv3-amount-value--gold">
+                    ₹{Number(current.grand_total || 0).toFixed(2)}
+                  </div>
+                </div>
+                <div className="rv3-amount-tile">
+                  <div className="rv3-amount-label">Payment</div>
+                  <div className="rv3-amount-value" style={{ fontSize: 15, paddingTop: 4 }}>
+                    {current.payment_method === 'COD' || current.payment_method === 'COD_CASH' ? 'Cash on delivery' : current.payment_method || 'Paid'}
+                  </div>
+                </div>
+              </div>
+
+              <button className="rv3-cta" disabled={busy}
+                      onClick={() => {
+                        if (journey.to) advance(current, journey.to);
+                        else if (journey.pickup) pickup(current);
+                        else if (journey.pod) setPodOpen(true);
+                      }}>
+                {busy ? 'Working…' : journey.cta}
+              </button>
+            </div>
+          ) : (
+            <div className="rv3-idle">
+              <div className="rv3-idle-ring"><Bike size={26} strokeWidth={1.6} /></div>
+              <div className="rv3-idle-title">You're online</div>
+              <div className="rv3-idle-sub">
+                The next order at {profile.current_site_code || 'your store'} reaches you
+                automatically. There is nothing to accept — just keep the app open.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════ HISTORY ══════════ */}
+      {tab === 'history' && (
+        <div className="rv3-page">
+          <h1>Deliveries</h1>
+          {done.length === 0 ? (
+            <div className="rv3-empty">Nothing delivered yet.<br />Finished jobs land here.</div>
+          ) : (
+            <div className="rv3-card">
+              {done.map(t => (
+                <div key={t.task_id} className="rv3-row">
+                  <Package size={17} color="#5b554a" />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{t.order_no || t.task_id}</div>
+                    <div style={{ fontSize: 11.5, color: '#8a857a' }}>
+                      {t.delivered_at ? new Date(t.delivered_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                    </div>
+                  </div>
+                  <div className="rv3-row-amount">₹{Number(t.grand_total || 0).toFixed(0)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════ MONEY ══════════ */}
+      {tab === 'money' && (
+        <div className="rv3-page">
+          <h1>Money</h1>
+          <div className="rv3-card">
+            <div className="rv3-amount-label">Cash with you now</div>
+            <div className="rv3-bigstat">₹{Number(custody?.current_cash || 0).toFixed(0)}</div>
+            <div className="rv3-bigstat-sub">
+              {Number(custody?.bags_in_custody || 0)} order{Number(custody?.bags_in_custody || 0) === 1 ? '' : 's'} in custody · ceiling ₹{custody?.ceiling_amount || '5,000'}
+            </div>
+          </div>
+          <div className="rv3-card">
+            <div className="rv3-amount-label">Today's deliveries</div>
+            <div className="rv3-bigstat" style={{ fontSize: 28 }}>₹{todayTotal.toFixed(0)}</div>
+            <div className="rv3-bigstat-sub">
+              {todays.length} completed · ₹{earnings.reduce((s, e) => s + Number(e.amount || 0), 0).toFixed(0)} all time pending
+            </div>
+          </div>
+          <div className="rv3-card" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Clock size={20} color={shift ? '#166534' : '#8a857a'} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>
+                {shift ? 'Shift open' : 'No open shift'}
+              </div>
+              <div style={{ fontSize: 12, color: '#8a857a' }}>
+                {shift
+                  ? `Started ${new Date(shift.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${profile.current_site_code || ''}`
+                  : 'Start a shift to make yourself eligible for jobs.'}
+              </div>
+            </div>
+            <button className={`rv3-btn${shift ? '' : ' rv3-btn--gold'}`} onClick={toggleShift} disabled={busy}>
+              {shift ? 'End' : 'Start'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════ ALERTS ══════════ */}
+      {tab === 'alerts' && (
+        <div className="rv3-page">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <h1 style={{ marginBottom: 14 }}>Alerts</h1>
+            {notifications.length > 0 && (
+              <button className="rv3-btn" style={{ height: 36, fontSize: 12 }} onClick={markAllRead}>Mark all read</button>
+            )}
+          </div>
+          {notifications.length === 0 ? (
+            <div className="rv3-empty">Nothing yet.<br />Order updates land here.</div>
+          ) : (
+            <div className="rv3-card">
+              {notifications.map(n => (
+                <div key={n.notification_id || n.id || JSON.stringify(n).slice(0, 24)} className="rv3-row">
+                  <Bell size={16} color="#8a857a" style={{ flexShrink: 0 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>{n.type.replaceAll('_', ' ')}</div>
+                    <div style={{ fontSize: 11.5, color: '#8a857a' }}>
+                      {n.payload_json?.order_no || n.payload_json?.task_id || ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════ QR ══════════ */}
+      {tab === 'qr' && (
+        <div className="rv3-page">
+          <h1>My QR</h1>
+          <div className="rv3-card">
+            {qrError ? (
+              <div role="alert" className="rv3-empty">{qrError}</div>
+            ) : qrInfo ? (
+              <div className="rv3-qr-box">
+                <QRCodeSVG value={qrInfo.payload || `zippzo:rider:${qrInfo.rider_id}`} size={196} fgColor="#241203" bgColor="#fffdf8" />
+                <div className="rv3-qr-note">
+                  The store scans this once per handoff to confirm you physically took the order.
+                  The code rotates after every scan.
+                </div>
+              </div>
+            ) : (
+              <div className="rv3-empty">Fetching your code…</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── POD sheet ── */}
+      {podOpen && current && (
+        <div className="rv3-pod-backdrop" onClick={() => setPodOpen(false)}>
+          <div className="rv3-pod" onClick={e => e.stopPropagation()}>
+            <div className="rv3-sheet-handle" />
+            <div className="rv3-eyebrow-label" style={{ marginBottom: 2 }}>Close the delivery</div>
+            <h2 style={{ fontFamily: 'Space Grotesk', margin: '0 0 2px', fontSize: 21 }}>{current.order_no}</h2>
+            <div style={{ fontSize: 12.5, color: '#8a857a' }}>{current.delivery_address || ''}</div>
+
+            <label htmlFor="pod-otp">Pickup code from the customer</label>
+            <input id="pod-otp" inputMode="numeric" autoComplete="one-time-code"
+                   className="rv3-pod-otp" placeholder="6-digit code" value={podOtp}
+                   onChange={e => setPodOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} />
+
+            <label htmlFor="pod-cod">Cash collected</label>
+            <input id="pod-cod" inputMode="decimal"
+                   placeholder={`₹${Number(current.grand_total || 0).toFixed(2)} due`} value={podCod}
+                   onChange={e => setPodCod(e.target.value)} />
+
+            <label htmlFor="pod-sig">Who took the order (optional)</label>
+            <input id="pod-sig" placeholder="Name or signature" value={podSig}
+                   onChange={e => setPodSig(e.target.value)} />
+
+            {podNote && <div className="rv3-pod-note">{podNote}</div>}
+
+            <div className="rv3-pod-actions">
+              <button className="rv3-pod-cancel" onClick={() => setPodOpen(false)} disabled={busy}>
+                Cancel
+              </button>
+              <button className="rv3-cta" style={{ flex: 1 }} disabled={busy}
+                      onClick={() => closePod(current)}>
+                {busy ? 'Closing…' : 'Confirm delivery'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── bottom nav ── */}
+      <nav className="rv3-nav" aria-label="Rider navigation">
+        <button className={`rv3-nav-item${tab === 'home' ? ' rv3-nav-item--active' : ''}`} onClick={() => setTab('home')}>
+          <Home size={19} strokeWidth={2} /><span>Home</span>
+        </button>
+        <button className={`rv3-nav-item${tab === 'history' ? ' rv3-nav-item--active' : ''}`} onClick={() => setTab('history')}>
+          <History size={19} strokeWidth={2} /><span>Deliveries</span>
+        </button>
+        <button className={`rv3-nav-item${tab === 'money' ? ' rv3-nav-item--active' : ''}`} onClick={() => setTab('money')}>
+          <Wallet size={19} strokeWidth={2} /><span>Money</span>
+        </button>
+        <button className={`rv3-nav-item${tab === 'alerts' ? ' rv3-nav-item--active' : ''}`} onClick={() => setTab('alerts')}>
+          <Bell size={19} strokeWidth={2} /><span>Alerts</span>
+          {unread > 0 && <span className="rv3-nav-badge">{unread > 9 ? '9+' : unread}</span>}
+        </button>
+        <button className={`rv3-nav-item${tab === 'qr' ? ' rv3-nav-item--active' : ''}`} onClick={() => setTab('qr')}>
+          <QrCode size={19} strokeWidth={2} /><span>My QR</span>
+        </button>
+      </nav>
     </div>
   );
 }
-
-const NOTIF_LABELS = {
-  RIDER_ASSIGNED: 'Delivery assigned to you',
-  RIDER_ARRIVED: 'You have arrived at the customer',
-  ORDER_PLACED: 'Order received',
-  RIDER_JOB_OFFERED: 'New job at your store',
-  ORDER_PACKED: 'Order packed — ready to collect',
-  ORDER_ON_THE_WAY: 'Order is on the way',
-  ORDER_DELIVERED: 'Order delivered',
-  DELIVERY_OTP: 'Pickup code requested',
-  ORDER_UPDATE: 'Order update',
-};

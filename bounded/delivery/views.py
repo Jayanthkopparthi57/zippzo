@@ -445,6 +445,10 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
             }, status=400)
         profile.is_online = online
         profile.save(update_fields=['is_online'])
+        if online and profile.current_site_id is not None:
+            # Going online is when waiting jobs at this store find a rider.
+            from bounded.delivery.dispatch import assign_pending_at
+            assign_pending_at(profile.current_site)
         return Response(RiderProfileSerializer(profile).data)
 
     @action(detail=False, methods=['post'], url_path='me/location')

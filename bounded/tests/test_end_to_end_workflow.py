@@ -440,7 +440,9 @@ class EndToEndWorkflowTests(TestCase):
             self.assertIsNone(self.order.delivered_at)
             self.assertIsNone(self.order.picked_up_at)
 
-        self.assertEqual('UNASSIGNED', self.pickup_task().status,
+        # Pack auto-assigns the online rider at the store — the task must not
+        # have advanced past that into PICKED_UP without a real pickup.
+        self.assertEqual('ACCEPTED', self.pickup_task().status,
                          'the delivery task advanced without a pickup')
 
     def test_publishing_twice_does_not_notify_twice(self):

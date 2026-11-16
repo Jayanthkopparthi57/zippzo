@@ -358,13 +358,13 @@ test.describe('three applications, one order', () => {
         timeout: 60_000,
       });
 
-      /* ── 4. Rider: take the job and walk it to the door ── */
+      /* ── 4. Rider: the job reaches them automatically and they walk it to the door ── */
 
-      // The offer only appears on the rider's next poll, and only for a task at
-      // this rider's own store, so the wait is on the order number itself.
-      const offerCard = rider.locator(`[data-testid="rd-offer-${orderNo}"]`);
-      await offerCard.waitFor({ state: 'visible', timeout: 240_000 });
-      await offerCard.getByRole('button', { name: 'Accept job' }).click();
+      // The job is assigned at pack time (or when a rider frees capacity), so
+      // there is no offer card and nothing to accept — the rider's current
+      // job is simply the one staring at them.
+      const jobCard = rider.locator(`[data-testid="rd-job-${orderNo}"]`);
+      await jobCard.waitFor({ state: 'visible', timeout: 240_000 });
 
       const step = async (name: string) => {
         const btn = rider.getByRole('button', { name });
@@ -373,9 +373,8 @@ test.describe('three applications, one order', () => {
       };
 
       await step("I'm at the store");
-      await step('Collect tote');
-      await step('Confirm pickup');
-      await expect(rider.getByText('Collected. The order is now yours.')).toBeVisible({
+      await step('Pick up order');
+      await expect(rider.getByText('Order collected. The customer is waiting.')).toBeVisible({
         timeout: 60_000,
       });
 

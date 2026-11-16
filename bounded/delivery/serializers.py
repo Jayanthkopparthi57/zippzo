@@ -3,20 +3,32 @@ from django.db.models import Sum
 from django.db.models.functions import Coalesce
 from .models import RiderProfile, RiderShift, DeliveryTask, RoutePlan, RouteStop
 
-class RiderProfileSerializer(serializers.ModelSerializer):
+class RiderProfileSerializer(serializers.ModelSerializer):# `current_site` serialises to the site's uuid, which is useless for the
+    # shift/open endpoint (it takes a code) and unreadable on the rider's
+    # header. Carry the code alongside instead of making the client join
+    # against /network/overview, which the rider cannot always reach.
     # `current_site` serialises to the site's uuid, which is useless for the
     # shift/open endpoint (it takes a code) and unreadable on the rider's
     # header. Carry the code alongside instead of making the client join
     # against /network/overview, which the rider cannot always reach.
     current_site_code = serializers.SerializerMethodField()
+    current_site_geo = serializers.SerializerMethodField()
 
     class Meta:
         model = RiderProfile
-        fields = ['rider_id','user','name','phone','vehicle_type','vehicle_number','vehicle_capacity_kg','vehicle_capacity_cbm','can_carry_cold','kyc_status','kyc_number','kyc_document_type','kyc_document_url','kyc_reviewed_at','kyc_reviewed_by','is_online','current_site','current_site_code','rating','last_lat','last_lng','last_seen_at','created_at']
+        fields = ['rider_id','user','name','phone','vehicle_type','vehicle_number','vehicle_capacity_kg','vehicle_capacity_cbm','can_carry_cold','kyc_status','kyc_number','kyc_document_type','kyc_document_url','kyc_reviewed_at','kyc_reviewed_by','is_online','current_site','current_site_code','current_site_geo','rating','last_lat','last_lng','last_seen_at','created_at']
         read_only_fields = ['rider_id','last_lat','last_lng','last_seen_at','created_at']
 
     def get_current_site_code(self, obj):
         return getattr(obj.current_site, 'code', None)
+
+    def get_current_site_geo(self, obj):
+        site = getattr(obj, 'current_site', None)
+        lat = getattr(site, 'geo_lat', None)
+        lng = getattr(site, 'geo_lng', None)
+        if lat is None or lng is None:
+            return None
+        return {'lat': float(lat), 'lng': float(lng)}
 
 class RiderShiftSerializer(serializers.ModelSerializer):
     class Meta:

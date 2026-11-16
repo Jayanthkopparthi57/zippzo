@@ -206,7 +206,7 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
     lpn.save(update_fields=['status', 'current_site', 'current_container',
                             'current_ref_id', 'sealed_at'])
 
-    # -- the rider job starts here ---------------------------------------
+    # -- rider job is born here ------------------------------------------
     now = timezone.now()
     if existing is None:
         task = DeliveryTask.objects.create(
@@ -223,6 +223,12 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
         task.staging_bin = staging_bin
         task.packed_at = task.packed_at or now
         task.save(update_fields=['bin', 'staging_bin', 'packed_at'])
+
+    # Assign an online rider at the store immediately: no accept handshake,
+    # no jobs sitting unclaimed. Nobody online → the task waits and the
+    # set_online sweep picks it up then.
+    from bounded.delivery.dispatch import auto_assign_task
+    auto_assign_task(task)
 
     previous_status = order.status
     order.status = 'PACKED'
