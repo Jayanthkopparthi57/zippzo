@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import {
   PackageCheck, AlertTriangle, RefreshCw, Search, Smartphone, Package,
 } from 'lucide-react';
@@ -10,7 +10,7 @@ import {
 } from './useDarkStore';
 
 /**
- * Dark-store packing worklist — read-only by design.
+ * Dark-store packing worklist â€” read-only by design.
  *
  * Sealing an order into a tote, assigning a staging slot and creating its rider
  * job is physical stock work, so `/ds-ops/pack-order` requires a mobile-surface
@@ -69,7 +69,7 @@ function PackStation({ siteId }) {
         lpnBarcode: lpnBarcode.trim(),
         stagingBin: stagingBin.trim(),
       });
-      toast.show(`${selectedOrder.order_no} packed into ${lpnBarcode.trim()}`, 'success');
+      toast.success(`${selectedOrder.order_no} packed into ${lpnBarcode.trim()}`);
       setFeedback({
         type: 'success',
         message: `Packed into ${result?.lpn?.barcode || lpnBarcode.trim()} and staged at ${stagingBin.trim()}.`,
@@ -148,7 +148,7 @@ function PackStation({ siteId }) {
         <span>
           Empty totes available at this store: {emptyTotes.length}
           {emptyTotes.length > 0 && (
-            <> — {emptyTotes.slice(0, 6).map((t) => t.barcode || t.lpn_id).join(', ')}</>
+            <> â€” {emptyTotes.slice(0, 6).map((t) => t.barcode || t.lpn_id).join(', ')}</>
           )}
         </span>
       </div>
@@ -194,12 +194,12 @@ function PackStation({ siteId }) {
                       {o.order_no}
                     </strong>
                   </td>
-                  <td>{o.customer_name || '—'}</td>
+                  <td>{o.customer_name || 'â€”'}</td>
                   <td style={{ fontFamily: 'var(--font-mono)' }}>
-                    {o.total_items ?? '—'} SKUs
+                    {o.total_items ?? 'â€”'} SKUs
                   </td>
                   <td style={{ fontFamily: 'var(--font-mono)' }}>
-                    ₹{parseFloat(o.grand_total || 0).toFixed(2)}
+                    â‚¹{parseFloat(o.grand_total || 0).toFixed(2)}
                   </td>
                   <td>
                     <StatusBadge status={o.status || 'PICKED'} />
@@ -295,3 +295,4 @@ export default function OrderPackingView() {
     </StoreGate>
   );
 }
+

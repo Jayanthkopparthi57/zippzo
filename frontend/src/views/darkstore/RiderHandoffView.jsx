@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import {
   Bike, Check, AlertTriangle, MapPin, RefreshCw, KeyRound, X, QrCode,
 } from 'lucide-react';
@@ -104,7 +104,7 @@ function Handoff({ siteId }) {
     try {
       const result = await assignRiderQr(selectedTask.task_id, qrCode.trim());
       const name = result?.rider?.name || 'the rider';
-      toast.show(`${selectedTask.order_no || 'Order'} assigned to ${name}.`, 'success');
+      toast.success(`${selectedTask.order_no || 'Order'} assigned to ${name}.`);
       closeModal(true);
       reload();
     } catch (err) {
@@ -119,14 +119,14 @@ function Handoff({ siteId }) {
     // The tote scan is the check that the right bag is leaving the counter. A
     // pickup without it would ship whatever `task.bin` happens to point at.
     if (!loosePickup && !toteBarcode.trim()) {
-      setFeedback({ type: 'error', message: 'Scan the tote barcode — or pick "Loose handoff" if this order has no tote.' });
+      setFeedback({ type: 'error', message: 'Scan the tote barcode â€” or pick "Loose handoff" if this order has no tote.' });
       return;
     }
     setBusy(true);
     setFeedback(null);
     try {
       await riderPickup(selectedTask.task_id, loosePickup ? '' : toteBarcode.trim());
-      toast.show(`${selectedTask.order_no || 'Order'} handed to the rider.`, 'success');
+      toast.success(`${selectedTask.order_no || 'Order'} handed to the rider.`);
       closeModal(true);
       reload();
     } catch (err) {
@@ -145,7 +145,7 @@ function Handoff({ siteId }) {
         otp: otpCode.trim() || undefined,
         codAmount: cashCollected === '' ? undefined : parseFloat(cashCollected),
       });
-      toast.show(`${selectedTask.order_no || 'Order'} delivered.`, 'success');
+      toast.success(`${selectedTask.order_no || 'Order'} delivered.`);
       closeModal(true);
       reload();
     } catch (err) {
@@ -299,7 +299,7 @@ function Handoff({ siteId }) {
                     <td>
                       <div>
                         <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
-                          {t.order_no || t.order || '—'}
+                          {t.order_no || t.order || 'â€”'}
                         </strong>
                         <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                           TASK: {String(t.task_id).slice(0, 10)}
@@ -308,17 +308,17 @@ function Handoff({ siteId }) {
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontWeight: 600 }}>
-                        {t.tote_barcode || '—'}
+                        {t.tote_barcode || 'â€”'}
                       </span>
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)' }}>
-                        {t.staging_bin || '—'}
+                        {t.staging_bin || 'â€”'}
                       </span>
                     </td>
                     <td>{t.rider_name || <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>}</td>
                     <td style={{ fontFamily: 'var(--font-mono)' }}>
-                      {t.order_weight_kg ? `${parseFloat(t.order_weight_kg).toFixed(2)} kg` : '—'}
+                      {t.order_weight_kg ? `${parseFloat(t.order_weight_kg).toFixed(2)} kg` : 'â€”'}
                     </td>
                     <td>
                       <StatusBadge status={t.status} />
@@ -359,7 +359,7 @@ function Handoff({ siteId }) {
                           </button>
                         )}
                         {!needsRider && !canPickup && !canPod && (
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>â€”</span>
                         )}
                       </div>
                     </td>
@@ -410,8 +410,8 @@ function Handoff({ siteId }) {
               {modalMode === 'assign' && (
                 <>
                   <div style={{ background: 'var(--bg-panel)', padding: 10, borderRadius: 'var(--radius-xs)', fontSize: 12 }}>
-                    <div><strong>Tote:</strong> {selectedTask.tote_barcode || '—'}</div>
-                    <div style={{ marginTop: 4 }}><strong>Staging slot:</strong> {selectedTask.staging_bin || '—'}</div>
+                    <div><strong>Tote:</strong> {selectedTask.tote_barcode || 'â€”'}</div>
+                    <div style={{ marginTop: 4 }}><strong>Staging slot:</strong> {selectedTask.staging_bin || 'â€”'}</div>
                   </div>
                   <div>
                     <label style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
@@ -420,7 +420,7 @@ function Handoff({ siteId }) {
                     <input
                       type="text"
                       autoFocus
-                      placeholder="zippzo:rider:…"
+                      placeholder="zippzo:rider:â€¦"
                       value={qrCode}
                       onChange={(e) => setQrCode(e.target.value)}
                       style={{ width: '100%', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-xs)' }}
@@ -435,7 +435,7 @@ function Handoff({ siteId }) {
               {modalMode === 'pickup' && (
                 <>
                   <div style={{ background: 'var(--bg-panel)', padding: 10, borderRadius: 'var(--radius-xs)', fontSize: 12 }}>
-                    <div><strong>Tote on the job:</strong> {selectedTask.tote_barcode || '—'}</div>
+                    <div><strong>Tote on the job:</strong> {selectedTask.tote_barcode || 'â€”'}</div>
                     <div style={{ marginTop: 4 }}><strong>Rider:</strong> {selectedTask.rider_name || 'Unassigned'}</div>
                   </div>
                   <div>
@@ -456,7 +456,7 @@ function Handoff({ siteId }) {
                     </div>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 11, color: 'var(--text-secondary)', cursor: 'pointer' }}>
                       <input type="checkbox" style={{ accentColor: 'var(--c-teal)' }} checked={loosePickup} onChange={(e) => setLoosePickup(e.target.checked)} />
-                      Loose handoff — this bag has no tote barcode
+                      Loose handoff â€” this bag has no tote barcode
                     </label>
                   </div>
                 </>
@@ -521,3 +521,4 @@ export default function RiderHandoffView() {
     </StoreGate>
   );
 }
+

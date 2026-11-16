@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Boxes, Check, X, AlertTriangle, RefreshCw } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
@@ -45,8 +45,8 @@ function Putaway({ siteId, storeCode, operatorId }) {
         ...line,
         line_id: line.line_id || `${line.sku_id || line.sku}-${line.lot_id || line.lot}-${idx}`,
         sku_name: skuIndex?.byId?.get(String(line.sku_id || line.sku))?.name || line.sku_name || line.sku_code || 'Product',
-        sku_code: skuIndex?.byId?.get(String(line.sku_id || line.sku))?.sku_code || line.sku_code || line.sku || '—',
-        lot_number: line.lot_number || line.lot || '—',
+        sku_code: skuIndex?.byId?.get(String(line.sku_id || line.sku))?.sku_code || line.sku_code || line.sku || 'â€”',
+        lot_number: line.lot_number || line.lot || 'â€”',
       })));
       setTargetBins({});
     } catch (err) {
@@ -102,7 +102,7 @@ function Putaway({ siteId, storeCode, operatorId }) {
         bin: binLocationId,
         qty: line.qty || line.expected_qty || 1,
       }]);
-      toast.show(`Stock placed in bin ${binLocationId}`, 'success');
+      toast.success(`Stock placed in bin ${binLocationId}`);
       setFeedback({
         type: 'success',
         message: `Putaway confirmed: ${line.sku_name || line.sku} placed into ${binLocationId}.`,
@@ -135,7 +135,7 @@ function Putaway({ siteId, storeCode, operatorId }) {
         bin: targetBins[line.line_id],
         qty: line.qty || line.expected_qty || 1,
       })));
-      toast.show(`All lines put away for tote ${selectedTote.barcode}`, 'success');
+      toast.success(`All lines put away for tote ${selectedTote.barcode}`);
       setSelectedTote(null);
       setManifestLines([]);
       reloadTotes();
@@ -253,8 +253,8 @@ function Putaway({ siteId, storeCode, operatorId }) {
                           {line.sku_code || line.sku}
                         </div>
                       </td>
-                      <td style={{ fontFamily: 'var(--font-mono)' }}>{line.lot_number || '—'}</td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{line.expiry_date || '—'}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>{line.lot_number || 'â€”'}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{line.expiry_date || 'â€”'}</td>
                       <td>
                         <strong style={{ fontFamily: 'var(--font-mono)' }}>{line.qty || line.expected_qty}</strong>
                       </td>
@@ -344,7 +344,7 @@ function Putaway({ siteId, storeCode, operatorId }) {
                       </span>
                     </td>
                     <td>
-                      <span style={{ fontFamily: 'var(--font-mono)' }}>{t.seal_code || t.seal || '—'}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)' }}>{t.seal_code || t.seal || 'â€”'}</span>
                     </td>
                     <td>
                       <StatusBadge status={t.status || 'RECEIVED'} />
@@ -385,3 +385,4 @@ export default function ShelfPutawayView() {
     </StoreGate>
   );
 }
+

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+﻿import React, { useCallback, useMemo, useState } from 'react';
 import { Check, X, AlertTriangle, RefreshCw } from 'lucide-react';
 import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
@@ -38,7 +38,7 @@ function Receipt({ storeCode, storeName }) {
           storeCode,
           seal.trim() || target.seal_number || ''
         );
-        toast.show(`Tote ${target.barcode || target.id} received into custody`, 'success');
+        toast.success(`Tote ${target.barcode || target.id} received into custody`);
         setFeedback({
           type: 'success',
           message: `Received ${target.barcode || target.id}. ${(res?.stock_moved || []).length} item lines added to store stock.`,
@@ -206,17 +206,17 @@ function Receipt({ storeCode, storeName }) {
                     <td>{row.source_name || row.source || 'Central Hub HYD080M'}</td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                        {row.seal_code || row.seal || '—'}
+                        {row.seal_code || row.seal || 'â€”'}
                       </span>
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                        {row.item_count ?? row.qty ?? '—'} units
+                        {row.item_count ?? row.qty ?? 'â€”'} units
                       </span>
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                        {row.dispatched_at ? new Date(row.dispatched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        {row.dispatched_at ? new Date(row.dispatched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'â€”'}
                       </span>
                     </td>
                     <td>
@@ -239,7 +239,7 @@ function Receipt({ storeCode, storeName }) {
                         </button>
                       ) : (
                         <span style={{ fontSize: 11, color: 'var(--success)', fontFamily: 'var(--font-mono)' }}>
-                          ✓ In Custody
+                          âœ“ In Custody
                         </span>
                       )}
                     </td>
@@ -268,3 +268,4 @@ export default function LpnReceiptView() {
     </StoreGate>
   );
 }
+

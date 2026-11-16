@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import { Undo2, AlertTriangle, RefreshCw, Check, X } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
@@ -48,7 +48,7 @@ export default function CancellationPutawayView() {
         await fetchApi && null;
       }
       const res = await postApi(`${CANCEL_PUTAWAY}${selected.putaway_id}/complete/`, {});
-      toast.show('Putaway completed', `Stock returned to ${bin || 'site'}.`);
+      toast.success('Putaway completed', `Stock returned to ${bin || 'site'}.`);
       close();
       await reload({ quiet: true });
     } catch (err) {
@@ -111,13 +111,13 @@ export default function CancellationPutawayView() {
                 {rows.map((r) => (
                   <tr key={r.putaway_id}>
                     <td className="mono-num">{r.code || String(r.putaway_id).slice(0, 8)}</td>
-                    <td className="mono-num">{r.order_no || '—'}</td>
+                    <td className="mono-num">{r.order_no || 'â€”'}</td>
                     <td>
-                      <div className="entity-card__title">{r.sku_name || '—'}</div>
+                      <div className="entity-card__title">{r.sku_name || 'â€”'}</div>
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{r.sku_code || ''}</div>
                     </td>
                     <td className="mono-num">{r.qty ?? 0}</td>
-                    <td className="mono-num">{r.destination_bin || '—'}</td>
+                    <td className="mono-num">{r.destination_bin || 'â€”'}</td>
                     <td><StatusBadge status={r.status || 'PENDING_QC'} /></td>
                     <td style={{ textAlign: 'right' }}>
                       {!['COMPLETED', 'REJECTED', 'CANCELLED'].includes(r.status) && (
@@ -159,7 +159,7 @@ export default function CancellationPutawayView() {
                     <input type="text" className="table-filter-input" value={bin} onChange={(e) => setBin(e.target.value)} placeholder="Scan destination bin" style={{ width: '100%' }} />
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    SKU: {selected.sku_name || '—'} · Qty: {selected.qty ?? 0} · Reason: {selected.reason_code || '—'}
+                    SKU: {selected.sku_name || 'â€”'} Â· Qty: {selected.qty ?? 0} Â· Reason: {selected.reason_code || 'â€”'}
                   </div>
                 </div>
                 <div className="modal-footer">
@@ -177,3 +177,4 @@ export default function CancellationPutawayView() {
     </StoreGate>
   );
 }
+

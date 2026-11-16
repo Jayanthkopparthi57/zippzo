@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import { ClipboardCheck, AlertTriangle, RefreshCw, Check } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
@@ -92,7 +92,7 @@ export default function QcInspectionView() {
         require_full_inspection: true,
         remarks: remarks.trim(),
       });
-      toast.show('QC recorded', `Pass: ${res?.pass_count ?? passCount}, Fail: ${res?.fail_count ?? failCount}.`);
+      toast.success('QC recorded', `Pass: ${res?.pass_count ?? passCount}, Fail: ${res?.fail_count ?? failCount}.`);
       close();
       await reload({ quiet: true });
     } catch (err) {
@@ -155,10 +155,10 @@ export default function QcInspectionView() {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.qc_id}>
-                    <td className="mono-num">{r.grn_no || '—'}</td>
-                    <td className="mono-num">{r.asn_no || '—'}</td>
+                    <td className="mono-num">{r.grn_no || 'â€”'}</td>
+                    <td className="mono-num">{r.asn_no || 'â€”'}</td>
                     <td>
-                      <div className="entity-card__title">{r.sku_name || '—'}</div>
+                      <div className="entity-card__title">{r.sku_name || 'â€”'}</div>
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{r.sku_code || ''}</div>
                     </td>
                     <td className="mono-num">{r.received_qty ?? 0}</td>
@@ -244,3 +244,4 @@ export default function QcInspectionView() {
     </StoreGate>
   );
 }
+
