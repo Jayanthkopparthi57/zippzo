@@ -14,7 +14,15 @@ services:
       pip install -r requirements.txt &&
       cd frontend && npm ci && npm run build && cd .. &&
       python manage.py collectstatic --noinput &&
-      python manage.py migrate
+      python manage.py migrate &&
+      if [ -n "$DJANGO_SUPERADMIN_EMAIL" ] && [ -n "$DJANGO_SUPERADMIN_PASSWORD" ]; then \
+        python manage.py bootstrap_admin \
+          --email "$DJANGO_SUPERADMIN_EMAIL" \
+          --name "${DJANGO_SUPERADMIN_NAME:-Admin}" \
+          --password-from-env DJANGO_SUPERADMIN_PASSWORD; \
+      else \
+        echo "Super Admin bootstrap skipped: env vars not set"; \
+      fi
     startCommand: daphne -b 0.0.0.0 -p $PORT zippzo_wms.asgi:application
     envVars:
       - key: DJANGO_ENV
@@ -23,6 +31,12 @@ services:
         value: "false"
       - key: DJANGO_BEHIND_SSL
         value: "true"
+      - key: DJANGO_SUPERADMIN_EMAIL
+        value: ""
+      - key: DJANGO_SUPERADMIN_NAME
+        value: ""
+      - key: DJANGO_SUPERADMIN_PASSWORD
+        value: ""
       - key: DJANGO_SECRET_KEY
         generateValue: true
       - key: ALLOWED_HOSTS
