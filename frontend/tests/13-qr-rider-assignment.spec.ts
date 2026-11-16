@@ -119,15 +119,10 @@ test.describe('rider QR assignment at the counter', () => {
     expect(qr.body.name, 'the code names the rider the counter is handing work to')
       .toBeTruthy();
 
-    // The same code, on the rider's own screen: one fetch, one render.
-    await page.getByRole('button', { name: 'My QR' }).click();
-    await page.locator('[data-testid="rd-qr-show"]').click();
-    await expect(page.locator('[data-testid="rd-qr-svg"]')).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('[data-testid="rd-qr-svg"] svg')).toHaveCount(1);
-    await expect(page.locator('[data-testid="rd-qr-code"]')).toHaveText(qr.body.code);
-    await expect(page.locator('[data-testid="rd-qr-section"]')).toContainText(
-      `scanned ${qr.body.scan_count}`,
-    );
+    // The counter QR is gone from the rider's own screen; the rider scans the
+    // store's QR to clock in instead.
+    await page.getByRole('button', { name: 'Scan' }).click();
+    await expect(page.locator('[data-testid="rd-scan"]')).toBeVisible({ timeout: 30_000 });
 
     // Stable: the second read is the same string, not a fresh nonce.
     const again = await apiGet(page, '/api/delivery/rider-profiles/me/qr/');

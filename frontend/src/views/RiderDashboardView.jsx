@@ -7,9 +7,9 @@ import {
 } from '../api/client';
 import {
   Bike, Bell, Package, MapPin, Clock, Navigation,
-  Wallet, QrCode, History, Home, LogOut
+  Wallet, ScanLine, History, Home, LogOut
 } from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
+import StoreScanTab from './rider/StoreScanTab';
 
 const TASKS = '/delivery/delivery-tasks/';
 const RIDERS = '/delivery/rider-profiles/';
@@ -69,9 +69,8 @@ export default function RiderDashboardView() {
   const [earnings, setEarnings] = useState([]);
   const [custody, setCustody] = useState(null);
   const [tab, setTab] = useState('home');
-
-  const [qrInfo, setQrInfo] = useState(null);
-  const [qrError, setQrError] = useState('');
+  const [routeInfo, setRouteInfo] = useState(null);
+  const [mapReady, setMapReady] = useState(0);
 
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -247,19 +246,6 @@ export default function RiderDashboardView() {
     }
   };
 
-  // ── my QR (store scan = consent at the counter) ──
-  const loadQr = useCallback(async () => {
-    setQrError('');
-    try {
-      const info = await withTimeout(fetchApi(`${RIDERS}me/qr/`));
-      setQrInfo(info);
-    } catch (err) {
-      setQrError(describeError(err));
-    }
-  }, []);
-
-  useEffect(() => { if (tab === 'qr') loadQr(); }, [tab, loadQr]);
-
   const markAllRead = () => run(async () => {
     await postApi(`${NOTIFICATIONS}mark_all_read/`, {});
     await load();
@@ -321,16 +307,6 @@ export default function RiderDashboardView() {
         icon: L.divIcon({ className: '', html: `<div class="rv3-pin rv3-pin--customer">${PIN_SVG.customer}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] }),
       }).addTo(map).bindTooltip('Customer', { direction: 'top', offset: [0, -16] });
     }
-    if (mePos && storePos && map.hasLayer(layerRef.current.me)) {
-      // subtle line me -> store while heading to the store
-      layerRef.current.line = L.polyline([mePos, custPos || storePos], {
-        color: '#8b3df0', weight: 4, opacity: 0.9, dashArray: '2 10', lineCap: 'round',
-      }).addTo(map);
-    } else if (storePos && custPos) {
-      layerRef.current.line = L.polyline([storePos, custPos], {
-        color: '#8b3df0', weight: 4, opacity: 0.9, dashArray: '2 10', lineCap: 'round',
-      }).addTo(map);
-    }
     if (mePos && custPos) {
       map.fitBounds(L.latLngBounds([mePos, custPos]).pad(0.3));
     } else if (storePos && custPos) {
@@ -340,6 +316,7 @@ export default function RiderDashboardView() {
     mapRef.current = map;
     // Leaflet needs a nudge after the container settles on slower phones.
     setTimeout(() => map.invalidateSize(), 120);
+    setMapReady(v => v + 1);
     return () => {
       try {
         map.remove();
@@ -349,6 +326,51 @@ export default function RiderDashboardView() {
       }
     };
   }, [tab, current?.task_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live routing: once the map is up, ask the routing engine for the driving
+  // line to the customer (falls back to the store while that's the trip).
+  useEffect(() => {
+    if (!mapRef.current) return undefined;
+    const mePos = (profile?.last_lat && profile?.last_lng)
+      ? [Number(profile.last_lat), Number(profile.last_lng)] : null;
+    const storePos = profile?.current_site_geo
+      ? [profile.current_site_geo.lat, profile.current_site_geo.lng] : null;
+    const custPos = (current?.geo_lat && current?.geo_lng)
+      ? [Number(current.geo_lat), Number(current.geo_lng)] : null;
+    const origin = mePos || storePos;
+    const target = custPos || storePos;
+    if (!origin || !target || origin === target) return undefined;
+
+    let cancelled = false;
+    const drawLine = (latlngs) => {
+      if (layerRef.current.line) {
+        try { mapRef.current?.removeLayer(layerRef.current.line); } catch { /* gone */ }
+      }
+      layerRef.current.line = L.polyline(latlngs, {
+        color: '#f2b705', weight: 4.5, opacity: 0.95, lineCap: 'round',
+      }).addTo(mapRef.current);
+    };
+    const drawDash = () => drawLine([origin, target]);
+
+    (async () => {
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${origin[1]},${origin[0]};${target[1]},${target[0]}?overview=full&geometries=geojson`;
+        const r = await fetch(url);
+        const body = await r.json();
+        const route = body?.routes?.[0];
+        if (cancelled) return;
+        if (!route) { drawDash(); setRouteInfo(null); return; }
+        drawLine(route.geometry.coordinates.map(([lng, lat]) => [lat, lng]));
+        setRouteInfo({
+          km: route.distance / 1000,
+          min: Math.max(1, Math.round(route.duration / 60)),
+        });
+      } catch {
+        if (!cancelled) { drawDash(); setRouteInfo(null); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [mapReady, current?.task_id, profile?.last_lat, profile?.last_lng, profile?.current_site_geo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const recenter = () => {
     const map = mapRef.current;
@@ -505,7 +527,7 @@ export default function RiderDashboardView() {
       {tab === 'home' && (
         <div className="rv3-fab-stack">
           {current && (
-            <button className="rv3-fab rv3-fab--purple" onClick={routeToStore}
+            <button className="rv3-fab rv3-fab--green" onClick={routeToStore}
                     aria-label="Frame the route" title="Frame the route">
               <Navigation size={21} strokeWidth={2} />
             </button>
@@ -524,9 +546,11 @@ export default function RiderDashboardView() {
             <div data-testid={`rd-job-${current.order_no}`}>
               <div className="rv3-sheet-eyebrow">
                 <span className="rv3-eyebrow-label">{journey.eyebrow}</span>
-                {current.eta_at && (
-                  <span className="rv3-eta"><Clock size={11} /> {new Date(current.eta_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                )}
+                {routeInfo ? (
+                  <span className="rv3-eta rv3-eta--route"><Navigation size={11} /> {routeInfo.km.toFixed(1)} km · ~{routeInfo.min} min</span>
+                ) : current.distance_m ? (
+                  <span className="rv3-eta"><Clock size={11} /> {(Number(current.distance_m) / 1000).toFixed(1)} km</span>
+                ) : null}
               </div>
               <h2 className="rv3-job-title">{current.order_no}</h2>
               <div className="rv3-job-orderno">{current.shipped_qty ?? 1} item{(current.shipped_qty ?? 1) === 1 ? '' : 's'}{current.distance_m ? ` · ${(Number(current.distance_m) / 1000).toFixed(1)} km` : ''} · {current.staging_bin ? `staged ${current.staging_bin}` : 'loose bag'}</div>
@@ -667,26 +691,13 @@ export default function RiderDashboardView() {
         </div>
       )}
 
-      {/* ══════════ QR ══════════ */}
-      {tab === 'qr' && (
-        <div className="rv3-page">
-          <h1>My QR</h1>
-          <div className="rv3-card">
-            {qrError ? (
-              <div role="alert" className="rv3-empty">{qrError}</div>
-            ) : qrInfo ? (
-              <div className="rv3-qr-box">
-                <QRCodeSVG value={qrInfo.payload || `zippzo:rider:${qrInfo.rider_id}`} size={196} fgColor="#241203" bgColor="#fffdf8" />
-                <div className="rv3-qr-note">
-                  The store scans this once per handoff to confirm you physically took the order.
-                  The code rotates after every scan.
-                </div>
-              </div>
-            ) : (
-              <div className="rv3-empty">Fetching your code…</div>
-            )}
-          </div>
-        </div>
+      {/* ══════════ SCAN (store clock-in) ══════════ */}
+      {tab === 'scan' && (
+        <StoreScanTab
+          profile={profile}
+          shift={shift}
+          onShiftChanged={() => load()}
+        />
       )}
 
       {/* ── POD sheet ── */}
@@ -742,8 +753,8 @@ export default function RiderDashboardView() {
           <Bell size={19} strokeWidth={2} /><span>Alerts</span>
           {unread > 0 && <span className="rv3-nav-badge">{unread > 9 ? '9+' : unread}</span>}
         </button>
-        <button className={`rv3-nav-item${tab === 'qr' ? ' rv3-nav-item--active' : ''}`} onClick={() => setTab('qr')}>
-          <QrCode size={19} strokeWidth={2} /><span>My QR</span>
+        <button className={`rv3-nav-item${tab === 'scan' ? ' rv3-nav-item--active' : ''}`} onClick={() => setTab('scan')}>
+          <ScanLine size={19} strokeWidth={2} /><span>Scan</span>
         </button>
       </nav>
     </div>

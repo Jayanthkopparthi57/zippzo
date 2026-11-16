@@ -1,31 +1,35 @@
 /* ═══════════════════════════════════════════════════════════════
-   ZIPPZO RIDER — "SHORT DISTANCE" DESIGN SYSTEM
-   Dark amber canvas, map-first, bottom-sheet job card.
+   ZIPPZO RIDER — Groceries-in-minutes field theme
+   Deep store green canvas, Zippzo yellow CTAs, cream sheet.
+   Same tokens the storefront stands on: #177a45 green / #f2b705 yellow.
    ═══════════════════════════════════════════════════════════════ */
 
 :root {
-  --rv3-ink: #f7f3ec;
-  --rv3-ink-dim: #a8a094;
-  --rv3-gold: #f2b33d;
-  --rv3-gold-2: #d99a29;
-  --rv3-gold-soft: rgba(242, 179, 61, 0.16);
-  --rv3-purple: #8b3df0;
-  --rv3-purple-soft: rgba(139, 61, 240, 0.14);
-  --rv3-card: #fffdf8;
-  --rv3-card-soft: #f5f2ea;
-  --rv3-line: #e8e4d9;
-  --rv3-ink-on-card: #1c2230;
-  --rv3-bad: #ef4444;
-  --rv3-ok: #22c55e;
+  --rv3-ink: #f2f7ef;
+  --rv3-ink-dim: #9db3a3;
+  --rv3-gold: #f2b705;
+  --rv3-gold-2: #d9a000;
+  --rv3-gold-soft: rgba(242, 183, 5, 0.18);
+  --rv3-green: #177a45;
+  --rv3-green-deep: #0e5b30;
+  --rv3-green-mid: #1f9254;
+  --rv3-green-soft: rgba(23, 122, 69, 0.14);
+  --rv3-green-shadow: rgba(23, 122, 69, 0.4);
+  --rv3-card: #fdfef9;
+  --rv3-card-soft: #eef5ef;
+  --rv3-line: #d8e6dc;
+  --rv3-ink-on-card: #182419;
+  --rv3-bad: #d9534f;
+  --rv3-ok: #177a45;
   --rv3-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
   --rv3-radius: 22px;
   --rv3-radius-sm: 16px;
 }
 
-/* Body canvas: dark umber gradient, like the reference mockup */
+/* Body canvas: deep storefront green, like the storefront header */
 html[data-app="rider"] body,
 [data-app="rider"] body {
-  background: #070503;
+  background: #050f0a;
   margin: 0;
 }
 
@@ -36,7 +40,7 @@ html[data-app="rider"] body,
   height: 100dvh;
   overflow: hidden;
   background:
-    radial-gradient(120% 90% at 50% -10%, #3a2510 0%, #1d1106 46%, #0a0603 100%);
+    radial-gradient(120% 90% at 50% -10%, #173f27 0%, #0e2818 46%, #050f0a 100%);
   color: var(--rv3-ink);
   font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -46,7 +50,7 @@ html[data-app="rider"] body,
   display: grid;
   place-items: center;
   height: 100dvh;
-  background: radial-gradient(120% 90% at 50% -10%, #3a2510 0%, #1d1106 46%, #0a0603 100%);
+  background: radial-gradient(120% 90% at 50% -10%, #173f27 0%, #0e2818 46%, #050f0a 100%);
   color: var(--rv3-ink-dim);
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 15px;
@@ -73,7 +77,7 @@ html[data-app="rider"] body,
   justify-content: center;
   gap: 14px;
   color: var(--rv3-ink-dim);
-  background: radial-gradient(110% 80% at 50% 15%, #2a1a0c 0%, #150c05 100%);
+  background: radial-gradient(110% 80% at 50% 15%, #143a24 0%, #0a1f13 100%);
   text-align: center;
   padding: 0 40px;
 }
@@ -94,7 +98,7 @@ html[data-app="rider"] body,
   inset: 0 0 auto 0;
   height: 132px;
   z-index: 1;
-  background: linear-gradient(180deg, rgba(7, 5, 3, 0.82) 0%, rgba(7, 5, 3, 0.42) 54%, transparent 100%);
+  background: linear-gradient(180deg, rgba(5, 15, 10, 0.82) 0%, rgba(5, 15, 10, 0.42) 54%, transparent 100%);
   pointer-events: none;
 }
 .rv3-fade-bottom {
@@ -102,7 +106,7 @@ html[data-app="rider"] body,
   inset: auto 0 96px 0;
   height: 120px;
   z-index: 1;
-  background: linear-gradient(0deg, rgba(7, 5, 3, 0.72) 0%, transparent 100%);
+  background: linear-gradient(0deg, rgba(5, 15, 10, 0.72) 0%, transparent 100%);
   pointer-events: none;
 }
 
@@ -130,15 +134,15 @@ html[data-app="rider"] body,
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: linear-gradient(145deg, #f5c96b, #d99a29);
-  color: #241203;
+  background: linear-gradient(145deg, #ffd84d, #f2b705);
+  color: #1c2721;
   display: grid;
   place-items: center;
   font-family: 'Space Grotesk', sans-serif;
   font-weight: 700;
   font-size: 18px;
   flex-shrink: 0;
-  box-shadow: 0 4px 14px rgba(242, 179, 61, 0.35);
+  box-shadow: 0 4px 14px rgba(242, 183, 5, 0.4);
 }
 .rv3-top-meta { min-width: 0; }
 .rv3-top-name {
@@ -164,7 +168,7 @@ html[data-app="rider"] body,
   height: 40px;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(10, 7, 4, 0.55);
+  background: rgba(5, 15, 10, 0.55);
   color: var(--rv3-ink);
   display: grid;
   place-items: center;
@@ -186,23 +190,25 @@ html[data-app="rider"] body,
   font-weight: 700;
   font-size: 13px;
   letter-spacing: 0.01em;
-  background: var(--rv3-gold);
-  color: #241203;
+  background: var(--rv3-green);
+  color: #fff;
   transition: transform 0.15s, background 0.2s;
+  box-shadow: 0 6px 18px var(--rv3-green-shadow);
 }
 .rv3-online-pill:active { transform: scale(0.96); }
 .rv3-online-pill--off {
   background: rgba(255, 255, 255, 0.14);
   color: var(--rv3-ink);
   border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: none;
 }
 .rv3-online-dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: currentColor;
 }
 .rv3-online-pill:not(.rv3-online-pill--off) .rv3-online-dot {
-  background: #166534;
-  box-shadow: 0 0 0 3px rgba(22, 101, 52, 0.25);
+  background: #bbf7d0;
+  box-shadow: 0 0 0 3px rgba(187, 247, 208, 0.3);
 }
 
 /* ─────────────── floating action buttons ─────────────── */
@@ -224,14 +230,14 @@ html[data-app="rider"] body,
   cursor: pointer;
   display: grid;
   place-items: center;
-  background: #fffdf8;
-  color: #241203;
+  background: #fdfef9;
+  color: #182419;
   box-shadow: var(--rv3-shadow);
   transition: transform 0.15s;
 }
 .rv3-fab:active { transform: scale(0.92); }
-.rv3-fab--purple {
-  background: var(--rv3-purple);
+.rv3-fab--green {
+  background: var(--rv3-green);
   color: #fff;
 }
 
@@ -260,7 +266,7 @@ html[data-app="rider"] body,
   width: 44px;
   height: 5px;
   border-radius: 999px;
-  background: #d8d4c8;
+  background: #cfd8cd;
   margin: 2px auto 12px;
 }
 .rv3-sheet-eyebrow {
@@ -286,6 +292,11 @@ html[data-app="rider"] body,
   background: var(--rv3-card-soft);
   padding: 4px 9px;
   border-radius: 8px;
+}
+.rv3-eta--route {
+  background: #e9f5ed;
+  color: var(--rv3-green-deep);
+  font-weight: 700;
 }
 
 .rv3-job-title {
@@ -362,19 +373,23 @@ html[data-app="rider"] body,
   font-size: 16.5px;
   letter-spacing: 0.01em;
   background: var(--rv3-gold);
-  color: #241203;
-  box-shadow: 0 10px 26px rgba(242, 179, 61, 0.4);
+  color: #1c2721;
+  box-shadow: 0 10px 26px rgba(242, 183, 5, 0.4);
   transition: transform 0.15s, background 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
-.rv3-cta:hover { background: #f7c253; }
+.rv3-cta:hover { background: #ffd013; }
 .rv3-cta:active { transform: scale(0.985); }
 .rv3-cta:disabled { opacity: 0.55; box-shadow: none; cursor: default; }
 .rv3-cta--ghost {
-  background: var(--rv3-purple);
+  background: var(--rv3-green);
   color: #fff;
-  box-shadow: 0 10px 26px rgba(139, 61, 240, 0.4);
+  box-shadow: 0 10px 26px var(--rv3-green-shadow);
 }
-.rv3-cta--ghost:hover { background: #9a52ff; }
+.rv3-cta--ghost:hover { background: var(--rv3-green-mid); }
 
 .rv3-idle {
   text-align: center;
@@ -389,8 +404,8 @@ html[data-app="rider"] body,
   animation: rv3-pulse 1.6s ease-in-out infinite;
 }
 @keyframes rv3-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(242, 179, 61, 0.5); }
-  50%      { box-shadow: 0 0 0 12px rgba(242, 179, 61, 0.12); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(242, 183, 5, 0.5); }
+  50%      { box-shadow: 0 0 0 12px rgba(242, 183, 5, 0.12); }
 }
 .rv3-idle-title {
   font-family: 'Space Grotesk', sans-serif;
@@ -400,7 +415,7 @@ html[data-app="rider"] body,
 }
 .rv3-idle-sub {
   font-size: 13px;
-  color: #6f6a5f;
+  color: #66766d;
   line-height: 1.5;
   max-width: 300px;
   margin: 0 auto;
@@ -416,7 +431,7 @@ html[data-app="rider"] body,
   z-index: 3;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  background: rgba(10, 7, 4, 0.92);
+  background: rgba(5, 15, 10, 0.94);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -432,7 +447,7 @@ html[data-app="rider"] body,
   background: transparent;
   border-radius: 14px;
   cursor: pointer;
-  color: #8d8578;
+  color: #8da595;
   font-family: 'IBM Plex Sans', sans-serif;
   font-size: 10.5px;
   font-weight: 600;
@@ -478,10 +493,10 @@ html[data-app="rider"] body,
   line-height: 1.4;
   animation: rv3-sheet-in 0.25s ease;
 }
-.rv3-banner--error { background: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.35); color: #fda4a4; }
-.rv3-banner--ok    { background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.30); color: #86efac; }
+.rv3-banner--error { background: rgba(217, 83, 79, 0.14); border: 1px solid rgba(217, 83, 79, 0.35); color: #f5b8b5; }
+.rv3-banner--ok    { background: var(--rv3-green-soft); border: 1px solid rgba(23, 122, 69, 0.4); color: #7ee2a8; }
 
-/* ─────────────── panels (history / money / alerts / qr) ─────────────── */
+/* ─────────────── panels (history / money / alerts) ─────────────── */
 
 .rv3-page {
   position: absolute;
@@ -494,6 +509,7 @@ html[data-app="rider"] body,
   font-family: 'Space Grotesk', sans-serif;
   font-size: 27px;
   font-weight: 700;
+  color: var(--rv3-ink);
   margin: 0 0 14px;
 }
 .rv3-card {
@@ -536,8 +552,8 @@ html[data-app="rider"] body,
   color: #5b554a;
   text-transform: uppercase;
 }
-.rv3-chip--ok { background: #dcfce7; color: #166534; }
-.rv3-chip--gold { background: #fef3c7; color: #92400e; }
+.rv3-chip--ok { background: #e9f5ed; color: var(--rv3-green-deep); }
+.rv3-chip--gold { background: #fff4d1; color: #a26200; }
 
 .rv3-bigstat {
   font-family: 'Space Grotesk', sans-serif;
@@ -551,22 +567,6 @@ html[data-app="rider"] body,
   color: #8a857a;
   margin-top: 6px;
   font-weight: 600;
-}
-
-.rv3-qr-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0 4px;
-}
-.rv3-qr-box svg { border-radius: 18px; }
-.rv3-qr-note {
-  font-size: 12.5px;
-  color: #6f6a5f;
-  text-align: center;
-  line-height: 1.55;
-  max-width: 260px;
 }
 
 .rv3-btn {
@@ -588,7 +588,84 @@ html[data-app="rider"] body,
 .rv3-btn--gold {
   background: var(--rv3-gold);
   border: 0;
-  color: #241203;
+  color: #1c2721;
+}
+
+/* ─────────────── scan (clock-in) ─────────────── */
+
+.rv3-scan-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--rv3-green-soft);
+  color: var(--rv3-green-deep);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 7px 12px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+.rv3-scan-frame {
+  position: relative;
+  border-radius: var(--rv3-radius-sm);
+  overflow: hidden;
+  background: #050f0a;
+  aspect-ratio: 4 / 3;
+}
+.rv3-scan-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.rv3-scan-reticle {
+  position: absolute;
+  inset: 22% 18%;
+  border: 3px solid var(--rv3-gold);
+  border-radius: 18px;
+  box-shadow: 0 0 0 999px rgba(5, 15, 10, 0.32);
+  pointer-events: none;
+}
+.rv3-scan-alt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 42px;
+  margin-top: 10px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #5b554a;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rv3-scan-alt:hover { background: var(--rv3-card-soft); }
+.rv3-scan-manual { margin-top: 6px; }
+.rv3-shift-live {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--rv3-green-deep);
+  background: var(--rv3-green-soft);
+  border-radius: 10px;
+  padding: 8px 12px;
+  align-self: flex-start;
+}
+.rv3-shift-live-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--rv3-green);
+  box-shadow: 0 0 0 4px rgba(23, 122, 69, 0.2);
+  animation: rv3-pulse 1.4s ease-in-out infinite;
 }
 
 /* ─────────────── POD sheet ─────────────── */
@@ -597,7 +674,7 @@ html[data-app="rider"] body,
   position: absolute;
   inset: 0;
   z-index: 5;
-  background: rgba(5, 3, 2, 0.66);
+  background: rgba(5, 15, 10, 0.66);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   display: flex;
@@ -609,6 +686,7 @@ html[data-app="rider"] body,
   border-radius: 26px 26px 0 0;
   padding: 12px 20px calc(env(safe-area-inset-bottom, 0px) + 20px);
   animation: rv3-sheet-in 0.3s cubic-bezier(0.2, 0.9, 0.25, 1);
+  color: var(--rv3-ink-on-card);
 }
 .rv3-pod label {
   display: block;
@@ -640,7 +718,7 @@ html[data-app="rider"] body,
 .rv3-pod-note {
   margin-top: 10px;
   font-size: 12.5px;
-  color: #b91c1c;
+  color: #a6301f;
   font-weight: 600;
 }
 .rv3-pod-actions {
@@ -667,7 +745,7 @@ html[data-app="rider"] body,
   align-items: center;
   justify-content: center;
   min-height: 100dvh;
-  background: radial-gradient(130% 100% at 50% -10%, #3a2510 0%, #1d1106 46%, #0a0603 100%);
+  background: radial-gradient(130% 100% at 50% -10%, #173f27 0%, #0e2818 46%, #050f0a 100%);
   padding: 24px 18px;
 }
 .rv3-setup-card {
@@ -683,8 +761,8 @@ html[data-app="rider"] body,
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: var(--rv3-gold-soft);
-  color: #b9811d;
+  background: var(--rv3-green-soft);
+  color: var(--rv3-green-deep);
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10.5px;
   font-weight: 700;
@@ -704,7 +782,7 @@ html[data-app="rider"] body,
 }
 .rv3-setup-sub {
   font-size: 13.5px;
-  color: #5b554a;
+  color: #3c4c43;
   line-height: 1.55;
   margin-bottom: 18px;
 }
@@ -746,8 +824,8 @@ html[data-app="rider"] body,
 .rv3-vehicle--on {
   border-color: var(--rv3-gold-2);
   background: var(--rv3-gold);
-  color: #241203;
-  box-shadow: 0 4px 14px rgba(242, 179, 61, 0.35);
+  color: #1c2721;
+  box-shadow: 0 4px 14px rgba(242, 183, 5, 0.4);
 }
 
 /* Leaflet pins */
@@ -761,15 +839,15 @@ html[data-app="rider"] body,
 .rv3-pin--me {
   width: 18px; height: 18px;
   background: var(--rv3-gold);
-  box-shadow: 0 0 0 6px rgba(242, 179, 61, 0.3), 0 6px 14px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 0 6px rgba(242, 183, 5, 0.3), 0 6px 14px rgba(0, 0, 0, 0.5);
 }
 .rv3-pin--store {
   width: 34px; height: 34px;
-  background: #241203;
+  background: var(--rv3-green-deep);
   color: var(--rv3-gold);
 }
 .rv3-pin--customer {
   width: 34px; height: 34px;
-  background: var(--rv3-purple);
-  color: #fff;
+  background: var(--rv3-gold);
+  color: var(--rv3-green-deep);
 }
