@@ -53,7 +53,7 @@ const JOURNEY = {
 };
 
 const PIN_SVG = {
-  store: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f2b33d" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 6.2 5h11.6L20 10.5M5 10.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8.5M9.5 20v-5h5v5"/></svg>',
+  store: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F5F9FC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 6.2 5h11.6L20 10.5M5 10.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8.5M9.5 20v-5h5v5"/></svg>',
   customer: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 11 12 4.5 19.5 11M6.5 9.5V19h11V9.5"/></svg>',
 };
 
@@ -347,7 +347,7 @@ export default function RiderDashboardView() {
         try { mapRef.current?.removeLayer(layerRef.current.line); } catch { /* gone */ }
       }
       layerRef.current.line = L.polyline(latlngs, {
-        color: '#f2b705', weight: 4.5, opacity: 0.95, lineCap: 'round',
+        color: '#285A73', weight: 4.5, opacity: 0.95, lineCap: 'round',
       }).addTo(mapRef.current);
     };
     const drawDash = () => drawLine([origin, target]);
@@ -479,7 +479,7 @@ export default function RiderDashboardView() {
           {!(profile?.last_lat && profile?.last_lng)
             && !profile?.current_site_geo && !current?.geo_lat && (
             <div className="rv3-map-fallback">
-              <Bike size={30} strokeWidth={1.4} color="#f2b33d" />
+              <Bike size={30} strokeWidth={1.4} color="#285A73" />
               <strong>Waiting for GPS</strong>
               <span>Your route appears here as soon as this device shares a location.</span>
             </div>

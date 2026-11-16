@@ -146,7 +146,7 @@ export default function StoreScanTab({ profile, shift, onShiftChanged }) {
               </div>
             </div>
           </div>
-          <button className="rv3-cta" style={{ background: '#177a45', color: '#fff', boxShadow: '0 10px 26px rgba(23, 122, 69, 0.35)' }}
+          <button className="rv3-cta" style={{ background: '#1B3A4D', color: '#fff', boxShadow: '0 10px 26px rgba(27, 58, 77, 0.4)' }}
                   onClick={endShift} disabled={busy}>
             {busy ? 'Working…' : <>End shift & go offline</>}
           </button>

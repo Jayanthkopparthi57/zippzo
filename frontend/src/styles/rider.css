@@ -1,26 +1,26 @@
-/* ═══════════════════════════════════════════════════════════════
-   ZIPPZO RIDER — Groceries-in-minutes field theme
-   Deep store green canvas, Zippzo yellow CTAs, cream sheet.
-   Same tokens the storefront stands on: #177a45 green / #f2b705 yellow.
-   ═══════════════════════════════════════════════════════════════ */
+﻿/* =============================================================
+   ZIPPZO RIDER - Delivery partner theme
+   Steel slate blue canvas (#285A73), white sheet, Zippzo blue CTAs.
+   Same token family the operations console ships on.
+   ============================================================= */
 
 :root {
-  --rv3-ink: #f2f7ef;
-  --rv3-ink-dim: #9db3a3;
-  --rv3-gold: #f2b705;
-  --rv3-gold-2: #d9a000;
-  --rv3-gold-soft: rgba(242, 183, 5, 0.18);
-  --rv3-green: #177a45;
-  --rv3-green-deep: #0e5b30;
-  --rv3-green-mid: #1f9254;
-  --rv3-green-soft: rgba(23, 122, 69, 0.14);
-  --rv3-green-shadow: rgba(23, 122, 69, 0.4);
-  --rv3-card: #fdfef9;
-  --rv3-card-soft: #eef5ef;
-  --rv3-line: #d8e6dc;
-  --rv3-ink-on-card: #182419;
+  --rv3-ink: #EEF4F8;
+  --rv3-ink-dim: #93A8B7;
+  --rv3-gold: #F5F9FC;
+  --rv3-gold-2: #D5E3EC;
+  --rv3-gold-soft: rgba(245, 249, 252, 0.16);
+  --rv3-green: #285A73;
+  --rv3-green-deep: #1B3A4D;
+  --rv3-green-mid: #34617E;
+  --rv3-green-soft: rgba(40, 90, 115, 0.14);
+  --rv3-green-shadow: rgba(40, 90, 115, 0.4);
+  --rv3-card: #FDFEFE;
+  --rv3-card-soft: #EDF3F7;
+  --rv3-line: #D5E0E8;
+  --rv3-ink-on-card: #1C2B33;
   --rv3-bad: #d9534f;
-  --rv3-ok: #177a45;
+  --rv3-ok: #285A73;
   --rv3-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
   --rv3-radius: 22px;
   --rv3-radius-sm: 16px;
@@ -29,18 +29,18 @@
 /* Body canvas: deep storefront green, like the storefront header */
 html[data-app="rider"] body,
 [data-app="rider"] body {
-  background: #050f0a;
+  background: #050B10;
   margin: 0;
 }
 
-/* ─────────────── shell ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ shell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-shell {
   position: relative;
   height: 100dvh;
   overflow: hidden;
   background:
-    radial-gradient(120% 90% at 50% -10%, #173f27 0%, #0e2818 46%, #050f0a 100%);
+    radial-gradient(120% 90% at 50% -10%, #1B3A4D 0%, #112433 46%, #050B10 100%);
   color: var(--rv3-ink);
   font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -50,14 +50,14 @@ html[data-app="rider"] body,
   display: grid;
   place-items: center;
   height: 100dvh;
-  background: radial-gradient(120% 90% at 50% -10%, #173f27 0%, #0e2818 46%, #050f0a 100%);
+  background: radial-gradient(120% 90% at 50% -10%, #1B3A4D 0%, #112433 46%, #050B10 100%);
   color: var(--rv3-ink-dim);
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 15px;
   letter-spacing: 0.02em;
 }
 
-/* ─────────────── map layer ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ map layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-map-wrap {
   position: absolute;
@@ -77,7 +77,7 @@ html[data-app="rider"] body,
   justify-content: center;
   gap: 14px;
   color: var(--rv3-ink-dim);
-  background: radial-gradient(110% 80% at 50% 15%, #143a24 0%, #0a1f13 100%);
+  background: radial-gradient(110% 80% at 50% 15%, #16303F 0%, #0E2230 100%);
   text-align: center;
   padding: 0 40px;
 }
@@ -110,7 +110,7 @@ html[data-app="rider"] body,
   pointer-events: none;
 }
 
-/* ─────────────── top bar ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ top bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-top {
   position: absolute;
@@ -134,15 +134,15 @@ html[data-app="rider"] body,
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: linear-gradient(145deg, #ffd84d, #f2b705);
-  color: #1c2721;
+  background: linear-gradient(145deg, #ffffff, #F5F9FC);
+  color: #285A73;
   display: grid;
   place-items: center;
   font-family: 'Space Grotesk', sans-serif;
   font-weight: 700;
   font-size: 18px;
   flex-shrink: 0;
-  box-shadow: 0 4px 14px rgba(242, 183, 5, 0.4);
+  box-shadow: 0 4px 14px rgba(245, 249, 252, 0.4);
 }
 .rv3-top-meta { min-width: 0; }
 .rv3-top-name {
@@ -207,11 +207,11 @@ html[data-app="rider"] body,
   background: currentColor;
 }
 .rv3-online-pill:not(.rv3-online-pill--off) .rv3-online-dot {
-  background: #bbf7d0;
+  background: #D3E6EE;
   box-shadow: 0 0 0 3px rgba(187, 247, 208, 0.3);
 }
 
-/* ─────────────── floating action buttons ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ floating action buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-fab-stack {
   position: absolute;
@@ -230,8 +230,8 @@ html[data-app="rider"] body,
   cursor: pointer;
   display: grid;
   place-items: center;
-  background: #fdfef9;
-  color: #182419;
+  background: #FDFEFE;
+  color: #1C2B33;
   box-shadow: var(--rv3-shadow);
   transition: transform 0.15s;
 }
@@ -241,7 +241,7 @@ html[data-app="rider"] body,
   color: #fff;
 }
 
-/* ─────────────── bottom sheet ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ bottom sheet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-sheet {
   position: absolute;
@@ -266,7 +266,7 @@ html[data-app="rider"] body,
   width: 44px;
   height: 5px;
   border-radius: 999px;
-  background: #cfd8cd;
+  background: #CDD9E0;
   margin: 2px auto 12px;
 }
 .rv3-sheet-eyebrow {
@@ -280,7 +280,7 @@ html[data-app="rider"] body,
   font-size: 10.5px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: #8a857a;
+  color: #8A9AA5;
 }
 .rv3-eta {
   display: inline-flex;
@@ -288,13 +288,13 @@ html[data-app="rider"] body,
   gap: 5px;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11px;
-  color: #5b554a;
+  color: #51606D;
   background: var(--rv3-card-soft);
   padding: 4px 9px;
   border-radius: 8px;
 }
 .rv3-eta--route {
-  background: #e9f5ed;
+  background: #E7EFF5;
   color: var(--rv3-green-deep);
   font-weight: 700;
 }
@@ -310,7 +310,7 @@ html[data-app="rider"] body,
 .rv3-job-orderno {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 12px;
-  color: #8a857a;
+  color: #8A9AA5;
   letter-spacing: 0.03em;
 }
 
@@ -327,11 +327,11 @@ html[data-app="rider"] body,
   width: 38px; height: 38px; border-radius: 12px;
   background: #fff;
   display: grid; place-items: center;
-  color: #5b554a; flex-shrink: 0;
+  color: #51606D; flex-shrink: 0;
 }
 .rv3-meta-label {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em;
-  text-transform: uppercase; color: #8a857a;
+  text-transform: uppercase; color: #8A9AA5;
 }
 .rv3-meta-value {
   font-size: 13.5px; font-weight: 600; color: var(--rv3-ink-on-card);
@@ -351,7 +351,7 @@ html[data-app="rider"] body,
 }
 .rv3-amount-label {
   font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
-  text-transform: uppercase; color: #8a857a;
+  text-transform: uppercase; color: #8A9AA5;
 }
 .rv3-amount-value {
   font-family: 'Space Grotesk', sans-serif;
@@ -359,7 +359,7 @@ html[data-app="rider"] body,
   font-weight: 700;
   margin-top: 3px;
 }
-.rv3-amount-value--gold { color: #b9811d; }
+.rv3-amount-value--gold { color: #285A73; }
 
 .rv3-cta {
   width: 100%;
@@ -372,16 +372,16 @@ html[data-app="rider"] body,
   font-weight: 700;
   font-size: 16.5px;
   letter-spacing: 0.01em;
-  background: var(--rv3-gold);
-  color: #1c2721;
-  box-shadow: 0 10px 26px rgba(242, 183, 5, 0.4);
+  background: var(--rv3-green);
+  color: #ffffff;
+  box-shadow: 0 10px 26px rgba(40, 90, 115, 0.45);
   transition: transform 0.15s, background 0.2s;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
 }
-.rv3-cta:hover { background: #ffd013; }
+.rv3-cta:hover { background: #ffffff; }
 .rv3-cta:active { transform: scale(0.985); }
 .rv3-cta:disabled { opacity: 0.55; box-shadow: none; cursor: default; }
 .rv3-cta--ghost {
@@ -400,12 +400,12 @@ html[data-app="rider"] body,
   margin: 2px auto 10px;
   display: grid; place-items: center;
   background: var(--rv3-gold-soft);
-  color: #b9811d;
+  color: #285A73;
   animation: rv3-pulse 1.6s ease-in-out infinite;
 }
 @keyframes rv3-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(242, 183, 5, 0.5); }
-  50%      { box-shadow: 0 0 0 12px rgba(242, 183, 5, 0.12); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 249, 252, 0.5); }
+  50%      { box-shadow: 0 0 0 12px rgba(245, 249, 252, 0.12); }
 }
 .rv3-idle-title {
   font-family: 'Space Grotesk', sans-serif;
@@ -421,7 +421,7 @@ html[data-app="rider"] body,
   margin: 0 auto;
 }
 
-/* ─────────────── bottom nav ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ bottom nav â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-nav {
   position: absolute;
@@ -447,7 +447,7 @@ html[data-app="rider"] body,
   background: transparent;
   border-radius: 14px;
   cursor: pointer;
-  color: #8da595;
+  color: #8FA5B2;
   font-family: 'IBM Plex Sans', sans-serif;
   font-size: 10.5px;
   font-weight: 600;
@@ -475,7 +475,7 @@ html[data-app="rider"] body,
   font-family: 'IBM Plex Mono', monospace;
 }
 
-/* ─────────────── banners ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ banners â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-banner {
   position: absolute;
@@ -494,9 +494,9 @@ html[data-app="rider"] body,
   animation: rv3-sheet-in 0.25s ease;
 }
 .rv3-banner--error { background: rgba(217, 83, 79, 0.14); border: 1px solid rgba(217, 83, 79, 0.35); color: #f5b8b5; }
-.rv3-banner--ok    { background: var(--rv3-green-soft); border: 1px solid rgba(23, 122, 69, 0.4); color: #7ee2a8; }
+.rv3-banner--ok    { background: var(--rv3-green-soft); border: 1px solid rgba(40, 90, 115, 0.4); color: #A8D4E8; }
 
-/* ─────────────── panels (history / money / alerts) ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ panels (history / money / alerts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-page {
   position: absolute;
@@ -549,11 +549,11 @@ html[data-app="rider"] body,
   padding: 3px 8px;
   border-radius: 6px;
   background: var(--rv3-card-soft);
-  color: #5b554a;
+  color: #51606D;
   text-transform: uppercase;
 }
-.rv3-chip--ok { background: #e9f5ed; color: var(--rv3-green-deep); }
-.rv3-chip--gold { background: #fff4d1; color: #a26200; }
+.rv3-chip--ok { background: #E7EFF5; color: var(--rv3-green-deep); }
+.rv3-chip--gold { background: #E7EFF5; color: #285A73; }
 
 .rv3-bigstat {
   font-family: 'Space Grotesk', sans-serif;
@@ -564,7 +564,7 @@ html[data-app="rider"] body,
 }
 .rv3-bigstat-sub {
   font-size: 12px;
-  color: #8a857a;
+  color: #8A9AA5;
   margin-top: 6px;
   font-weight: 600;
 }
@@ -586,12 +586,12 @@ html[data-app="rider"] body,
   justify-content: center;
 }
 .rv3-btn--gold {
-  background: var(--rv3-gold);
+  background: var(--rv3-green);
   border: 0;
-  color: #1c2721;
+  color: #ffffff;
 }
 
-/* ─────────────── scan (clock-in) ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ scan (clock-in) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-scan-badge {
   display: inline-flex;
@@ -612,7 +612,7 @@ html[data-app="rider"] body,
   position: relative;
   border-radius: var(--rv3-radius-sm);
   overflow: hidden;
-  background: #050f0a;
+  background: #050B10;
   aspect-ratio: 4 / 3;
 }
 .rv3-scan-video {
@@ -640,7 +640,7 @@ html[data-app="rider"] body,
   border: 0;
   border-radius: 12px;
   background: transparent;
-  color: #5b554a;
+  color: #51606D;
   font-weight: 700;
   font-size: 13px;
   cursor: pointer;
@@ -668,7 +668,7 @@ html[data-app="rider"] body,
   animation: rv3-pulse 1.4s ease-in-out infinite;
 }
 
-/* ─────────────── POD sheet ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ POD sheet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-pod-backdrop {
   position: absolute;
@@ -694,7 +694,7 @@ html[data-app="rider"] body,
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #8a857a;
+  color: #8A9AA5;
   margin: 14px 2px 6px;
 }
 .rv3-pod input {
@@ -708,7 +708,7 @@ html[data-app="rider"] body,
   font-size: 19px;
   outline: none;
 }
-.rv3-pod input:focus { border-color: var(--rv3-gold); box-shadow: 0 0 0 3px var(--rv3-gold-soft); }
+.rv3-pod input:focus { border-color: var(--rv3-green); box-shadow: 0 0 0 3px var(--rv3-green-soft); }
 .rv3-pod-otp {
   font-family: 'IBM Plex Mono', monospace;
   letter-spacing: 0.35em !important;
@@ -738,14 +738,14 @@ html[data-app="rider"] body,
   color: var(--rv3-ink-on-card);
 }
 
-/* ─────────────── setup / bootstrap ─────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ setup / bootstrap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .rv3-setup {
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 100dvh;
-  background: radial-gradient(130% 100% at 50% -10%, #173f27 0%, #0e2818 46%, #050f0a 100%);
+  background: radial-gradient(130% 100% at 50% -10%, #1B3A4D 0%, #112433 46%, #050B10 100%);
   padding: 24px 18px;
 }
 .rv3-setup-card {
@@ -792,7 +792,7 @@ html[data-app="rider"] body,
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #8a857a;
+  color: #8A9AA5;
   margin: 14px 2px 6px;
 }
 .rv3-input {
@@ -808,7 +808,7 @@ html[data-app="rider"] body,
   color: var(--rv3-ink-on-card);
   font-family: 'IBM Plex Sans', sans-serif;
 }
-.rv3-input:focus { border-color: var(--rv3-gold); box-shadow: 0 0 0 3px var(--rv3-gold-soft); }
+.rv3-input:focus { border-color: var(--rv3-green); box-shadow: 0 0 0 3px var(--rv3-green-soft); }
 .rv3-vehicles { display: flex; gap: 8px; flex-wrap: wrap; }
 .rv3-vehicle {
   height: 42px;
@@ -822,10 +822,10 @@ html[data-app="rider"] body,
   color: var(--rv3-ink-on-card);
 }
 .rv3-vehicle--on {
-  border-color: var(--rv3-gold-2);
-  background: var(--rv3-gold);
-  color: #1c2721;
-  box-shadow: 0 4px 14px rgba(242, 183, 5, 0.4);
+  border-color: var(--rv3-green-deep);
+  background: var(--rv3-green);
+  color: #ffffff;
+  box-shadow: 0 4px 14px var(--rv3-green-shadow);
 }
 
 /* Leaflet pins */
@@ -838,8 +838,8 @@ html[data-app="rider"] body,
 }
 .rv3-pin--me {
   width: 18px; height: 18px;
-  background: var(--rv3-gold);
-  box-shadow: 0 0 0 6px rgba(242, 183, 5, 0.3), 0 6px 14px rgba(0, 0, 0, 0.5);
+  background: var(--rv3-green-mid);
+  box-shadow: 0 0 0 6px rgba(40, 90, 115, 0.35), 0 6px 14px rgba(0, 0, 0, 0.5);
 }
 .rv3-pin--store {
   width: 34px; height: 34px;
@@ -851,3 +851,5 @@ html[data-app="rider"] body,
   background: var(--rv3-gold);
   color: var(--rv3-green-deep);
 }
+
+
