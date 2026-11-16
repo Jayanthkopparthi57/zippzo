@@ -6,6 +6,7 @@ import ShopShell from './ShopShell';
 import ShopperSetup from './ShopperSetup';
 import ShopperStorefrontView from '../views/shopper/StorefrontView';
 import MyOrdersView from '../views/shopper/MyOrdersView';
+import TrackerView from '../views/shopper/TrackerView';
 import NotificationsView from '../views/shopper/NotificationsView';
 import AccountView from '../views/shopper/AccountView';
 
@@ -16,6 +17,8 @@ function ShopperContent() {
     switch (activeTabId) {
       case 'shop-orders':
         return <MyOrdersView />;
+      case 'shop-track':
+        return <TrackerView />;
       case 'shop-notifications':
         return <NotificationsView />;
       case 'shop-account':

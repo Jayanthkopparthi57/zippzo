@@ -3069,3 +3069,75 @@
 .shop-hero__sub { font-size: 13px; opacity: .92; }
 
 @media (max-width: 720px) { .shop-hero__title { font-size: 23px; } }
+
+/* ── order tracker hero (matches the app) ───────────────────────────────── */
+
+.shop-track-hero {
+  display: grid;
+  gap: 18px;
+  margin-top: 10px;
+  padding: 18px 16px;
+  border-radius: 16px;
+  background: var(--shop-green-dark);
+  color: #ffffff;
+}
+
+.shop-track-hero__eta { display: grid; gap: 4px; text-align: center; }
+
+.shop-track-hero__etaLabel { font-size: 10px; font-weight: 800; letter-spacing: .2em; text-transform: uppercase; opacity: .8; }
+
+.shop-track-hero__etaValue { font-size: 32px; font-weight: 800; letter-spacing: -.5px; line-height: 1.1; }
+
+.shop-track-hero__orderNo { font-size: 12px; opacity: .8; }
+
+.shop-track-steps {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: start;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.shop-track-step {
+  display: grid;
+  grid-template-rows: auto auto;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+  position: relative;
+  padding: 4px 2px;
+}
+
+.shop-track-step__node {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.15);
+  border: 2px solid rgba(255,255,255,.35);
+  font-size: 11px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.shop-track-step__label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  max-width: 72px;
+  color: rgba(255,255,255,.75);
+}
+
+.shop-track-step--done .shop-track-step__node { background: #ffffff; color: var(--shop-green-dark); border-color: #ffffff; }
+.shop-track-step--done .shop-track-step__label { color: #ffffff; }
+.shop-track-step--current .shop-track-step__node { background: #ffffff; color: var(--shop-green-dark); border-color: #ffffff; box-shadow: 0 0 0 3px rgba(255,255,255,.35); }
+.shop-track-step--current .shop-track-step__label { color: #ffffff; }
+
+.shop-track-step__bar { position: absolute; top: 16px; left: 55%; right: -45%; height: 2px; background: rgba(255,255,255,.2); }
+.shop-track-step--done .shop-track-step__bar { background: #ffffff; }
+.shop-track-step:last-child .shop-track-step__bar { display: none; }

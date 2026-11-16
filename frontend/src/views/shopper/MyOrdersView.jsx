@@ -353,6 +353,11 @@ export default function MyOrdersView() {  const { openTab } = useTabs();
     }
   };
 
+  const track = (order) => {
+    window.dispatchEvent(new CustomEvent('zippzo:track-order', { detail: { orderId: order.order_id } }));
+    openTab('shop-track', 'Track order', 'Truck');
+  };
+
   const live = orders.filter(o => !CANCELLED.has(o.status));
   const past = orders.filter(o => CANCELLED.has(o.status) || o.status === 'DELIVERED');
   const rows = filter === 'live' ? orders.filter(o => !CANCELLED.has(o.status) && o.status !== 'DELIVERED')
@@ -584,6 +589,12 @@ export default function MyOrdersView() {  const { openTab } = useTabs();
                 {(CANCELLED.has(o.status) || o.status === 'DELIVERED') && (
                   <button className="shop-btn shop-btn--ghost" onClick={() => reorder(o)} disabled={reorderBusy === o.order_id}>
                     <ShoppingBasket size={15} /> {reorderBusy === o.order_id ? 'Re-adding…' : 'Reorder'}
+                  </button>
+                )}
+
+                {!CANCELLED.has(o.status) && o.status !== 'DELIVERED' && (
+                  <button type="button" className="shop-btn shop-btn--ghost" onClick={() => track(o)}>
+                    <Truck size={15} /> Track order
                   </button>
                 )}
 
