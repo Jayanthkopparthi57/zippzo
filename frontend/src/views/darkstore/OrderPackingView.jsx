@@ -28,7 +28,7 @@ import {
 function PackStation({ siteId }) {
   const toast = useToast();
   const { data: orders, error, loading, reload } = useAsyncData(
-    () => loadOrderQueue(siteId, ['PICKED']),
+    () => loadOrderQueue(siteId, ['PICKED', 'RACK_DROPPED']),
     [siteId],
     { pollMs: 30000 }
   );

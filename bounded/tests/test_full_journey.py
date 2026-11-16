@@ -316,8 +316,9 @@ class TheJourneyWorksTests(FullJourneyTests):
 
         self.assertEqual('DELIVERED', order.status)
         self.assertIsNotNone(order.delivered_at)
-        self.assertEqual(Decimal('180.00'), order.grand_total,
-                         '60 x 2 milk + 40 bread + 20 delivery')
+        # Free delivery over ₹150 (DEFAULT_FREE_ABOVE): 60 x 2 milk + 40 bread, no delivery fee.
+        self.assertEqual(Decimal('160.00'), order.grand_total,
+                         '60 x 2 milk + 40 bread; free delivery over ₹150')
         self.assertEqual(3, sum(l.packed_qty for l in order.lines.all()))
         self.assertEqual(3, sum(l.shipped_qty for l in order.lines.all()))
 

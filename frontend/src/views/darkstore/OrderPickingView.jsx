@@ -594,10 +594,10 @@ function Picker({ siteId, storeCode }) {
 }
 
 export default function OrderPickingView() {
-  const { siteId } = useDarkStore();
+  const { siteId, storeCode } = useDarkStore();
   return (
     <StoreGate>
-      <Picker siteId={siteId} />
+      <Picker siteId={siteId} storeCode={storeCode} />
     </StoreGate>
   );
 }
