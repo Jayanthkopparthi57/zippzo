@@ -190,21 +190,27 @@ export function AuthProvider({ appKey = APP.key, children }) {
         : list;
       setFacilitiesList(splitSites(productSites));
 
-      // Auto-assign a primary facility if none is selected, preferring the
-      // site type this console is built for: the WMS shell opens on a mother
-      // hub (its hub sections) and the dark-store bundle on a store. Falling
-      // back to list[0] used to hand the WMS shell a dark store whenever the
-      // directory happened to be ordered that way, which swapped the whole
-      // sidebar for store-ops sections.
+      // A console facility is a staff switching concept. For the shopper and
+      // rider apps the newest store in the directory is not "their" store —
+      // picking one persisted a facility the account may not even enter, and
+      // the boot check then failed authorization and signed the account out on
+      // every reload. Shopper/Rider keep the list for pickers but never pin a
+      // facility of their own.
       if (productSites.length > 0) {
-        const preferred = productSites[0];
-        setFacility(prev => {
-          if (!prev || !productSites.some(s => s.code === prev.code)) {
-            localStorage.setItem(STORAGE_KEY_FACILITY, JSON.stringify(preferred));
-            return preferred;
-          }
-          return prev;
-        });
+        const staffApp = appMeta.targetApp === 'DARK_STORE' || appMeta.targetApp === 'WMS';
+        if (staffApp) {
+          const preferred = productSites[0];
+          setFacility(prev => {
+            if (!prev || !productSites.some(s => s.code === prev.code)) {
+              localStorage.setItem(STORAGE_KEY_FACILITY, JSON.stringify(preferred));
+              return preferred;
+            }
+            return prev;
+          });
+        } else {
+          setFacility(prev => (prev ? null : prev));
+          localStorage.removeItem(STORAGE_KEY_FACILITY);
+        }
       } else {
         setFacility(null);
         localStorage.removeItem(STORAGE_KEY_FACILITY);
@@ -254,9 +260,13 @@ export function AuthProvider({ appKey = APP.key, children }) {
         }
         loadFacilities();
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
-        clearSession();
+        // Only the server's own authorization verdicts end the session. A
+        // dropped connection or a 5xx must not sign the person out — the views
+        // can retry the read on their own schedule.
+        const status = err?.status;
+        if (status === 401 || status === 403) clearSession();
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };

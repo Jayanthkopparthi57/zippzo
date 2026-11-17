@@ -9,7 +9,7 @@ import {
 } from '../darkstore/useDarkStore';
 import { useTabs } from '../../context/TabContext';
 import {
-  MapPin, KeyRound, Bike, Package, ArrowLeft,
+  MapPin, KeyRound, Package, ArrowLeft, ChevronDown, Check,
 } from 'lucide-react';
 
 const LINES = '/orders/order-lines/';
@@ -48,17 +48,20 @@ function RiderMap({ rider, destination }) {
     }
 
     if (!mapRef.current) {
-      const map = L.map(ref.current, { zoomControl: true, attributionControl: false, scrollWheelZoom: false });
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+      const map = L.map(ref.current, { zoomControl: false, attributionControl: true, scrollWheelZoom: false });
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors',
+      }).addTo(map);
       mapRef.current = map;
-      map.setView([destination.lat, destination.lng], 14);
+      map.setView([destination.lat, destination.lng], 15);
       L.marker([destination.lat, destination.lng], {
         icon: L.divIcon({
           className: 'map-dot',
-          html: '<div style="width:22px;height:22px;border-radius:50% 50% 50% 2px;background:#285A73;border:2px solid #fff;transform:rotate(-45deg)"></div>',
-          iconSize: [22, 22], iconAnchor: [11, 18],
+          html: '<div class="track-pin track-pin--door"><svg viewBox="0 0 24 24" width="26" height="26" fill="#285A73"><path d="M12 2a8 8 0 0 0-8 8c0 5.4 6.4 11.4 6.7 11.7a2 2 0 0 0 2.6 0C13.6 21.4 20 15.4 20 10a8 8 0 0 0-8-8zm0 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg></div>',
+          iconSize: [26, 26], iconAnchor: [13, 24],
         }),
-      }).addTo(map);
+      }).addTo(map).bindTooltip('Your door', { direction: 'top', offset: [0, -22] });
       routeKeyRef.current = `${destination.lat},${destination.lng}`;
       (async () => {
         try {
@@ -89,10 +92,10 @@ function RiderMap({ rider, destination }) {
       riderRef.current = L.marker([rider.lat, rider.lng], {
         icon: L.divIcon({
           className: 'map-dot',
-          html: '<div style="width:14px;height:14px;border-radius:50%;background:#285A73;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>',
-          iconSize: [14, 14], iconAnchor: [7, 7],
+          html: '<div class="track-pin track-pin--rider"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 17.5 4 6l5 4 3-8 3 8 5-4-1.5 11.5a2 2 0 0 1-2 1.5h-9a2 2 0 0 1-2-1.5z"/></svg></div>',
+          iconSize: [36, 36], iconAnchor: [18, 18],
         }),
-      }).addTo(mapRef.current);
+      }).addTo(mapRef.current).bindTooltip('Your rider', { direction: 'top', offset: [0, -18] });
     }
   }, [destination.lat, destination.lng, rider.lat, rider.lng]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -104,24 +107,22 @@ function RiderMap({ rider, destination }) {
   }, []);
 
   return (
-    <div className="shop-tracking-map__canvaswrap">
-      <div ref={ref} className="shop-tracking-map__canvas" aria-label="Live rider position on map" />
-    </div>
+    <div ref={ref} className="track-map__canvas" role="application" aria-label="Live rider position on the map" />
   );
 }
 
 function Steps({ status }) {
   const active = stepFor(status);
   return (
-    <ol className="shop-track-steps" aria-label="Order progress">
+    <ol className="track-steps" aria-label="Order progress">
       {TRACK_STEPS.map((label, i) => {
         const done = i < active;
         const current = i === active;
         return (
-          <li key={label} className={`shop-track-step${done ? ' shop-track-step--done' : ''}${current ? ' shop-track-step--current' : ''}`}>
-            <span className="shop-track-step__node" aria-hidden="true">{done ? '✓' : i + 1}</span>
-            <span className="shop-track-step__label">{label}</span>
-            {i < TRACK_STEPS.length - 1 && <span className="shop-track-step__bar" aria-hidden="true" />}
+          <li key={label} className={`track-step${done ? ' track-step--done' : ''}${current ? ' track-step--current' : ''}`}>
+            <span className="track-step__node" aria-hidden="true">{done ? <Check size={13} strokeWidth={3} /> : i + 1}</span>
+            <span className="track-step__label">{label}</span>
+            {i < TRACK_STEPS.length - 1 && <span className="track-step__bar" aria-hidden="true" />}
           </li>
         );
       })}
@@ -140,6 +141,7 @@ export default function TrackerView() {
   const [tracking, setTracking] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [itemsOpen, setItemsOpen] = useState(true);
   const reqRef = useRef(0);
 
   const load = useCallback(() => {
@@ -240,88 +242,129 @@ export default function TrackerView() {
     );
   }
 
+  const delivered = shown.status === 'DELIVERED';
+  const eta = tracking?.eta_minutes;
+  const addr = addressFor(shown);
+  const addressLine = [addr?.line1, addr?.city, addr?.pincode].filter(Boolean).join(', ');
+  const itemCount = detail.lines.reduce((sum, l) => sum + Number(l.qty || 0), 0) || detail.lines.length;
+  const mapReady = tracking?.live && tracking.rider && tracking.location && tracking.destination;
+
   return (
-    <div className="shop-page">
-      <button type="button" className="shop-pdp__back" onClick={() => openTab('shop-orders', 'My orders', 'Package')}>
-        <ArrowLeft size={16} /> Back to orders
-      </button>
-      <h1 className="shop-h1" style={{ marginTop: 8 }}>Track order {shown.order_no}</h1>
-
-      <section className="shop-track-hero" aria-label="Delivery progress">
-        <Steps status={shown.status} />
-        <div className="shop-track-hero__eta">
-          <div className="shop-track-hero__etaLabel">
-            {shown.status === 'DELIVERED' ? 'DELIVERED' : 'ARRIVING IN'}
-          </div>
-          <div className="shop-track-hero__etaValue">
-            {shown.status === 'DELIVERED'
-              ? 'Delivered to your door'
-              : `${tracking?.eta_minutes ?? 10} minutes`}
-          </div>
-          <div className="shop-track-hero__orderNo">Order {shown.order_no}</div>
-        </div>
-      </section>
-
-      {tracking?.live && tracking.rider && (
-        <section className="shop-ocard-block" data-testid="tracking-live" style={{ marginTop: 14 }}>
-          <h3 className="shop-ocard-block__title">On the way</h3>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <span style={{ width: 42, height: 42, borderRadius: 999, flexShrink: 0, display: 'grid', placeItems: 'center', background: 'var(--shop-green-soft)', color: 'var(--shop-green-dark)' }}>
-              <Bike size={20} />
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 800 }}>{tracking.rider.name}</div>
-              <div style={{ fontSize: 11.5, color: 'var(--shop-ink-3)' }}>
-                {[tracking.rider.vehicle_type, tracking.rider.phone_masked].filter(Boolean).join(' · ')}
+    <div className="shop-page track-page">
+      <div className="track-frame">
+        {/* ══ map layer ═══════════════════════════════════════════════════ */}
+        <div className="track-map">
+          {mapReady ? (
+            <RiderMap rider={tracking.location} destination={tracking.destination} />
+          ) : (
+            <div className="track-map__empty" aria-hidden="true">
+              <div className="track-map__emptyPin"><MapPin size={44} strokeWidth={1.4} /></div>
+              <div className="track-map__emptyTitle">
+                {delivered ? 'Handed over' : tracking?.live ? 'Locating your rider…' : 'Your rider will appear here'}
+              </div>
+              <div className="track-map__emptySub">
+                {delivered
+                  ? 'Thanks for ordering with Zippzo.'
+                  : 'Live position lights up once the parcel is on its way.'}
               </div>
             </div>
-            {tracking.distance_km != null && (
-              <div style={{ fontSize: 11, color: 'var(--shop-ink-3)', textAlign: 'right' }}>{tracking.distance_km} km away</div>
+          )}
+        </div>
+
+        {/* ══ floating chrome on the map ═══════════════════════════════════ */}
+        <div className="track-top">
+          <button type="button" className="track-back" onClick={() => openTab('shop-orders', 'My orders', 'Package')}>
+            <ArrowLeft size={17} /> <span>My orders</span>
+          </button>
+          <div className="track-orderno" title={`Order ${shown.order_no}`}>#{shown.order_no}</div>
+        </div>
+
+        {/* ══ bottom sheet — the order, the rider, the code ═════════════════ */}
+        <section className="track-sheet" aria-label="Order details">
+          <div className="track-sheet__handle" aria-hidden="true" />
+
+          <div className="track-sheet__etaRow">
+            <div>
+              <div className="track-eyebrow">{delivered ? 'Completed' : 'Arriving in'}</div>
+              <div className={`track-eta${delivered ? ' track-eta--done' : ''}`}>
+                {delivered ? 'Delivered to your door' : eta != null ? `${eta} min` : '—'}
+              </div>
+              {!delivered && eta == null && (
+                <div className="track-etaNote">ETA appears once the rider shares a position.</div>
+              )}
+            </div>
+            <div className="track-etaSide">
+              <span className="track-cashChip">{shown.payment_method === 'COD' || shown.payment_method === 'COD_CASH' ? 'COD' : 'Prepaid'}</span>
+            </div>
+          </div>
+
+          <Steps status={shown.status} />
+
+          {/* rider strip — only while the parcel is moving */}
+          {tracking?.live && tracking.rider && (
+            <div className="track-rider" data-testid="tracking-live">
+              <span className="track-rider__avatar" aria-hidden="true">{String(tracking.rider.name || 'R').slice(0, 1).toUpperCase()}</span>
+              <span className="track-rider__who">
+                <span className="track-rider__name">{tracking.rider.name}</span>
+                <span className="track-rider__meta">{[tracking.rider.vehicle_type, tracking.rider.phone_masked].filter(Boolean).join(' · ')}</span>
+              </span>
+              {tracking.distance_km != null && (
+                <span className="track-rider__km">{tracking.distance_km} km<small> away</small></span>
+              )}
+              {tracking.stale && <span className="track-rider__stale" title="Rider position is older than 2 minutes">stale</span>}
+            </div>
+          )}
+
+          {/* delivery code — the doorstep handshake */}
+          {code && (
+            <div className="track-code" role="group" aria-label="Delivery code">
+              <KeyRound size={22} className="track-code__icon" aria-hidden="true" />
+              <div className="track-code__body">
+                <div className="track-code__label">
+                  {code.state === 'ready' ? 'Your delivery code'
+                    : code.state === 'used' ? 'Code used — order closed'
+                    : 'Waiting for the rider to ask'}
+                </div>
+                {code.code && <div className="track-code__value">{code.code}</div>}
+                <div className="track-code__hint">Share this with the rider at your door.</div>
+              </div>
+            </div>
+          )}
+
+          {/* collapsible order details */}
+          <div className="track-items">
+            <button type="button" className="track-items__toggle" aria-expanded={itemsOpen} onClick={() => setItemsOpen((v) => !v)}>
+              <span className="track-items__title">Order details</span>
+              <span className="track-items__sum">{itemCount} item{itemCount === 1 ? '' : 's'} · ₹{num(shown.grand_total).toFixed(2)}</span>
+              <ChevronDown size={18} className={`track-items__chev${itemsOpen ? ' track-items__chev--open' : ''}`} aria-hidden="true" />
+            </button>
+            {itemsOpen && (
+              <div className="track-items__body">
+                {detail.lines.length === 0 && <div className="track-items__loading">Order details loading…</div>}
+                {detail.lines.map(l => (
+                  <div key={l.line_id} className="track-items__row">
+                    <span><b>{l.qty}×</b> {skus[l.sku]?.name || 'Item'}</span>
+                    <span className="track-items__amt">₹{num(l.line_total).toFixed(2)}</span>
+                  </div>
+                ))}
+                <div className="track-items__row track-items__row--total">
+                  <span>Total{shown.payment_method === 'COD' || shown.payment_method === 'COD_CASH' ? ' (pay on delivery)' : ''}</span>
+                  <span className="track-items__amt">₹{num(shown.grand_total).toFixed(2)}</span>
+                </div>
+              </div>
             )}
           </div>
-          {tracking.location && tracking.destination && (
-            <RiderMap rider={tracking.location} destination={tracking.destination} />
-          )}
-        </section>
-      )}
 
-      {code && (
-        <div className="shop-dcode" style={{ marginTop: 14 }}>
-          <KeyRound size={26} style={{ flexShrink: 0 }} />
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>
-              {code.state === 'ready' ? 'Your delivery code'
-                : code.state === 'used' ? 'This code has been used'
-                : 'Waiting for the rider to ask for a code'}
+          {addressLine && (
+            <div className="track-addr">
+              <MapPin size={16} aria-hidden="true" />
+              <span>{addressLine}</span>
             </div>
-            {code.code && <div className="shop-dcode__code">{code.code}</div>}
-            <div className="shop-dcode__hint">Share this with the rider at your door.</div>
-          </div>
-        </div>
-      )}
+          )}
 
-      <section className="shop-ocard-block" style={{ marginTop: 14 }}>
-        <h3 className="shop-ocard-block__title">What you ordered</h3>
-        {detail.lines.length === 0 && <div style={{ color: 'var(--shop-ink-3)', fontSize: 13 }}>Order details loading…</div>}
-        {detail.lines.map(l => (
-          <div key={l.line_id} className="shop-ocard-row">
-            <span>{l.qty}× {skus[l.sku]?.name || 'Item'}</span>
-            <span className="shop-ocard-row__amt">₹{num(l.line_total).toFixed(2)}</span>
-          </div>
-        ))}
-        <div className="shop-ocard-row shop-ocard-row--total">
-          <span>Total</span><span className="shop-ocard-row__amt">₹{num(shown.grand_total).toFixed(2)}</span>
-        </div>
-      </section>
-
-      <section className="shop-ocard-block shop-ocard-addr" style={{ marginTop: 14 }}>
-        <MapPin size={17} />
-        <div style={{ fontSize: 13 }}>
-          {[addressFor(shown)?.line1, addressFor(shown)?.city, addressFor(shown)?.pincode].filter(Boolean).join(', ')}
-        </div>
-      </section>
-
-      {error && <div className="alert alert-error" role="alert" style={{ marginTop: 14 }}>{error}</div>}
+          {error && <div className="alert alert-error" role="alert" style={{ marginTop: 10 }}>{error}</div>}
+        </section>
+      </div>
     </div>
   );
 }
