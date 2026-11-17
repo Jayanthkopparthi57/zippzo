@@ -17,7 +17,7 @@ import { login, APP_ENTRIES, TEST_USERS } from './utils';
 
 async function api(page: Page, method: string, path: string, payload?: any) {
   return page.evaluate(async ([m, p, body]) => {
-    const token = window.localStorage.getItem('zippzo_jwt');
+    const token = window.findZippzoJwt();
     const res = await fetch(p, {
       method: m,
       headers: {

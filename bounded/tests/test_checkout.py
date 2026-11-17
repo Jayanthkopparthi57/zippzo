@@ -255,9 +255,9 @@ class CheckoutHappyPathTests(CheckoutBase):
 
         delivery_task = DeliveryTask.objects.get(order=order)
         self.assertEqual(rider.rider_id, delivery_task.rider_id)
-        self.assertEqual('OFFERED', delivery_task.status)
-        rider_event = OutboxEvent.objects.get(event_type='warehouse.delivery.offered')
-        self.assertEqual(str(rider_user.user_id), rider_event.payload_json['recipient_user_id'])
+        self.assertEqual('ACCEPTED', delivery_task.status)
+        rider_event = OutboxEvent.objects.get(event_type='delivery.rider_assigned')
+        self.assertEqual(str(rider_user.user_id), rider_event.payload_json['rider_user_id'])
         self.assertEqual(str(order.order_id), rider_event.payload_json['order_id'])
 
     def test_a_repeated_sku_becomes_one_line(self):

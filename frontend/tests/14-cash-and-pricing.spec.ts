@@ -19,7 +19,7 @@ import { login, selectDarkStore, TEST_USERS } from './utils';
 
 async function apiGet(page: Page, path: string): Promise<any> {
   return page.evaluate(async (p) => {
-    const token = window.localStorage.getItem('zippzo_jwt');
+    const token = window.findZippzoJwt();
     const res = await fetch(p, { headers: { Authorization: `Bearer ${token}` } });
     return { status: res.status, body: await res.json().catch(() => null) };
   }, path);

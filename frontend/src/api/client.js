@@ -8,6 +8,8 @@
 // would fail. The native build therefore passes VITE_API_BASE (see
 // `.env.native` and the `build:native` script) pointing at the reachable
 // Django host.
+import { APP_KEY } from '../apps/registry';
+
 const configuredBase = (typeof import.meta !== 'undefined' && import.meta?.env)
   ? import.meta.env.VITE_API_BASE
   : undefined;
@@ -30,18 +32,22 @@ export function liveEventsUrl() {
 
 let _authToken = null;
 
+// Each Zippzo app keeps its own localStorage bucket so a sign-in (or a
+// wrong-app refusal) in one tab can never wipe another app's session.
+const JWT_KEY = `zippzo_jwt:${APP_KEY}`;
+
 export function setAuthToken(token) {
   _authToken = token;
   if (token) {
-    localStorage.setItem('zippzo_jwt', token);
+    localStorage.setItem(JWT_KEY, token);
   } else {
-    localStorage.removeItem('zippzo_jwt');
+    localStorage.removeItem(JWT_KEY);
   }
 }
 
 export function getAuthToken() {
   if (_authToken) return _authToken;
-  return localStorage.getItem('zippzo_jwt');
+  return localStorage.getItem(JWT_KEY);
 }
 
 function getHeaders(extra = {}) {

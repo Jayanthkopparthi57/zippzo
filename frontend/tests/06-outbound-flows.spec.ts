@@ -20,7 +20,7 @@ const READY_STATUS = ['PACKED', 'LOADED', 'SORTED', 'PACKING'];
 const BATCH_OPEN = ['UPLOADED', 'ALLOCATING', 'ALLOCATED', 'IN_PROGRESS'];
 
 async function tokenOf(page: Page): Promise<string> {
-  const t = await page.evaluate(() => window.localStorage.getItem('zippzo_jwt') || '');
+  const t = await page.evaluate(() => window.findZippzoJwt() || '');
   expect(t, 'auth token in localStorage').not.toBe('');
   return t;
 }

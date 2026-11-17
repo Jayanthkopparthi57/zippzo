@@ -12,7 +12,7 @@ const LONG = { timeout: 180_000 };
 type Json = any;
 
 async function tokenOf(page: Page): Promise<string> {
-  const t = await page.evaluate(() => window.localStorage.getItem('zippzo_jwt') || '');
+  const t = await page.evaluate(() => window.findZippzoJwt() || '');
   expect(t, 'auth token in localStorage').not.toBe('');
   return t;
 }

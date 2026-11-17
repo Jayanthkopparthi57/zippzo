@@ -1,4 +1,4 @@
-﻿/* The dark-store admin panel: delivery areas, pricing levers, manpower, riders.
+/* The dark-store admin panel: delivery areas, pricing levers, manpower, riders.
  *
  * These are the quick-commerce controls a store manager actually uses:
  *  - publish a pincode the store will deliver to, see the coverage check agree,
@@ -14,7 +14,7 @@ import { login, loginShopper, TEST_USERS } from './utils';
 
 async function apiGet(page: Page, path: string): Promise<any> {
   return page.evaluate(async (p) => {
-    const token = window.localStorage.getItem('zippzo_jwt');
+    const token = window.findZippzoJwt();
     const res = await fetch(p, { headers: { Authorization: `Bearer ${token}` } });
     return { status: res.status, body: await res.json().catch(() => null) };
   }, path);
@@ -22,7 +22,7 @@ async function apiGet(page: Page, path: string): Promise<any> {
 
 async function apiSend(page: Page, path: string, method: string, body?: any): Promise<any> {
   return page.evaluate(async ({ p, m, b }) => {
-    const token = window.localStorage.getItem('zippzo_jwt');
+    const token = window.findZippzoJwt();
     const res = await fetch(p, {
       method: m,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

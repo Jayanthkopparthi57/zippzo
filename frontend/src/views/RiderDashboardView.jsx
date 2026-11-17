@@ -34,8 +34,9 @@ function withTimeout(p, ms = 45000) {
   ]);
 }
 
-// One job is in focus at a time; the rest wait in history.
-const ACTIVE_STATES = ['ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING'];
+// One job is in focus at a time; the rest wait in history. 'OFFERED' covers
+// the counter assignment path — the rider sees it as their job like any other.
+const ACTIVE_STATES = ['ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING', 'OFFERED'];
 const DONE_STATES = ['DELIVERED', 'FAILED', 'RETURNED'];
 
 const VEHICLES = [
@@ -45,6 +46,7 @@ const VEHICLES = [
 // What the rider's next move is, in the order the backend allows it.
 const JOURNEY = {
   ACCEPTED: { eyebrow: 'Pickup at the store', cta: "I'm at the store", to: 'AT_DS' },
+  OFFERED: { eyebrow: 'Pickup at the store', cta: "I'm at the store", to: 'AT_DS' },
   AT_DS: { eyebrow: 'The store handed it to you', cta: 'Pick up order', pickup: true },
   PICKED_UP: { eyebrow: 'On the way', cta: 'Start delivery', to: 'EN_ROUTE' },
   EN_ROUTE: { eyebrow: 'At the door', cta: "I've arrived", to: 'ARRIVED' },

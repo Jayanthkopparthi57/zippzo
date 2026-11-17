@@ -53,7 +53,7 @@ test.describe('Zippzo WMS — scan-first operations', () => {
   /** Grab a real bin identifier from the API so the scan is deterministic. */
   const firstBin = async (page) =>
     page.evaluate(async () => {
-      const token = localStorage.getItem('zippzo_jwt');
+      const token = findZippzoJwt();
       const r = await fetch('/api/network/locations/?location_type=BIN&page_size=1', {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -186,7 +186,7 @@ test.describe('Zippzo WMS — scan-first operations', () => {
     // Any label the pack bench printed must answer "what is in this tote and
     // where is it going" — not only the tote packed a moment ago.
     const tote: any = await page.evaluate(async () => {
-      const token = localStorage.getItem('zippzo_jwt');
+      const token = findZippzoJwt();
       const r = await fetch('/api/inventory/lpns/?page_size=200', {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -243,7 +243,7 @@ test.describe('Zippzo WMS — scan-first operations', () => {
     // AsnViewSet/AsnLineViewSet had no search_fields/filterset_fields, so
     // ?search= and ?asn= were ignored and every request returned the full list.
     const probe = await page.evaluate(async () => {
-      const token = localStorage.getItem('zippzo_jwt');
+      const token = findZippzoJwt();
       const get = async (u) => {
         const r = await fetch(u, { headers: { Authorization: `Bearer ${token}` } });
         const j = await r.json();

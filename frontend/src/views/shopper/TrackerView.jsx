@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import {
   fetchApi, unwrapList, describeError,
 } from '../../api/client';
@@ -23,55 +25,83 @@ const stepFor = (status) => {
   return 0;
 };
 
-const LEAFLET_CSS = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css';
-const LEAFLET_JS = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+const ROUTE_COLOR = '#285A73';
 
 function RiderMap({ rider, destination }) {
   const ref = React.useRef(null);
   const mapRef = React.useRef(null);
+  const routeRef = React.useRef(null);
+  const riderRef = React.useRef(null);
+  const routeKeyRef = React.useRef('');
 
   React.useEffect(() => {
-    let cancelled = false;
-    const ensureLeaflet = () => new Promise((resolve, reject) => {
-      if (window.L) return resolve();
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = LEAFLET_CSS;
-      document.head.appendChild(link);
-      const script = document.createElement('script');
-      script.src = LEAFLET_JS;
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('map failed to load'));
-      document.head.appendChild(script);
-    });
-    ensureLeaflet().then(() => {
-      if (cancelled || !ref.current) return;
-      const L = window.L;
-      if (!mapRef.current) {
-        const map = L.map(ref.current, { zoomControl: true, attributionControl: false, scrollWheelZoom: false });
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-        mapRef.current = map;
-        map.setView([rider.lat, rider.lng], 15);
-        L.marker([destination.lat, destination.lng], {
-          icon: L.divIcon({
-            className: 'map-dot',
-            html: '<div style="width:22px;height:22px;border-radius:50% 50% 50% 2px;background:#177a45;border:2px solid #fff;transform:rotate(-45deg)"></div>',
-            iconSize: [22, 22], iconAnchor: [11, 18],
-          }),
-        }).addTo(map);
-        L.marker([rider.lat, rider.lng], {
-          icon: L.divIcon({
-            className: 'map-dot',
-            html: '<div style="width:14px;height:14px;border-radius:50%;background:#177a45;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>',
-            iconSize: [14, 14], iconAnchor: [7, 7],
-          }),
-        }).addTo(map);
-      } else {
-        mapRef.current.setView([rider.lat, rider.lng]);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [rider.lat, rider.lng, destination.lat, destination.lng]);
+    if (!ref.current) return undefined;
+
+    // A different destination = rebuild the map (pin, frame, route all change).
+    const destKey = `${destination.lat},${destination.lng}`;
+    if (mapRef.current && routeKeyRef.current !== destKey) {
+      try { mapRef.current.remove(); } catch { /* gone */ }
+      mapRef.current = null;
+      routeRef.current = null;
+      riderRef.current = null;
+      routeKeyRef.current = destKey;
+    }
+
+    if (!mapRef.current) {
+      const map = L.map(ref.current, { zoomControl: true, attributionControl: false, scrollWheelZoom: false });
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+      mapRef.current = map;
+      map.setView([destination.lat, destination.lng], 14);
+      L.marker([destination.lat, destination.lng], {
+        icon: L.divIcon({
+          className: 'map-dot',
+          html: '<div style="width:22px;height:22px;border-radius:50% 50% 50% 2px;background:#285A73;border:2px solid #fff;transform:rotate(-45deg)"></div>',
+          iconSize: [22, 22], iconAnchor: [11, 18],
+        }),
+      }).addTo(map);
+      routeKeyRef.current = `${destination.lat},${destination.lng}`;
+      (async () => {
+        try {
+          const url = `https://router.project-osrm.org/route/v1/driving/${rider.lng},${rider.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
+          const r = await fetch(url);
+          const body = await r.json();
+          const route = body?.routes?.[0];
+          if (route) {
+            routeRef.current = L.polyline(route.geometry.coordinates.map(([lng, lat]) => [lat, lng]), {
+              color: ROUTE_COLOR, weight: 5, opacity: 0.95, lineCap: 'round',
+            }).addTo(map);
+            map.fitBounds(L.latLngBounds([[destination.lat, destination.lng], [rider.lat, rider.lng]]).pad(0.25));
+            return;
+          }
+          throw new Error('no route');
+        } catch {
+          routeRef.current = L.polyline([[rider.lat, rider.lng], [destination.lat, destination.lng]], {
+            color: ROUTE_COLOR, weight: 4, opacity: 0.75, dashArray: '4 8', lineCap: 'round',
+          }).addTo(map);
+        }
+      })();
+    }
+
+    // Rider position moves on every poll; update the peg, keep the map frame.
+    if (riderRef.current) {
+      riderRef.current.setLatLng([rider.lat, rider.lng]);
+    } else if (mapRef.current) {
+      riderRef.current = L.marker([rider.lat, rider.lng], {
+        icon: L.divIcon({
+          className: 'map-dot',
+          html: '<div style="width:14px;height:14px;border-radius:50%;background:#285A73;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>',
+          iconSize: [14, 14], iconAnchor: [7, 7],
+        }),
+      }).addTo(mapRef.current);
+    }
+  }, [destination.lat, destination.lng, rider.lat, rider.lng]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  React.useEffect(() => () => {
+    if (mapRef.current) {
+      try { mapRef.current.remove(); } catch { /* already gone */ }
+      mapRef.current = null;
+    }
+  }, []);
 
   return (
     <div className="shop-tracking-map__canvaswrap">

@@ -14,6 +14,8 @@ logged and the order stays in the pending queue, which the scheduler drains.
 import logging
 from decimal import Decimal
 
+from django.utils import timezone
+
 logger = logging.getLogger(__name__)
 
 #: Delivery states that mean a rider is already carrying (or is about to carry)
@@ -104,29 +106,22 @@ def auto_assign_after_confirmation(order, actor=None):
     if task is None:
         task = DeliveryTask.objects.create(
             order=order, site=site, rider=available_rider,
-            status='OFFERED', offer_count=1,
+            status='ACCEPTED', offer_count=1, accepted_at=timezone.now(),
+            offered_at=timezone.now(),
         )
     else:
+        now = timezone.now()
         task.rider = available_rider
-        task.status = 'OFFERED'
+        task.status = 'ACCEPTED'
         task.offer_count = (task.offer_count or 0) + 1
-        task.save(update_fields=['rider', 'status', 'offer_count'])
+        task.accepted_at = task.accepted_at or now
+        task.offered_at = task.offered_at or now
+        task.save(update_fields=['rider', 'status', 'offer_count', 'accepted_at', 'offered_at'])
 
     try:
-        enqueue_event(
-            aggregate_type='DeliveryTask',
-            aggregate_id=task.task_id,
-            event_type='warehouse.delivery.offered',
-            payload_json={
-                'recipient_user_id': str(available_rider.user_id),
-                'task_id': str(task.task_id),
-                'order_id': str(order.order_id),
-                'order_no': order.order_no,
-                'site_code': site.code,
-                'task_type': 'DELIVERY',
-            },
-        )
-    except Exception:  # noqa: BLE001 - notification must not undo the offer
+        from bounded.delivery.views import _notify_delivery_transition
+        _notify_delivery_transition('delivery.rider_assigned', task)
+    except Exception:  # noqa: BLE001 - assignment must not undo the booking
         logger.exception(
-            'Could not enqueue rider offer for order %s', order.order_no)
+            'Could not emit rider_assigned for order %s', order.order_no)
     return picker, task

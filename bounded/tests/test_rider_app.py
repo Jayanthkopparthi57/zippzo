@@ -483,7 +483,7 @@ class InAppNotificationTests(RiderAppBase):
         self.event(event_type='order.packed', payload={
             'order_id': str(order.order_id), 'order_no': order.order_no})
         Notification.objects.create(
-            user=str(self.rider.user_id), type='RIDER_JOB_OFFERED',
+            user=str(self.rider.user_id), type='RIDER_ASSIGNED',
             channel='IN_APP', idempotency_key='someone-elses',
             payload_json={'order_no': 'NOT-YOURS'})
 

@@ -103,7 +103,7 @@ test.describe('Guided scan-first picking', () => {
     await firstTask.locator('td').first().click();
 
     const bin = await page.evaluate(async () => {
-      const token = localStorage.getItem('zippzo_jwt');
+      const token = findZippzoJwt();
       const r = await fetch('/api/network/locations/?location_type=BIN&page_size=1', {
         headers: { Authorization: `Bearer ${token}` },
       });

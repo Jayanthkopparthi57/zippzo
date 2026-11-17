@@ -21,7 +21,7 @@ import { loginShopper, selectDarkStore, openTab } from './utils';
 
 async function api(page: Page, method: string, path: string, payload?: unknown) {
   return page.evaluate(async ([m, p, body]) => {
-    const token = window.localStorage.getItem('zippzo_jwt');
+    const token = window.findZippzoJwt();
     const res = await fetch(p, {
       method: m,
       headers: {

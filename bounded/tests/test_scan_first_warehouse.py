@@ -2459,7 +2459,7 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
 
         delivery_task_id = r_pack.data['delivery_task']['task_id']
         del_task = DeliveryTask.objects.get(task_id=delivery_task_id)
-        self.assertEqual(del_task.status, 'OFFERED')
+        self.assertEqual(del_task.status, 'ACCEPTED')
         self.assertEqual(del_task.staging_bin, 'STAGE-BLR-01')
 
         # ── Step 4: Rider accepts delivery task ───────────────────────────────

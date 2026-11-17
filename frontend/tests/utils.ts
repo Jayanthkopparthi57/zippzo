@@ -20,6 +20,30 @@ export const APP_ENTRIES = {
   rider: '/rider.html',
 };
 
+/** Each app keeps its own localStorage bucket, so nothing crosses tabs. */
+const NAMESPACED_APP_KEYS: Record<string, string> = {
+  '/index.html': 'wms',
+  '/operations-app.html': 'wms',
+  '/darkstore.html': 'darkstore',
+  '/shopper.html': 'shopper',
+  '/rider.html': 'rider',
+};
+
+export function appKeyForEntry(entry: string): string {
+  const path = entry.split('?')[0].split('#')[0];
+  return NAMESPACED_APP_KEYS[path] || 'wms';
+}
+
+/** Read whichever app's JWT is in this page's session storage. */
+export function findZippzoJwt(): string {
+  if (typeof window === 'undefined') return '';
+  for (const key of ['zippzo_jwt:wms', 'zippzo_jwt:darkstore', 'zippzo_jwt:shopper', 'zippzo_jwt:rider']) {
+    const value = window.localStorage.getItem(key);
+    if (value) return value;
+  }
+  return '';
+}
+
 /** Wait for a specific auth call and click the wizard's primary button. */
 async function submitStep(page: Page, endpoint: string) {
   const response = page.waitForResponse(
@@ -83,9 +107,10 @@ export async function login(
     throw new Error(`login as ${user.email} failed with HTTP ${response.status()}: ${JSON.stringify(body)}`);
   }
 
+  const jwtKey = `zippzo_jwt:${appKeyForEntry(entry)}`;
   await page.waitForFunction(
-    () => !!window.localStorage.getItem('zippzo_jwt'),
-    undefined,
+    (key: string) => !!window.localStorage.getItem(key),
+    jwtKey,
     { timeout: 60_000 },
   );
   await page.locator('input[type="email"]').waitFor({ state: 'hidden', timeout: 90_000 });
@@ -151,7 +176,7 @@ export async function selectDarkStore(page: Page, siteCode?: string): Promise<st
 
   const code = await page.evaluate(() => {
     try {
-      const raw = localStorage.getItem('zippzo_auth_facility');
+      const raw = localStorage.getItem('zippzo_auth_facility:darkstore');
       return raw ? JSON.parse(raw)?.code || '' : '';
     } catch {
       return '';

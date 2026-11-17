@@ -17,7 +17,7 @@ const uniqueNumeric = () => `${Date.now()}`.slice(-11);
 
 async function apiJson(page: Page, path: string) {
   return page.evaluate(async (p) => {
-    const token = localStorage.getItem('zippzo_jwt');
+    const token = findZippzoJwt();
     const res = await fetch(`/api${p}`, { headers: { Authorization: `Bearer ${token}` } });
     return { status: res.status, body: await res.json().catch(() => null) };
   }, path);
@@ -25,7 +25,7 @@ async function apiJson(page: Page, path: string) {
 
 async function apiDelete(page: Page, path: string) {
   return page.evaluate(async (p) => {
-    const token = localStorage.getItem('zippzo_jwt');
+    const token = findZippzoJwt();
     const res = await fetch(`/api${p}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },

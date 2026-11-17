@@ -200,9 +200,12 @@ def _record_order_status(order, new_status, actor, previous):
         return False
     order.status = new_status
     order.save(update_fields=['status'])
+    # `actor=None` is the no-human path (the auto-assign calls without an
+    # operator behind them). The UUID is nullable; 'SYSTEM' keeps the audit.
     OrderStatusHistory.objects.create(
         order=order, from_status=previous, to_status=new_status,
-        actor_type=actor.role, actor_id=str(actor.user_id))
+        actor_type=(actor.role if actor is not None else 'SYSTEM'),
+        actor_id=(str(actor.user_id) if getattr(actor, 'user_id', None) else None))
     return True
 
 
@@ -448,7 +451,7 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
         if online and profile.current_site_id is not None:
             # Going online is when waiting jobs at this store find a rider.
             from bounded.delivery.dispatch import assign_pending_at
-            assign_pending_at(profile.current_site)
+            assign_pending_at(profile.current_site, request.user)
         return Response(RiderProfileSerializer(profile).data)
 
     @action(detail=False, methods=['post'], url_path='me/location')

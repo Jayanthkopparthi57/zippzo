@@ -325,7 +325,7 @@ class EndToEndWorkflowTests(TestCase):
         # The rider is told where to collect; the customer is told it is on the
         # way and, finally, that it arrived.
         self.assertTrue(Notification.objects.filter(
-            type='RIDER_JOB_OFFERED', payload_json__order_no='ORD-E2E-1'
+            type='RIDER_ASSIGNED', payload_json__order_no='ORD-E2E-1'
         ).exists())
         self.assertTrue(Notification.objects.filter(
             type='ORDER_ON_THE_WAY', user=str(self.customer_user.user_id)

@@ -59,7 +59,7 @@ test.describe('Authentication & Navigation', () => {
     await page.click('button[type="submit"]');
     await expect(page.getByText('Wrong Zippzo app')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('wrong-app-open')).toBeVisible();
-    await page.waitForFunction(() => !window.localStorage.getItem('zippzo_jwt'));
+    await page.waitForFunction(() => !window.findZippzoJwt());
   });
 
   test.skip('invalid credentials shows error - skipped due to test env React render timing', async ({ page }) => {

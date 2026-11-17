@@ -444,7 +444,7 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
     # Capacity freed: the next waiting task at this store goes to whoever is
     # online with room for it.
     from bounded.delivery.dispatch import assign_pending_at
-    assign_pending_at(task.site)
+    assign_pending_at(task.site, actor)
 
     order.status = 'DELIVERED'
     order.delivered_at = now

@@ -3,14 +3,16 @@ import { Capacitor } from '@capacitor/core';
 import {
   fetchApi, postApi, setAuthToken, getAuthToken, describeError, liveEventsUrl, ApiError,
 } from '../api/client';
-import { APP, APPS } from '../apps/registry';
+import { APP, APPS, APP_KEY } from '../apps/registry';
 
 const AuthContext = createContext();
 
-const STORAGE_KEY_USER = 'zippzo_auth_user';
-const STORAGE_KEY_FACILITY = 'zippzo_auth_facility';
-const STORAGE_KEY_MODE = 'zippzo_auth_app_mode';
-const STORAGE_KEY_REFRESH = 'zippzo_refresh_token';
+// Namespaced per app — the same physical origin serves all four bundles, and
+// a shared key lets one app's logout/mismatch wipe every other app's session.
+const STORAGE_KEY_USER = `zippzo_auth_user:${APP_KEY}`;
+const STORAGE_KEY_FACILITY = `zippzo_auth_facility:${APP_KEY}`;
+const STORAGE_KEY_MODE = `zippzo_auth_app_mode:${APP_KEY}`;
+const STORAGE_KEY_REFRESH = `zippzo_refresh_token:${APP_KEY}`;
 
 function getLoginSurface() {
   const declaredAppSurface = typeof document !== 'undefined'
@@ -67,6 +69,15 @@ function splitSites(sites) {
     all_facilities: list,
   };
 }
+
+// One-time hygiene: drop the shared legacy keys so no app ever reads another
+// app's half-written session from before namespacing landed.
+(function dropLegacySharedAuthKeys() {
+  if (typeof localStorage === 'undefined') return;
+  for (const key of ['zippzo_jwt', 'zippzo_auth_user', 'zippzo_auth_facility', 'zippzo_auth_app_mode', 'zippzo_refresh_token']) {
+    try { localStorage.removeItem(key); } catch { /* storage may be unavailable */ }
+  }
+})();
 
 export function AuthProvider({ appKey = APP.key, children }) {
   const appMeta = APPS[appKey] || APP;

@@ -23,7 +23,7 @@ import { login, loginRider, selectDarkStore, APP_ENTRIES, TEST_USERS } from './u
 /** Read a JSON endpoint through the session already open on `page`. */
 async function apiGet(page: Page, path: string): Promise<any> {
   return page.evaluate(async (p) => {
-    const token = window.localStorage.getItem('zippzo_jwt');
+    const token = window.findZippzoJwt();
     const res = await fetch(p, { headers: { Authorization: `Bearer ${token}` } });
     return { status: res.status, body: await res.json().catch(() => null) };
   }, path);
@@ -32,7 +32,7 @@ async function apiGet(page: Page, path: string): Promise<any> {
 /** Write through the same session, for test setup only. */
 async function apiPost(page: Page, path: string, payload: any): Promise<any> {
   return page.evaluate(async ([p, body]) => {
-    const token = window.localStorage.getItem('zippzo_jwt');
+    const token = window.findZippzoJwt();
     const res = await fetch(p, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },

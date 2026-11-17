@@ -43,9 +43,10 @@ class PackError(Exception):
 PACKABLE_STATUSES = {'PICKED', 'RACK_DROPPED'}
 
 # Statuses an order can be in where a DeliveryTask must not be replaced or
-# duplicated. Once a rider has touched the task, re-packing is a dispute, not a
-# retry, so the pack endpoint refuses rather than rewinding it.
-TASK_IN_FLIGHT = {'ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED',
+# duplicated. Once a rider has physically taken the goods — or the task is
+# past the pickup checkpoint — re-packing is a dispute, not a retry. An
+# assignment handed out at checkout, not yet picked, is still packable.
+TASK_IN_FLIGHT = {'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED',
                   'POD_PENDING', 'DELIVERED'}
 
 
@@ -91,7 +92,8 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
     # succeeded but whose response was lost. Re-packing onto a live rider job
     # would move goods out from under them.
     existing = DeliveryTask.objects.select_for_update().filter(order=order).first()
-    if existing is not None and existing.status in TASK_IN_FLIGHT:
+    if existing is not None and (
+            existing.status in TASK_IN_FLIGHT or existing.pickup_at is not None):
         raise PackError(
             f'Order {order.order_no} already has a delivery task that is '
             f'{existing.status}. It cannot be re-packed.', status=409,
@@ -224,12 +226,6 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
         task.packed_at = task.packed_at or now
         task.save(update_fields=['bin', 'staging_bin', 'packed_at'])
 
-    # Assign an online rider at the store immediately: no accept handshake,
-    # no jobs sitting unclaimed. Nobody online → the task waits and the
-    # set_online sweep picks it up then.
-    from bounded.delivery.dispatch import auto_assign_task
-    auto_assign_task(task)
-
     previous_status = order.status
     order.status = 'PACKED'
     order.save(update_fields=['status'])
@@ -238,6 +234,12 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
         order=order, from_status=previous_status, to_status='PACKED',
         actor_type=actor.role, actor_id=str(actor.user_id),
     )
+
+    # Assign an online rider at the store immediately: no accept handshake,
+    # no jobs sitting unclaimed. Nobody online → the task waits and the
+    # set_online / delivery-completion sweep picks it up then.
+    from bounded.delivery.dispatch import auto_assign_task
+    auto_assign_task(task, actor)
 
     correlation_id = getattr(order, 'order_id', None)
     enqueue_event(

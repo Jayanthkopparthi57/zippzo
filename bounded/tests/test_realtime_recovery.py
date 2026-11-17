@@ -196,7 +196,7 @@ class RealtimeAndOfflineRecoveryTests(TestCase):
         sup_notifs = r_sup.data.get('results', r_sup.data)
         self.assertTrue(any(n['type'] == 'QC_EXCEPTION' for n in sup_notifs))
 
-        # 4. Rider reconnects: gets RIDER_JOB_OFFERED
+        # 4. Rider reconnects: gets RIDER_JOB_OFFERED (delivery_task.created fixture)
         self.client.force_authenticate(user=self.rider_user)
         r_rider = self.client.get(f'{API}/notifications/notifications/')
         self.assertEqual(r_rider.status_code, 200)
