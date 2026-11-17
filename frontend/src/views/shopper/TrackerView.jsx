@@ -10,6 +10,7 @@ import {
 import { useTabs } from '../../context/TabContext';
 import {
   MapPin, KeyRound, Package, ArrowLeft, ChevronDown, Check,
+  ArrowUp, ArrowUpLeft, ArrowUpRight, CornerUpLeft, CornerUpRight, RotateCcw, Flag,
 } from 'lucide-react';
 
 const LINES = '/orders/order-lines/';
@@ -27,12 +28,71 @@ const stepFor = (status) => {
 
 const ROUTE_COLOR = '#285A73';
 
-function RiderMap({ rider, destination }) {
+// ── turn-by-turn composed from OSRM maneuvers ─────────────────────────────
+// OSRM returns the maneuver enum + the road name, never the sentence; the
+// instruction is composed here. `modifier` ∈ straight|slight left|left|…
+const ROAD = (n) => (n ? ` onto ${n}` : '');
+
+function composeStep(step) {
+  const name = step.name || '';
+  const { type, modifier, exit } = step.maneuver || {};
+  switch (type) {
+    case 'depart': return name ? `Start on ${name}` : 'Start your route';
+    case 'arrive': {
+      if (modifier === 'left') return 'Arrive — door on the left';
+      if (modifier === 'right') return 'Arrive — door on the right';
+      return 'Arrive at your door';
+    }
+    case 'roundabout':
+    case 'rotary':
+      return `Roundabout — ${exit ? `take exit ${exit}` : 'stay in'}${ROAD(name)}`;
+    case 'merge': return `Merge${ROAD(name)}`;
+    case 'fork': return modifier ? `Keep ${modifier}${ROAD(name)}` : `Fork${ROAD(name)}`;
+    case 'on ramp': return `Take the ramp${ROAD(name)}`;
+    case 'off ramp': return `Exit${ROAD(name)}`;
+    case 'end of road': return modifier
+      ? `At the end of the road, turn ${modifier}${ROAD(name)}`
+      : `At the end of the road${ROAD(name)}`;
+    case 'new name':
+    case 'continue': return `Continue${ROAD(name)}`;
+    case 'notification': return name ? `Continue through ${name}` : 'Continue';
+    case 'turn': {
+      if (modifier === 'straight' || !modifier) return `Continue straight${ROAD(name)}`;
+      return `Turn ${modifier}${ROAD(name)}`;
+    }
+    default: return name ? `Continue${ROAD(name)}` : 'Continue on route';
+  }
+}
+
+const TURN_ICONS = {
+  straight: 'ArrowUp', 'slight left': 'ArrowUpLeft', left: 'CornerUpLeft', 'sharp left': 'CornerUpLeft',
+  'slight right': 'ArrowUpRight', right: 'CornerUpRight', 'sharp right': 'CornerUpRight', uturn: 'RotateCcw',
+};
+
+const ICONS = {
+  ArrowUp, ArrowUpLeft, ArrowUpRight, CornerUpLeft, CornerUpRight, RotateCcw, MapPin, Flag,
+};
+
+function stepIcon(step) {
+  const { type, modifier } = step.maneuver || {};
+  if (type === 'depart') return MapPin;
+  if (type === 'arrive') return Flag;
+  if (type === 'roundabout' || type === 'rotary') return RotateCcw;
+  return ICONS[TURN_ICONS[modifier]] || ArrowUp;
+}
+
+const fmtDist = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.max(10, Math.round(m / 10) * 10)} m`);
+
+function RiderMap({ rider, destination, onRoute }) {
   const ref = React.useRef(null);
   const mapRef = React.useRef(null);
   const routeRef = React.useRef(null);
   const riderRef = React.useRef(null);
+  // Re-fetch the route only when the rider crosses into a new ~110 m bucket —
+  // every poll would otherwise hammer the public OSRM demo server.
   const routeKeyRef = React.useRef('');
+  const onRouteRef = React.useRef(onRoute);
+  React.useEffect(() => { onRouteRef.current = onRoute; }, [onRoute]);
 
   React.useEffect(() => {
     if (!ref.current) return undefined;
@@ -63,24 +123,49 @@ function RiderMap({ rider, destination }) {
         }),
       }).addTo(map).bindTooltip('Your door', { direction: 'top', offset: [0, -22] });
       routeKeyRef.current = `${destination.lat},${destination.lng}`;
+    }
+
+    // Road route + turn-by-turn. Re-fetched only when the rider crosses into a
+    // new ~110 m bucket (or the destination changes) — the poll fires often.
+    const routeBucket = `${destination.lat.toFixed(3)},${destination.lng.toFixed(3)}|${rider.lat.toFixed(3)},${rider.lng.toFixed(3)}`;
+    if (mapRef.current && routeKeyRef.current !== routeBucket) {
+      routeKeyRef.current = routeBucket;
       (async () => {
+        const map = mapRef.current;
+        if (!map) return;
         try {
-          const url = `https://router.project-osrm.org/route/v1/driving/${rider.lng},${rider.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
+          const url = `https://router.project-osrm.org/route/v1/driving/${rider.lng},${rider.lat};${destination.lng},${destination.lat}?steps=true&overview=full&geometries=geojson`;
           const r = await fetch(url);
           const body = await r.json();
           const route = body?.routes?.[0];
-          if (route) {
-            routeRef.current = L.polyline(route.geometry.coordinates.map(([lng, lat]) => [lat, lng]), {
+          if (!route) throw new Error('no route');
+          const latLngs = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+          if (routeRef.current) routeRef.current.setLatLngs(latLngs);
+          else {
+            routeRef.current = L.polyline(latLngs, {
               color: ROUTE_COLOR, weight: 5, opacity: 0.95, lineCap: 'round',
             }).addTo(map);
             map.fitBounds(L.latLngBounds([[destination.lat, destination.lng], [rider.lat, rider.lng]]).pad(0.25));
-            return;
           }
-          throw new Error('no route');
+          const rawSteps = (route.legs || []).flatMap((leg) => leg.steps || []);
+          onRouteRef.current?.({
+            mins: route.duration / 60,
+            km: route.distance / 1000,
+            steps: rawSteps.map((s) => ({
+              instruction: composeStep(s),
+              distance: s.distance || 0,
+              maneuver: s.maneuver || {},
+            })),
+          });
         } catch {
-          routeRef.current = L.polyline([[rider.lat, rider.lng], [destination.lat, destination.lng]], {
+          // Straight dashed line when the router is unreachable — still honest
+          // about the straight-line gap, just not turn-by-turn.
+          const latLngs = [[rider.lat, rider.lng], [destination.lat, destination.lng]];
+          if (routeRef.current) routeRef.current.setLatLngs(latLngs);
+          else routeRef.current = L.polyline(latLngs, {
             color: ROUTE_COLOR, weight: 4, opacity: 0.75, dashArray: '4 8', lineCap: 'round',
           }).addTo(map);
+          onRouteRef.current?.(null);
         }
       })();
     }
@@ -142,6 +227,8 @@ export default function TrackerView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [itemsOpen, setItemsOpen] = useState(true);
+  const [nav, setNav] = useState(null);
+  const [navOpen, setNavOpen] = useState(true);
   const reqRef = useRef(0);
 
   const load = useCallback(() => {
@@ -243,7 +330,9 @@ export default function TrackerView() {
   }
 
   const delivered = shown.status === 'DELIVERED';
-  const eta = tracking?.eta_minutes;
+  // Road-based ETA from the OSRM route when we have one; backend haversine
+  // otherwise. `nav` is set by RiderMap's route pass on every ~110 m bucket.
+  const eta = nav?.mins != null ? Math.max(1, Math.round(nav.mins)) : tracking?.eta_minutes;
   const addr = addressFor(shown);
   const addressLine = [addr?.line1, addr?.city, addr?.pincode].filter(Boolean).join(', ');
   const itemCount = detail.lines.reduce((sum, l) => sum + Number(l.qty || 0), 0) || detail.lines.length;
@@ -255,7 +344,7 @@ export default function TrackerView() {
         {/* ══ map layer ═══════════════════════════════════════════════════ */}
         <div className="track-map">
           {mapReady ? (
-            <RiderMap rider={tracking.location} destination={tracking.destination} />
+            <RiderMap rider={tracking.location} destination={tracking.destination} onRoute={setNav} />
           ) : (
             <div className="track-map__empty" aria-hidden="true">
               <div className="track-map__emptyPin"><MapPin size={44} strokeWidth={1.4} /></div>
@@ -308,11 +397,42 @@ export default function TrackerView() {
                 <span className="track-rider__name">{tracking.rider.name}</span>
                 <span className="track-rider__meta">{[tracking.rider.vehicle_type, tracking.rider.phone_masked].filter(Boolean).join(' · ')}</span>
               </span>
-              {tracking.distance_km != null && (
-                <span className="track-rider__km">{tracking.distance_km} km<small> away</small></span>
+              {(nav?.km != null || tracking.distance_km != null) && (
+                <span className="track-rider__km">{(nav?.km ?? Number(tracking.distance_km)).toFixed(1)} km<small> away</small></span>
               )}
               {tracking.stale && <span className="track-rider__stale" title="Rider position is older than 2 minutes">stale</span>}
             </div>
+          )}
+
+          {/* turn-by-turn — the rider's route to your door, updated on the poll */}
+          {tracking?.live && nav?.steps?.length > 0 && (
+            <section className="track-nav" aria-label="Directions to your door">
+              <button type="button" className="track-nav__next" aria-expanded={navOpen} onClick={() => setNavOpen((v) => !v)}>
+                {(() => {
+                  const NextIcon = stepIcon(nav.steps[0]);
+                  return <NextIcon size={22} className="track-nav__icon" aria-hidden="true" />;
+                })()}
+                <span className="track-nav__nextText">
+                  <span className="track-nav__eyebrow">Next · {fmtDist(nav.steps[0].distance)}{nav?.km != null ? ` of ${nav.km.toFixed(1)} km` : ''}</span>
+                  <span className="track-nav__instr">{nav.steps[0].instruction}</span>
+                </span>
+                <ChevronDown size={18} className={`track-nav__chev${navOpen ? ' track-nav__chev--open' : ''}`} aria-hidden="true" />
+              </button>
+              {navOpen && (
+                <ol className="track-nav__list">
+                  {nav.steps.map((s, i) => {
+                    const I = stepIcon(s);
+                    return (
+                      <li key={i} className="track-nav__step">
+                        <I size={15} className="track-nav__stepIcon" aria-hidden="true" />
+                        <span className="track-nav__stepText">{s.instruction}</span>
+                        {s.distance >= 10 && <span className="track-nav__stepDist">{fmtDist(s.distance)}</span>}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </section>
           )}
 
           {/* delivery code — the doorstep handshake */}
