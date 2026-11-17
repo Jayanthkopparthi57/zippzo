@@ -211,7 +211,7 @@ export default function TrackerView() {
     if (!openId) return undefined;
     const liveOrder = orders.find((o) => o.order_id === openId);
     if (!liveOrder || !AWAITING_CODE.has(liveOrder.status)) return undefined;
-    const id = setInterval(() => { void openDetail(openId); }, 15000);
+    const id = setInterval(() => { void openDetail(openId); }, 8000);
     return () => clearInterval(id);
   }, [openId, orders, openDetail]);
 

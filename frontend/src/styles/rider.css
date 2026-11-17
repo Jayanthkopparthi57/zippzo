@@ -338,6 +338,29 @@ html[data-app="rider"] body,
   line-height: 1.32; margin-top: 1px;
 }
 
+.rv3-navigate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--rv3-green);
+  color: #fff;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-weight: 700;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rv3-navigate-btn:active { transform: scale(0.96); }
+.rv3-fab--nav {
+  background: var(--rv3-green-deep);
+  color: #fff;
+}
+
 .rv3-amount-row {
   display: flex;
   gap: 12px;

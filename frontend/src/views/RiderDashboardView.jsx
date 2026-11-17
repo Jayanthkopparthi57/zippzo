@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useAuth } from '../context/AuthContext';
@@ -6,7 +6,7 @@ import {
   fetchApi, postApi, unwrapList, describeError
 } from '../api/client';
 import {
-  Bike, Bell, Package, MapPin, Clock, Navigation,
+  Bike, Bell, Package, MapPin, Clock, Navigation, Navigation2,
   Wallet, ScanLine, History, Home, LogOut
 } from 'lucide-react';
 import StoreScanTab from './rider/StoreScanTab';
@@ -268,10 +268,21 @@ export default function RiderDashboardView() {
   const mapRef = useRef(null);
   const mapEl = useRef(null);
   const layerRef = useRef({});
+  const [mapMounted, setMapMounted] = useState(0);
+
+  // The ref callback fires only once the div actually exists in the tree — the
+  // tab renders it in the same commit that resolves the profile, so any effect
+  // keyed on the profile can run before the ref fires and skip creating the
+  // map. Ticking state here re-runs the layout effect below at the right time.
+  const attachMap = useCallback((el) => {
+    mapEl.current = el;
+    if (el) setMapMounted((t) => t + 1);
+  }, []);
 
   // Destroy/recreate the map on tab change or when the job changes; the rider
   // moves while a job is open, but the map keeps its frame until the next job.
-  useEffect(() => {
+  // useLayoutEffect: refs are guaranteed attached by then, unlike passive effects.
+  useLayoutEffect(() => {
     if (tab !== 'home') return undefined;
     if (!mapEl.current || mapRef.current) return undefined;
 
@@ -327,7 +338,7 @@ export default function RiderDashboardView() {
         layerRef.current = {};
       }
     };
-  }, [tab, current?.task_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, current?.task_id, profile?.last_lat, profile?.last_lng, profile?.current_site_geo, mapMounted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live routing: once the map is up, ask the routing engine for the driving
   // line to the customer (falls back to the store while that's the trip).
@@ -380,6 +391,16 @@ export default function RiderDashboardView() {
     if (profile?.last_lat && profile?.last_lng) {
       map.setView([Number(profile.last_lat), Number(profile.last_lng)], 16);
     }
+  };
+
+  // Hand the route off to Google Maps turn-by-turn with the shopper's door
+  // pinned as the destination. Origin stays empty so Maps uses this device.
+  const openNavigation = () => {
+    const dest = current?.geo_lat && current?.geo_lng
+      ? `${current.geo_lat},${current.geo_lng}` : (current?.delivery_address || '');
+    if (!dest) return;
+    const url = `https://www.google.com/maps/dir/?api=1&origin=&destination=${encodeURIComponent(dest)}&travelmode=driving`;
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const routeToStore = () => {
@@ -477,7 +498,7 @@ export default function RiderDashboardView() {
       {/* ── map base (home only) ── */}
       {tab === 'home' && (
         <div className="rv3-map-wrap">
-          <div ref={mapEl} className="rv3-map" />
+          <div ref={attachMap} className="rv3-map" />
           {!(profile?.last_lat && profile?.last_lng)
             && !profile?.current_site_geo && !current?.geo_lat && (
             <div className="rv3-map-fallback">
@@ -534,6 +555,12 @@ export default function RiderDashboardView() {
               <Navigation size={21} strokeWidth={2} />
             </button>
           )}
+          {current && (current.geo_lat || current.delivery_address) && (
+            <button className="rv3-fab rv3-fab--nav" onClick={openNavigation}
+                    aria-label="Navigate to the customer" title="Navigate to the customer">
+              <Navigation2 size={21} strokeWidth={2} />
+            </button>
+          )}
           <button className="rv3-fab" onClick={recenter} aria-label="Re-center" title="Re-center">
             <MapPin size={20} strokeWidth={2} />
           </button>
@@ -559,10 +586,16 @@ export default function RiderDashboardView() {
 
               <div className="rv3-meta-row">
                 <div className="rv3-meta-icon"><MapPin size={18} /></div>
-                <div style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   <div className="rv3-meta-label">Deliver to</div>
                   <div className="rv3-meta-value">{current.delivery_address || 'Address on file'}</div>
                 </div>
+                {(current.geo_lat || current.delivery_address) && (
+                  <button className="rv3-navigate-btn" onClick={openNavigation}
+                          aria-label="Navigate to the customer" title="Navigate to the customer">
+                    <Navigation2 size={16} strokeWidth={2} /> Navigate
+                  </button>
+                )}
               </div>
 
               <div className="rv3-amount-row">
