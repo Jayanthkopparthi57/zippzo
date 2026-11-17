@@ -1,7 +1,11 @@
+import { APP_KEY } from '../../apps/registry';
+
 const configuredApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 export const API_BASE = configuredApiUrl
   ? (configuredApiUrl.endsWith('/api') ? configuredApiUrl : `${configuredApiUrl}/api`)
   : '/api';
+
+const JWT_KEY = `zippzo_jwt:${APP_KEY}`;
 
 async function handleResponse(res) {
   if (res.ok) {
@@ -22,10 +26,12 @@ async function handleResponse(res) {
 }
 
 function getAuthHeaders() {
-  // The shared AuthContext stores the session JWT under `zippzo_jwt` and the
-  // API expects a Bearer token. Read that key so the restored console screens
-  // authenticate with the same session as the rest of the product.
-  const token = localStorage.getItem('zippzo_jwt');
+  // The shared AuthContext stores the session JWT under `zippzo_jwt:<app>`
+  // (per-app namespacing so two consoles in one tab never share a session).
+  // The legacy shared `zippzo_jwt` key is deleted on app boot, which used to
+  // leave this client unable to authenticate at all — every screen that went
+  // through it silently failed with 403.
+  const token = localStorage.getItem(JWT_KEY);
   const headers = { 'Content-Type': 'application/json' };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
