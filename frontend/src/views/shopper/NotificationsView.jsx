@@ -90,6 +90,8 @@ export default function NotificationsView() {
       setRows(prev => prev.map(r => r.notification_id === n.notification_id
         ? { ...r, read_at: new Date().toISOString() } : r));
       setUnread(u => Math.max(0, u - 1));
+      // Tell the shell to re-read the unread badge; it only listens for this.
+      window.dispatchEvent(new CustomEvent('zippzo:live-event'));
     } catch (err) {
       setError(describeError(err));
     }
@@ -101,6 +103,7 @@ export default function NotificationsView() {
     try {
       await postApi(`${NOTIFICATIONS}mark_all_read/`, {});
       await load(onlyUnread);
+      window.dispatchEvent(new CustomEvent('zippzo:live-event'));
     } catch (err) {
       setError(describeError(err));
     } finally {
@@ -123,6 +126,7 @@ export default function NotificationsView() {
       await postApi(`${NOTIFICATIONS}clear_all/`, {});
       setRows([]);
       setUnread(0);
+      window.dispatchEvent(new CustomEvent('zippzo:live-event'));
     } catch (err) {
       setError(describeError(err));
     } finally {
