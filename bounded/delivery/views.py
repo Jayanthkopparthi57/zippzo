@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 from datetime import timedelta
 
 from django.db import transaction
@@ -78,52 +78,6 @@ def _owned_task(user, task):
 def _my_profile(user):
     return RiderProfile.objects.select_related('current_site').filter(
         user_id=user.user_id).first()
-
-
-def _rider_qr(profile, create=False):
-    """The rider's currently valid scan code.
-
-    Codes are one-time: each successful scan rotates the row to a fresh code,
-    so the image shown to the rider changes after every use. The row's
-    ``data`` keeps the rider link; ``code`` is the token that must match.
-    """
-    qr = QRCode.objects.filter(data__rider_id=str(profile.rider_id)).order_by('-created_at').first()
-    if qr is None and create:
-        site = profile.current_site
-        qr = QRCode.objects.create(
-            code=f'RIDER:{profile.rider_id}',
-            qr_type='USER',
-            data={
-                'kind': 'rider',
-                'rider_id': str(profile.rider_id),
-                'user_id': str(profile.user_id),
-                'name': profile.name,
-                'site': site.code if site else '',
-            },
-        )
-    return qr
-
-
-def _rotate_rider_qr(qr, profile=None):
-    if qr is None:
-        if profile is None:
-            return None
-        site = profile.current_site
-        return QRCode.objects.create(
-            code=f'RIDER:{uuid.uuid4()}',
-            qr_type='USER',
-            data={
-                'kind': 'rider',
-                'rider_id': str(profile.rider_id),
-                'user_id': str(profile.user_id),
-                'name': profile.name,
-                'site': site.code if site else '',
-            },
-        )
-    qr.code = f'RIDER:{uuid.uuid4()}'
-    qr.scan_count = (qr.scan_count or 0) + 1
-    qr.save(update_fields=['code', 'scan_count'])
-    return qr
 
 
 def _delivery_queryset_for(user, qs, rider_lookup, site_lookup):
@@ -223,7 +177,7 @@ ORDER_STEP_WINDOWS = {
 # here: they move stock and money and have their own guarded endpoints.
 #
 # EN_ROUTE only opens once the store has physically handed the tote over. The
-# rider's own phone cannot create the handoff — it belongs to the counter
+# rider's own phone cannot create the handoff â€” it belongs to the counter
 # screen, where the picker scans the tote off the staging slot. Letting a rider
 # advance into EN_ROUTE straight from AT_DS meant they could "collect" totes
 # nobody had packed or handed over.
@@ -396,7 +350,7 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
         Self-bootstrap stays the rider's own path; this exists so the store
         can register an employee and hand them a QR without them tapping
         through first-run setup. The profile is pre-pinned to the store but
-        starts offline — the rider still activates by scanning the QR.
+        starts offline â€” the rider still activates by scanning the QR.
         """
         from bounded.iam.models import User
         from bounded.network.models import Site
@@ -425,14 +379,6 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
         profile = serializer.save(current_site=site, is_online=False)
         return Response({
             'profile': RiderProfileSerializer(profile).data,
-            'qr': {
-                'code': f'RIDER:{profile.rider_id}',
-                'payload': f'zippzo:rider:{profile.rider_id}',
-            },
-            'store_qr': {
-                'code': f'SITE:{site.code}' if site else None,
-                'payload': f'zippzo:site:{site.code}' if site else None,
-            },
         }, status=201)
 
     @action(detail=True, methods=['post'])
@@ -490,43 +436,6 @@ class RiderProfileViewSet(viewsets.ModelViewSet):
             return Response({'has_profile': False})
         return Response({'has_profile': True,
                          **RiderProfileSerializer(profile).data})
-
-    @action(detail=False, methods=['get'], url_path='me/qr')
-    def me_qr(self, request):
-        """Current handoff QR for this rider.
-
-        One-time codes: every successful counter scan at the handoff (the
-        POST assign-by-rider path) rotates the row to a fresh code
-        immediately. The DS counter scans the rider's QR on every delivery;
-        the rider's app shows whatever the current code is and lets the app
-        auto-refresh it.
-        """
-        profile = _my_profile(request.user)
-        if profile is None:
-            return Response(
-                {'error': 'This account has no rider profile yet.'}, status=404)
-
-        site = profile.current_site
-        data = {
-            'kind': 'rider',
-            'rider_id': str(profile.rider_id),
-            'user_id': str(request.user.user_id),
-            'name': profile.name,
-            'site': site.code if site else '',
-        }
-        qr = _rider_qr(profile, create=True)
-        if qr.data != data:
-            qr.data = data
-            qr.save(update_fields=['data'])
-        return Response({
-            'code': qr.code,
-            'payload': qr.code,
-            'name': profile.name,
-            'site': site.code if site else None,
-            'is_online': profile.is_online,
-            'scan_count': qr.scan_count,
-        })
-
 
     @action(detail=False, methods=['get'], url_path='me/summary')
     def me_summary(self, request):
@@ -767,7 +676,7 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='toggle-cash-collected')
     def toggle_cash_collected(self, request, pk=None):
         """Mark/unmark whether the rider handed this job's COD cash in at the
-        counter. Store operators only — riders can flag a job delivered, but
+        counter. Store operators only â€” riders can flag a job delivered, but
         the counter is the one that settles the cash."""
         from django.utils import timezone
 
@@ -1058,114 +967,6 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
             'payment_status': order.payment_status,
             'attempt_status': attempt.status,
             'amount': str(attempt.amount),
-        })
-
-    @action(detail=False, methods=['post'], url_path='assign-by-rider')
-    @transaction.atomic
-    def assign_by_rider(self, request):
-        """Hand a staged job to a rider by scanning their personal QR.
-
-        The counter scans the rider's code (GET /rider-profiles/me/qr/)
-        instead of hunting them in a dropdown: the physical scan at the
-        handoff counter IS the rider's consent, so the task moves straight
-        to ACCEPTED — the state the rider's own accept would reach — and the
-        order records RIDER_ASSIGNED. Fencing rides on get_queryset, so an
-        operator can only assign tasks at their own stores and riders are
-        excluded outright: their path is accept/decline, which enforces the
-        online rule this endpoint deliberately does not.
-        """
-        raw = str(request.data.get('qr_code') or request.data.get('qr')
-                  or '').strip()
-        if not raw:
-            return Response({'error': 'qr_code is required.'}, status=400)
-
-        # Resolve the scan to a rider. Current codes are one-time tokens
-        # (RIDER:<token>); the legacy stable form was RIDER:<rider_id> and the
-        # app payload is zippzo:rider:<rider_id>. Try the exact row first.
-        payload = raw
-        lowered = payload.lower()
-        if lowered.startswith('zippzo:rider:'):
-            payload = payload[len('zippzo:rider:'):]
-        elif lowered.startswith('rider:'):
-            payload = payload[len('rider:'):]
-        payload = payload.strip()
-        qr = QRCode.objects.filter(code=raw).first()
-        if qr is None and payload != raw:
-            qr = QRCode.objects.filter(code=f'RIDER:{payload}').first()
-        if qr is not None:
-            rider_id = str((qr.data or {}).get('rider_id') or '')
-        else:
-            rider_id = payload
-        try:
-            rider_uuid = uuid.UUID(rider_id)
-        except ValueError:
-            return Response(
-                {'error': f'Not a rider QR code ({raw[:40]}).'}, status=404)
-        profile = RiderProfile.objects.filter(rider_id=rider_uuid).first()
-        if profile is None:
-            return Response(
-                {'error': 'No rider profile matches this QR code.'},
-                status=404)
-        if qr is None:
-            qr = _rider_qr(profile)
-
-        if RiderProfile.objects.filter(user_id=request.user.user_id).exists():
-            return Response(
-                {'error': 'Riders take jobs from their own console (Accept), '
-                          'not by scanning at the counter.'},
-                status=403)
-
-        # The scan is counted and rotated only once it actually hands a job
-        # over, below. A rejected scan never burns the rider's QR.
-
-        task_id = request.data.get('task_id')
-        if not task_id:
-            return Response({'error': 'task_id is required.'}, status=400)
-        task = self.get_queryset().filter(task_id=task_id).first()
-        if task is None:
-            return Response(
-                {'error': 'Delivery task not found at your store.'},
-                status=404)
-
-        if task.rider_id == profile.rider_id:
-            next_qr = _rotate_rider_qr(qr, profile)
-            return Response({
-                'rider': {'rider_id': str(profile.rider_id),
-                          'name': profile.name},
-                'assigned': [str(task.task_id)],
-                'already_assigned': True,
-                'qr_rotated': True,
-                'next_qr': next_qr.code if next_qr else None,
-            })
-        if task.rider_id:
-            return Response(
-                {'error': 'This delivery task is already assigned to another '
-                          'rider.'}, status=409)
-        if task.status not in {'UNASSIGNED', 'OFFERED'}:
-            return Response(
-                {'error': f'Task is {task.status}; it cannot be assigned.'},
-                status=409)
-
-        now = timezone.now()
-        task.rider = profile
-        task.status = 'ACCEPTED'
-        task.accepted_at = task.accepted_at or now
-        task.offered_at = task.offered_at or now
-        task.save(update_fields=['rider', 'status', 'accepted_at',
-                                 'offered_at'])
-        previous = task.order.status
-        if _record_order_status(task.order, 'RIDER_ASSIGNED', request.user,
-                                previous):
-            _notify_delivery_transition('delivery.rider_assigned', task)
-        next_qr = _rotate_rider_qr(qr, profile)
-
-        return Response({
-            'rider': {'rider_id': str(profile.rider_id),
-                      'name': profile.name},
-            'assigned': [str(task.task_id)],
-            'already_assigned': False,
-            'qr_rotated': True,
-            'next_qr': next_qr.code if next_qr else None,
         })
 
 

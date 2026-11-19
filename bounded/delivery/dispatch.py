@@ -3,7 +3,8 @@
 A delivery task is born inside the pack transaction. Rather than wait for a
 rider to claim it, the first online rider at the store with capacity is
 assigned to it the moment the task exists — the same state the rider's own
-Accept, or the counter's assign-by-rider scan, would reach (ACCEPTED).
+The checkout's auto-assign after confirmation (or the rider's own accept in
+the app, which goes through the same door) reaches ACCEPTED.
 
 If nobody is online at that moment, the task waits and the sweep runs again
 whenever a rider flips online or a delivery closes (the freed capacity is

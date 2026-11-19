@@ -660,21 +660,6 @@ export const deliveryPod = (taskId, { otp, codAmount } = {}) =>
   });
 
 /**
- * Hand a staged, unassigned job to a rider by scanning their personal QR.
- *
- * The scan at the counter is the rider's consent: the server moves the task
- * straight to ACCEPTED, the same state the rider's own Accept reaches. It does
- * not require the rider to be online — being physically present at the counter
- * is stronger than a flag — and it refuses anyone who already has a rider
- * profile (their path is the console) and any task not at the caller's store.
- */
-export const assignRiderQr = (taskId, qrCode) =>
-  postApi('/delivery/delivery-tasks/assign-by-rider/', {
-    task_id: taskId,
-    qr_code: qrCode,
-  });
-
-/**
  * Order ids belonging to a site.
  *
  * `ReturnOrder` has no site column and `ReturnOrderViewSet` only exposes

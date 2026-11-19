@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Check, RefreshCw, UserPlus, Users2, X } from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useDarkStore, useAsyncData, asList } from './useDarkStore';
@@ -148,7 +147,6 @@ function Register({ site, siteId, storeCode }) {
         role_at_site: form.role_at_site,
       });
       let profile = null;
-      let riderQr = null;
       if (form.role === 'RIDER') {
         const bootstrap = await postApi('/delivery/rider-profiles/admin-bootstrap/', {
           user: user.user_id,
@@ -160,7 +158,6 @@ function Register({ site, siteId, storeCode }) {
           kyc_status: 'VERIFIED',
         });
         profile = bootstrap.profile;
-        riderQr = bootstrap.qr;
       }
       if (form.amount) {
         const today = new Date().toISOString().slice(0, 10);
@@ -182,7 +179,7 @@ function Register({ site, siteId, storeCode }) {
           });
         }
       }
-      setCreated({ user, profile, riderQr });
+      setCreated({ user, profile });
       setForm((current) => ({ ...current, email: '', password: '', full_name: '', phone: '', amount: '', vehicle_number: '', employee: '' }));
       await reload({ quiet: true });
       if (!notice) setNotice({ type: 'ok', message: `${user.full_name} registered at ${storeCode}.` });
@@ -202,7 +199,7 @@ function Register({ site, siteId, storeCode }) {
             <span className="screen-count-tag">{rows.length} employees</span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-            Create staff for <StoreBadge />, hand riders their personal QR, and set their pay here.
+            Create staff for <StoreBadge />, set their pay — riders are stamped onto orders automatically at checkout.
           </div>
         </div>
         <div className="screen-actions">
@@ -310,15 +307,6 @@ function Register({ site, siteId, storeCode }) {
           {created && (
             <div style={{ marginTop: 14, border: '1px solid var(--border-subtle)', borderRadius: 10, padding: 12 }}>
               <strong>{created.user.full_name}</strong> · {created.user.email}
-              {created.riderQr && (
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 10 }}>
-                  <QRCodeSVG value={created.riderQr.payload} size={112} />
-                  <div>
-                    <div className="mono-num">{created.riderQr.code}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Hand this to the rider. They activate in the app by scanning the store QR.</div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
           </form>
@@ -330,7 +318,7 @@ function Register({ site, siteId, storeCode }) {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Employee</th><th>Role</th><th>Active</th><th>FIFO queue</th><th>Pay</th><th>Rider QR</th><th>Action</th>
+              <th>Employee</th><th>Role</th><th>Active</th><th>FIFO queue</th><th>Pay</th><th>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -390,10 +378,9 @@ function Register({ site, siteId, storeCode }) {
                     })()}
                   </td>
 
-                  <td>{rider ? <QRCodeSVG value={`zippzo:rider:${rider.rider_id}`} size={52} /> : '—'}</td>
                   <td>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                      {needsWarehouseOtp ? 'Use shared daily OTP' : accountRole === 'RIDER' ? 'Rider QR activation' : 'No OTP (admin)'}
+                      {needsWarehouseOtp ? 'Use shared daily OTP' : accountRole === 'RIDER' ? 'Activates by scanning the store QR' : 'No OTP (admin)'}
                     </span>
                   </td>
                 </tr>

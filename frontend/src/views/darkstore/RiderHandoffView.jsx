@@ -1,13 +1,12 @@
 ﻿import React, { useMemo, useState } from 'react';
 import {
-  Bike, Check, AlertTriangle, MapPin, RefreshCw, KeyRound, X, QrCode,
+  Bike, Check, AlertTriangle, MapPin, RefreshCw, KeyRound, X,
 } from 'lucide-react';
 import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import {
   useDarkStore, useAsyncData, deliveryTasks, ACTIVE_HANDOFF_STATUSES, riderPickup, deliveryPod,
-  assignRiderQr,
 } from './useDarkStore';
 
 /**
@@ -17,8 +16,9 @@ import {
  * three endpoints behind it require only an authenticated operator, and the
  * server fences each task to the caller's own store. The contract is:
  *
- *   - assign: scan the rider's personal QR (they are standing at the counter,
- *     which is their consent). This moves the task to ACCEPTED.
+ *   - assign: riders are stamped onto tasks automatically at checkout; this
+ *     screen never assigns manually. The UNASSIGNED queue clears when the
+ *     assignment engine retries (a rider coming online drains the queue).
  *   - pickup: scan the tote barcode to confirm it matches the tote the task was
  *     packed into (`task.bin`), which ships the stock and starts custody.
  *   - POD: the customer's pickup code and, for COD, the cash taken.
@@ -53,8 +53,7 @@ function Handoff({ siteId }) {
   );
 
   const [selectedTask, setSelectedTask] = useState(null);
-  const [modalMode, setModalMode] = useState(null); // 'assign' | 'pickup' | 'pod'
-  const [qrCode, setQrCode] = useState('');
+  const [modalMode, setModalMode] = useState(null); // 'pickup' | 'pod'
   const [toteBarcode, setToteBarcode] = useState('');
   const [loosePickup, setLoosePickup] = useState(false);
   const [otpCode, setOtpCode] = useState('');
@@ -72,7 +71,6 @@ function Handoff({ siteId }) {
     if (busy && force !== true) return;
     setSelectedTask(null);
     setModalMode(null);
-    setQrCode('');
     setToteBarcode('');
     setLoosePickup(false);
     setOtpCode('');
@@ -82,7 +80,6 @@ function Handoff({ siteId }) {
   const openModal = (task, mode) => {
     setSelectedTask(task);
     setModalMode(mode);
-    setQrCode('');
     setToteBarcode(mode === 'pickup' ? (task.tote_barcode || '') : '');
     setLoosePickup(false);
     setOtpCode('');
@@ -91,27 +88,6 @@ function Handoff({ siteId }) {
     setOtpCode('');
     setCashCollected('');
     setFeedback(null);
-  };
-
-  const handleAssign = async () => {
-    if (!selectedTask) return;
-    if (!qrCode.trim()) {
-      setFeedback({ type: 'error', message: 'Scan the rider QR code first.' });
-      return;
-    }
-    setBusy(true);
-    setFeedback(null);
-    try {
-      const result = await assignRiderQr(selectedTask.task_id, qrCode.trim());
-      const name = result?.rider?.name || 'the rider';
-      toast.success(`${selectedTask.order_no || 'Order'} assigned to ${name}.`);
-      closeModal(true);
-      reload();
-    } catch (err) {
-      setFeedback({ type: 'error', message: err.message || 'Could not assign this rider.' });
-    } finally {
-      setBusy(false);
-    }
   };
 
   const handlePickup = async () => {
@@ -172,7 +148,7 @@ function Handoff({ siteId }) {
     ? []
     : STATUS_TABS.filter((status) => taskList.some((task) => task.status === status));
 
-  const submit = { assign: handleAssign, pickup: handlePickup, pod: handlePod }[modalMode];
+  const submit = { pickup: handlePickup, pod: handlePod }[modalMode];
 
   return (
     <div style={{ paddingBottom: 24 }}>
@@ -187,7 +163,7 @@ function Handoff({ siteId }) {
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
             {historyMode
               ? 'Delivered orders are shown separately from active rider handoffs.'
-              : 'Active work only. Assign riders by QR, verify the tote on handover, and close cash-on-delivery jobs.'}
+              : 'Active work only. Riders are assigned automatically; verify the tote on handover, and close cash-on-delivery jobs.'}
           </div>
         </div>
 
@@ -293,7 +269,7 @@ function Handoff({ siteId }) {
               filteredTasks.map((t) => {
                 const canPickup = PICKUP_STATUSES.has(t.status);
                 const canPod = POD_STATUSES.has(t.status);
-                const needsRider = !t.rider && ['UNASSIGNED', 'OFFERED'].includes(t.status);
+                // (no manual assignment here; checkout assigns automatically)
                 return (
                   <tr key={t.task_id}>
                     <td>
@@ -325,17 +301,6 @@ function Handoff({ siteId }) {
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        {needsRider && (
-                          <button
-                            type="button"
-                            className="btn-ui primary"
-                            style={{ padding: '3px 10px', fontSize: 11 }}
-                            onClick={() => openModal(t, 'assign')}
-                          >
-                            <QrCode size={12} />
-                            <span>Assign Rider</span>
-                          </button>
-                        )}
                         {canPickup && (
                           <button
                             type="button"
@@ -382,7 +347,6 @@ function Handoff({ siteId }) {
           <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
             <div className="modal-header">
               <div className="modal-title">
-                {modalMode === 'assign' && `Assign Rider: ${selectedTask.order_no || ''}`}
                 {modalMode === 'pickup' && `Handoff Order: ${selectedTask.order_no || ''}`}
                 {modalMode === 'pod' && `Delivery POD: ${selectedTask.order_no || ''}`}
               </div>
@@ -405,31 +369,6 @@ function Handoff({ siteId }) {
                 >
                   {feedback.message}
                 </div>
-              )}
-
-              {modalMode === 'assign' && (
-                <>
-                  <div style={{ background: 'var(--bg-panel)', padding: 10, borderRadius: 'var(--radius-xs)', fontSize: 12 }}>
-                    <div><strong>Tote:</strong> {selectedTask.tote_barcode || 'â€”'}</div>
-                    <div style={{ marginTop: 4 }}><strong>Staging slot:</strong> {selectedTask.staging_bin || 'â€”'}</div>
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                      <QrCode size={11} /> Scan the rider's personal QR code
-                    </label>
-                    <input
-                      type="text"
-                      autoFocus
-                      placeholder="zippzo:rider:â€¦"
-                      value={qrCode}
-                      onChange={(e) => setQrCode(e.target.value)}
-                      style={{ width: '100%', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-xs)' }}
-                    />
-                    <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 4 }}>
-                      Scanning at the counter is the rider's consent. The job moves to ACCEPTED.
-                    </div>
-                  </div>
-                </>
               )}
 
               {modalMode === 'pickup' && (
@@ -501,7 +440,6 @@ function Handoff({ siteId }) {
                 Cancel
               </button>
               <button type="button" className="btn-ui primary" disabled={busy} onClick={submit}>
-                {modalMode === 'assign' && 'Assign Rider'}
                 {modalMode === 'pickup' && 'Confirm Handoff'}
                 {modalMode === 'pod' && 'Complete Delivery'}
               </button>
