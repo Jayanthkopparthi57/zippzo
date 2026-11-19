@@ -323,7 +323,7 @@ function Handoff({ siteId }) {
                             <span>Confirm POD</span>
                           </button>
                         )}
-                        {!needsRider && !canPickup && !canPod && (
+                        {!canPickup && !canPod && (
                           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>â€”</span>
                         )}
                       </div>
