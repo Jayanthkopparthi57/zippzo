@@ -6,23 +6,20 @@ import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import {
-  useDarkStore, useAsyncData, loadOrderQueue, emptyLpns, packOrder,
+  useDarkStore, useAsyncData, loadOrderQueue, packOrder,
 } from './useDarkStore';
 
 /**
- * Dark-store packing worklist â€” read-only by design.
+ * Dark-store packing worklist.
  *
- * Sealing an order into a tote, assigning a staging slot and creating its rider
- * job is physical stock work, so `/ds-ops/pack-order` requires a mobile-surface
- * session (`IsFieldSurface`). A web session can watch the picked queue and see
- * which empty totes are on hand, but the scan that actually seals the tote has
- * to come from the Zippzo Operations app.
+ * Staging an order at a slot and creating its rider job is physical stock
+ * work, so `/ds-ops/pack-order` requires a field-surface session
+ * (`IsFieldSurface`). A web session can watch the picked queue and see which
+ * staging slots are free.
  *
- * This screen previously offered a "Pack & Stage" button that POSTed a fake
- * tote (`TOTE-DS-<timestamp>`), a hardcoded slot (`STAGE-01`) and called
- * `packOrder` with the wrong argument shape. That would have created stock
- * records for totes that do not exist. It now reports state and names the
- * boundary instead of pretending the write succeeded.
+ * Outbound orders move in loose bags, never in totes or LPNs. Totes are an
+ * inbound warehouse concept only; nothing about the customer delivery flow
+ * knows about them.
  */
 
 function PackStation({ siteId }) {
@@ -33,51 +30,41 @@ function PackStation({ siteId }) {
     { pollMs: 30000 }
   );
 
-  const { data: totes } = useAsyncData(
-    () => emptyLpns(siteId),
-    [siteId],
-    { pollMs: 60000 }
-  );
-
   const [filterQuery, setFilterQuery] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
-  const [lpnBarcode, setLpnBarcode] = useState('');
   const [stagingBin, setStagingBin] = useState('');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
 
   const queue = useMemo(() => orders || [], [orders]);
-  const emptyTotes = useMemo(() => totes || [], [totes]);
 
   const openPackForm = (order) => {
     setSelectedOrder(order);
-    setLpnBarcode(emptyTotes[0]?.barcode || '');
     setStagingBin('');
     setFeedback(null);
   };
 
   const handlePackOrder = async () => {
     if (!selectedOrder) return;
-    if (!lpnBarcode.trim() || !stagingBin.trim()) {
-      setFeedback({ type: 'error', message: 'Scan the tote and staging slot before packing.' });
+    if (!stagingBin.trim()) {
+      setFeedback({ type: 'error', message: 'Enter the staging slot before packing.' });
       return;
     }
     setBusy(true);
     setFeedback(null);
     try {
-      const result = await packOrder(selectedOrder.order_id, {
-        lpnBarcode: lpnBarcode.trim(),
+      await packOrder(selectedOrder.order_id, {
         stagingBin: stagingBin.trim(),
       });
-      toast.success(`${selectedOrder.order_no} packed into ${lpnBarcode.trim()}`);
+      toast.success(`${selectedOrder.order_no} signed for staging at ${stagingBin.trim()}`);
       setFeedback({
         type: 'success',
-        message: `Packed into ${result?.lpn?.barcode || lpnBarcode.trim()} and staged at ${stagingBin.trim()}.`,
+        message: `Staged at ${stagingBin.trim()}; the rider job is live.`,
       });
       setSelectedOrder(null);
       await reload();
     } catch (err) {
-      setFeedback({ type: 'error', message: err.message || 'Packing failed.' });
+      setFeedback({ type: 'error', message: err.message || 'Staging failed.' });
     } finally {
       setBusy(false);
     }
@@ -97,13 +84,12 @@ function PackStation({ siteId }) {
       <div className="screen-header">
         <div>
           <div className="screen-title">
-            <span>ORDER PACKING &amp; TOTE STAGING</span>
+            <span>PACKING &amp; STAGING</span>
             <span className="screen-count-tag">{queue.length} picked</span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-            Picked orders waiting to be sealed into a tote and staged for rider
-            collection. Packing runs against the same server operation as the
-            Operations mobile app.
+            Picked orders waiting at a staging slot for rider collection. Packing
+            runs against the same server operation as the Operations mobile app.
           </div>
         </div>
 
@@ -121,8 +107,8 @@ function PackStation({ siteId }) {
       >
         <Smartphone size={14} />
         <span>
-          Packing moves stock and creates the rider job. Scan the tote and
-          staging slot to seal the order.
+          Staging packs the store's bag for the rider and creates the job.
+          Enter the slot and confirm.
         </span>
       </div>
 
@@ -132,26 +118,6 @@ function PackStation({ siteId }) {
           <span>{error}</span>
         </div>
       )}
-
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          fontSize: 11,
-          color: 'var(--text-muted)',
-          marginBottom: 12,
-          fontFamily: 'var(--font-mono)',
-        }}
-      >
-        <Package size={12} />
-        <span>
-          Empty totes available at this store: {emptyTotes.length}
-          {emptyTotes.length > 0 && (
-            <> â€” {emptyTotes.slice(0, 6).map((t) => t.barcode || t.lpn_id).join(', ')}</>
-          )}
-        </span>
-      </div>
 
       <div className="table-filter-row">
         <div style={{ position: 'relative', flex: 1, maxWidth: 340 }}>
@@ -194,12 +160,12 @@ function PackStation({ siteId }) {
                       {o.order_no}
                     </strong>
                   </td>
-                  <td>{o.customer_name || 'â€”'}</td>
+                  <td>{o.customer_name || '—'}</td>
                   <td style={{ fontFamily: 'var(--font-mono)' }}>
-                    {o.total_items ?? 'â€”'} SKUs
+                    {o.total_items ?? '—'} SKUs
                   </td>
                   <td style={{ fontFamily: 'var(--font-mono)' }}>
-                    â‚¹{parseFloat(o.grand_total || 0).toFixed(2)}
+                    ₹{parseFloat(o.grand_total || 0).toFixed(2)}
                   </td>
                   <td>
                     <StatusBadge status={o.status || 'PICKED'} />
@@ -247,20 +213,6 @@ function PackStation({ siteId }) {
                 </div>
               )}
               <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Tote barcode</label>
-                <input
-                  type="text"
-                  className="table-filter-input"
-                  list="empty-totes"
-                  value={lpnBarcode}
-                  onChange={(e) => setLpnBarcode(e.target.value)}
-                  placeholder="Scan empty tote"
-                />
-                <datalist id="empty-totes">
-                  {emptyTotes.map(t => <option key={t.lpn_id || t.barcode} value={t.barcode || t.lpn_id} />)}
-                </datalist>
-              </div>
-              <div>
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Staging slot</label>
                 <input
                   type="text"
@@ -277,7 +229,7 @@ function PackStation({ siteId }) {
               </button>
               <button type="button" className="btn-ui primary" onClick={handlePackOrder} disabled={busy}>
                 <PackageCheck size={13} />
-                <span>{busy ? 'Packing...' : 'Pack & Stage'}</span>
+                <span>{busy ? 'Staging...' : 'Pack & Stage'}</span>
               </button>
             </div>
           </div>
@@ -295,4 +247,3 @@ export default function OrderPackingView() {
     </StoreGate>
   );
 }
-

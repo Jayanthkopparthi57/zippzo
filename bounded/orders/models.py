@@ -84,7 +84,7 @@ class CustomerOrder(models.Model):
     cancelled_at = models.DateTimeField(null=True, blank=True)
     # Rack Drop is the store-floor hand-off: a picker has carried the picked
     # units to the packing rack and confirmed the drop. It is deliberately
-    # distinct from PACKED, which still means the tote is sealed with an LPN and
+    # distinct from PACKED, which means the bag is packed and staged with a slot and
     # waiting at a staging slot for a rider.
     rack_location = models.CharField(max_length=50, null=True, blank=True)
     rack_dropped_at = models.DateTimeField(null=True, blank=True)

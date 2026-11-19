@@ -106,7 +106,9 @@ class OrderLineAllocation(models.Model):
 class PackTask(models.Model):
     STATUS_CHOICES = [('NOT_STARTED','Not Started'),('IN_PROGRESS','In Progress'),('COMPLETED','Completed'),('CANCELLED','Cancelled')]
     packlist_id = models.UUIDField()
-    lpn = models.CharField(max_length=50, null=True, blank=True)
+    # Outbound bags carry no tote; kept as an empty column because the row is
+    # an inventory/audit ledger and history written against the LPN model stays.
+    lpn = models.CharField(max_length=50, null=True, blank=True, default='')
     # Same reasoning as PickTask.order: the pack task has to name the customer
     # order so "order packed, collect from <staging_bin>" can be raised.
     order = models.ForeignKey(
@@ -116,10 +118,10 @@ class PackTask(models.Model):
     sku = models.UUIDField()
     qty = models.PositiveIntegerField()
     packed_qty = models.PositiveIntegerField(default=0)
-    # Where the packed tote physically waits for the rider. This is the value
-    # the rider notification has to carry. CharField, not a Location FK, to
-    # match PackTask.lpn and PickTask.bin: a staging slot is a label, and the
-    # dark store does not necessarily have a Location row per shelf slot.
+    # Where the staged bag waits for the rider. This is the value the rider
+    # notification has to carry. CharField, not a Location FK, to match
+    # PickTask.bin: a staging slot is a label, and the dark store does not
+    # necessarily have a Location row per shelf slot.
     staging_bin = models.CharField(max_length=50, null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NOT_STARTED')
     assigned_to = models.UUIDField(null=True, blank=True)

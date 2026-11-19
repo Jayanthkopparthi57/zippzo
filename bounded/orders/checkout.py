@@ -78,7 +78,7 @@ def is_orderable_site(site):
 
 
 # An order number has to be short, unique, and legible over the phone to a
-# rider who is reading it off a tote label.
+# rider who is reading it off the bag the store hands over.
 _ORDER_NO_PREFIX = 'ZP'
 
 

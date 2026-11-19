@@ -52,7 +52,7 @@ def _owned_task(user, task):
     profile = RiderProfile.objects.filter(user_id=user.user_id).first()
     if profile is None:
         # The handoff screen belongs to the store: the person at the counter
-        # scans the tote over to the rider and reads the customer's code off
+        # hands the staged bag to the rider and reads the customer's code off
         # their phone, so both of its buttons have to work for an operator.
         # Requiring a rider profile here made that screen a 403 for the very
         # account it is written for - it could list the jobs and never record
@@ -66,7 +66,7 @@ def _owned_task(user, task):
     if not task.rider_id and profile.current_site_id and profile.current_site_id != task.site_id:
         # Unassigned work was readable by every rider in the fleet: nothing in
         # the task ties it to a store the caller works at, so a rider based at
-        # one store could collect a tote staged at another. The profile's own
+        # one store could collect a staged bag meant for another. The profile's own
         # store is what the offers are built from, so it is the line here.
         # A rider with no store yet is not blocked - going online already
         # requires picking one - but the comparison stays honest and refuses
@@ -176,10 +176,10 @@ ORDER_STEP_WINDOWS = {
 # Rider task transitions the rider drives themselves. Pickup and POD are not
 # here: they move stock and money and have their own guarded endpoints.
 #
-# EN_ROUTE only opens once the store has physically handed the tote over. The
-# rider's own phone cannot create the handoff â€” it belongs to the counter
-# screen, where the picker scans the tote off the staging slot. Letting a rider
-# advance into EN_ROUTE straight from AT_DS meant they could "collect" totes
+# EN_ROUTE only opens once the store has physically handed the bag over. The
+# rider's own phone cannot create the handoff - it belongs to the counter
+# screen, where the bag is staging-verified and handed over. Letting a rider
+# advance into EN_ROUTE straight from AT_DS meant they could "collect" bags
 # nobody had packed or handed over.
 TASK_TRANSITIONS = {
     'AT_DS': ({'UNASSIGNED', 'OFFERED', 'ACCEPTED'}, None),
@@ -660,7 +660,7 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
             return self.queryset.filter(Q(rider=profile) | Q(rider__isnull=True))
 
         # No rider profile, but the account may still be an operator assigned to
-        # a store - and the store is where the totes are staged, so it is exactly
+        # a store - and the store is where the bags are staged, so it is exactly
         # this operator who has to see them to hand them over. Without this the
         # queryset returned none() for anyone who was not also a rider, and the
         # counter screen had nothing to list.
@@ -899,7 +899,7 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
             }, status=409)
         if task.status not in {'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING'}:
             return Response({
-                'error': f'Task is {task.status}; collect the tote before asking for payment.'
+                'error': f'Task is {task.status}; collect the bag first.'
             }, status=409)
 
         phone = str(request.data.get('phone') or '').strip()
@@ -991,7 +991,7 @@ class RouteStopViewSet(viewsets.ModelViewSet):
 
 
 class DeliveryPickupView(APIView):
-    """Collect a staged order: verify the tote, move it to the rider, ship it."""
+    """Collect a staged order: ship it to the rider (bag handed over at the counter)."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -1014,8 +1014,7 @@ class DeliveryPickupView(APIView):
 
         try:
             result = rider_pickup(
-                task=task, actor=request.user,
-                lpn_barcode=request.data.get('lpn_barcode'))
+                task=task, actor=request.user)
         except HandoffError as e:
             return Response({'error': e.message, **e.detail}, status=e.status)
         return Response({'success': True, **result})

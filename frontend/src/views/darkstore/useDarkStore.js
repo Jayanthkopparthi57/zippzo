@@ -520,18 +520,18 @@ export async function allocateOrder(orderId) {
 }
 
 /**
- * Seal a fully picked order into a tote and stage it for the rider.
+ * Loose-bag an order: it leaves the picked state and becomes staged, and its
+ * rider job comes into existence.
  *
- * Both the tote barcode and the staging slot are required: the slot is what the
- * rider notification says, so a pack that did not record one would leave the
- * rider with a job it cannot act on.
+ * Outbound orders never travel in totes or LPNs - bags only. The staging
+ * slot is what the rider notification names, so a pack that did not record
+ * one would leave the rider with a job they cannot act on.
  *
- * @returns {Promise<object>} the packed order, its tote and its delivery task.
+ * @returns {Promise<object>} the staged order and its delivery task.
  */
-export async function packOrder(orderId, { lpnBarcode, stagingBin }) {
+export async function packOrder(orderId, { stagingBin }) {
   return postApi('/ds-ops/pack-order', {
     order_id: orderId,
-    lpn_barcode: lpnBarcode,
     staging_bin: stagingBin,
   });
 }
@@ -541,7 +541,7 @@ export async function packOrder(orderId, { lpnBarcode, stagingBin }) {
  * packing rack and confirmed the drop.
  *
  * This is deliberately not packing. The order becomes RACK_DROPPED, the rack
- * label is recorded, and the pack station still has to seal a tote before a
+ * label is recorded, and the pack station still has to stage the bag before a
  * rider job exists. Sending the same order twice is safe: the server answers
  * `already_dropped` instead of moving the order again.
  */
@@ -566,7 +566,7 @@ export const pendingPicks = (storeCode) =>
 export const assignPendingPicks = (storeCode) =>
   postApi(`/ds-ops/pending-picks?site_code=${encodeURIComponent(storeCode)}`, {});
 
-/** Packed totes waiting for a rider (chart: Ready for Rider). */
+/** Staged bags waiting for a rider (chart: Ready for Rider). */
 export const dsDeliveryQueue = (storeCode) =>
   fetchApi(`/ds-ops/delivery-queue?site_code=${encodeURIComponent(storeCode)}`);
 
@@ -585,26 +585,16 @@ export const dsOrderTracking = (storeCode, status = '') =>
 export const rotatingStoreOtp = (storeCode) =>
   fetchApi(`/iam/auth/store-code?site_code=${encodeURIComponent(storeCode)}`);
 
-/** Empty totes at this store, to offer the packer something to fill. */
-export const emptyLpns = async (siteId) =>
-  asList(
-    await fetchApi(
-      `/inventory/lpns/?current_site=${encodeURIComponent(siteId)}` +
-        `&status__in=EMPTY,CREATED&page_size=100`
-    ),
-    '/inventory/lpns'
-  );
-
 /**
  * Delivery tasks at this store, for the counter.
  *
- * The handoff endpoints key on `task_id`, not `order_id` - a pickup verifies the
- * tote against the task's own `bin`, and a POD is closed against the task that
- * actually carries the order. Listing orders here and guessing the task back
- * was how the old screen ended up calling a status transition that moved nothing.
+ * The handoff endpoints key on `task_id`, not `order_id` - a POD is closed
+ * against the task that actually carries the order. Listing orders here and
+ * guessing the task back was how the old screen ended up calling a status
+ * transition that moved nothing.
  *
  * The backend scopes this to the caller's own site for anyone without a rider
- * profile, so an operator sees the totes staged at their store and nobody else's.
+ * profile, so an operator sees the orders staged at their store and nobody else's.
  *
  * `statuses` must be explicit: `status__in=` with an empty value matches
  * nothing. Active handoff work and delivered history are requested separately
@@ -633,16 +623,13 @@ export const deliveryTasks = async (siteId, statuses = HANDOFF_STATUSES) =>
   );
 
 /**
- * Hand a staged tote to a rider.
+ * Hand a staged bag to a rider.
  *
- * Requires the tote barcode: the server checks it against the task's recorded
- * bin and refuses a mismatch, so two orders' totes cannot be swapped at the
- * collection point.
+ * Outbound orders ride loose; the server ships what was packed and staged.
  */
-export const riderPickup = (taskId, lpnBarcode) =>
+export const riderPickup = (taskId) =>
   postApi('/delivery/handoff/pickup', {
     task_id: taskId,
-    lpn_barcode: lpnBarcode,
   });
 
 /**

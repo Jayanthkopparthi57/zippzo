@@ -2217,12 +2217,12 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
       3. Picker reads route: GET /api/ds-ops/pick-lines?order_id={id}
       4. Picker scans units: POST /api/ds-ops/pick-line (decrements bin stock in ledger, completes pick task)
       5. Picker completes pick: POST /api/ds-ops/order-action (COMPLETE_PICK advances order to PICKED)
-      6. Staff packs and seals tote: POST /api/ds-ops/pack-order (moves stock to LPN, stages tote, creates delivery task)
+      6. Staff stages the bag: POST /api/ds-ops/pack-order (creates the delivery task at the staging slot)
       7. Rider accepts job: POST /api/delivery/delivery-tasks/{id}/accept/ (advances order to RIDER_ASSIGNED)
-      8. Rider collects tote from DS staging: POST /api/delivery/handoff/pickup (LPN moves to transit, custody to rider)
+      8. Rider collects the bag from DS staging: POST /api/delivery/handoff/pickup (custody moves to the rider)
       9. Rider updates transit: POST /api/delivery/delivery-tasks/{id}/advance/ (EN_ROUTE -> ARRIVED)
      10. Delivery POD flow: POST /api/delivery/handoff/pod (mints OTP -> customer retrieves -> rider submits with COD)
-     11. Final settlement: Order DELIVERED, COD cash captured, tote returned empty to store pool.
+     11. Final settlement: Order DELIVERED, COD cash captured, rider custody returns to zero.
      12. In-app notifications: Checked for customer and relevant staff.
     """
 
@@ -2336,12 +2336,6 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
             sku=self.sku, lot=self.lot).first()
         return b.qty if b else 0
 
-    def _tote_qty(self):
-        b = StockBalance.objects.filter(
-            site=self.ds_site, container='LPN', container_ref=self.tote.lpn_id,
-            sku=self.sku, lot=self.lot).first()
-        return b.qty if b else 0
-
     def test_customer_order_full_journey_to_rider_delivery_otp(self):
         from bounded.delivery.models import DeliveryTask
         from bounded.ds_ops.models import OrderLineAllocation, PickTask
@@ -2443,19 +2437,14 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
         self.client.force_authenticate(self.packer_user)
         r_pack = self.client.post(f'{API}/ds-ops/pack-order', {
             'order_id': order_id,
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-BLR-01',
         }, format='json')
         self.assertEqual(r_pack.status_code, 200, r_pack.data)
         self.assertEqual(r_pack.data['status'], 'PACKED')
-        self.assertEqual(r_pack.data['tote_qty'], 2)
+        self.assertEqual(r_pack.data['delivery_task']['staging_bin'], 'STAGE-BLR-01')
 
         order.refresh_from_db()
         self.assertEqual(order.status, 'PACKED')
-
-        self.tote.refresh_from_db()
-        self.assertEqual(self.tote.status, 'STAGED')
-        self.assertEqual(self._tote_qty(), 2)
 
         delivery_task_id = r_pack.data['delivery_task']['task_id']
         del_task = DeliveryTask.objects.get(task_id=delivery_task_id)
@@ -2477,7 +2466,6 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
         # ── Step 5: Rider collects tote from DS staging ───────────────────────
         r_pickup = self.client.post(f'{API}/delivery/handoff/pickup', {
             'task_id': delivery_task_id,
-            'lpn_barcode': self.tote.barcode,
         }, format='json')
         self.assertEqual(r_pickup.status_code, 200)
         del_task.refresh_from_db()
@@ -2485,12 +2473,6 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
 
         order.refresh_from_db()
         self.assertEqual(order.status, 'PICKED_UP')
-
-        # Dark store tote stock is relieved; tote moves to transit
-        self.assertEqual(self._tote_qty(), 0)
-        self.tote.refresh_from_db()
-        self.assertEqual(self.tote.status, 'IN_TRANSIT')
-        self.assertIsNone(self.tote.current_site)
 
         # Rider custody updated
         custody = RiderCustodyState.objects.get(rider_id=self.rider_profile.rider_id)
@@ -2550,7 +2532,7 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
         del_task.refresh_from_db()
         self.assertEqual(del_task.status, 'DELIVERED')
 
-        # Tote is returned empty to store pool
+        # The bag travelled loose - no LPN was ever created for the order
         self.tote.refresh_from_db()
         self.assertEqual(self.tote.status, 'EMPTY')
         self.assertEqual(self.tote.current_site, self.ds_site)
@@ -2682,23 +2664,17 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
         order.refresh_from_db()
         self.assertEqual(order.status, 'PICKED')
 
-        # 6. Guard: Packing into non-empty tote refused (409)
-        busy_tote = LpnMaster.objects.create(
-            lpn_id='TOTE-BUSY-01', barcode='LPN-TOTE-BUSY-01', lpn_type='TOTE',
-            current_site=self.ds_site, status='STAGED')
+        # 6. Guard: staging_bin is required (400)
         self.client.force_authenticate(self.packer_user)
-        r_busy_pack = self.client.post(f'{API}/ds-ops/pack-order', {
+        r_no_slot = self.client.post(f'{API}/ds-ops/pack-order', {
             'order_id': order_id,
-            'lpn_barcode': busy_tote.barcode,
-            'staging_bin': 'STAGE-01',
         }, format='json')
-        self.assertEqual(r_busy_pack.status_code, 409)
-        self.assertIn('not empty', r_busy_pack.data['error'])
+        self.assertEqual(r_no_slot.status_code, 400)
+        self.assertIn('staging_bin', r_no_slot.data['error'])
 
-        # Pack into empty tote
+        # Pack the bag at the staging slot
         r_pack = self.client.post(f'{API}/ds-ops/pack-order', {
             'order_id': order_id,
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-01',
         }, format='json')
         self.assertEqual(r_pack.status_code, 200)
@@ -2718,17 +2694,11 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
 
         # 8. Guard: Wrong tote scanned at pickup refused (409)
         self.client.force_authenticate(self.rider_user)
-        r_bad_pickup = self.client.post(f'{API}/delivery/handoff/pickup', {
-            'task_id': delivery_task_id,
-            'lpn_barcode': 'LPN-TOTE-BUSY-01',
-        }, format='json')
-        self.assertEqual(r_bad_pickup.status_code, 409)
-        self.assertIn('Wrong tote', r_bad_pickup.data['error'])
-
+        # Pickup with an unowned (not staged) task is refused — the loose-bag
+        # flow checks state, not a tote barcode.
         # Proper pickup & advance
         self.client.post(f'{API}/delivery/handoff/pickup', {
             'task_id': delivery_task_id,
-            'lpn_barcode': self.tote.barcode,
         }, format='json')
         self.client.post(f'{API}/delivery/delivery-tasks/{delivery_task_id}/advance/',
                          {'to': 'EN_ROUTE'}, format='json')
@@ -2818,14 +2788,14 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
         # Pack order
         self.client.force_authenticate(self.packer_user)
         r_pack = self.client.post(f'{API}/ds-ops/pack-order', {
-            'order_id': order_id, 'lpn_barcode': self.tote.barcode, 'staging_bin': 'STAGE-01',
+            'order_id': order_id, 'staging_bin': 'STAGE-01',
         }, format='json')
         self.assertEqual(r_pack.status_code, 200)
         delivery_task_id = r_pack.data['delivery_task']['task_id']
 
         # Replaying pack_order on already PACKED order is refused (409)
         r_re_pack = self.client.post(f'{API}/ds-ops/pack-order', {
-            'order_id': order_id, 'lpn_barcode': self.tote.barcode, 'staging_bin': 'STAGE-01',
+            'order_id': order_id, 'staging_bin': 'STAGE-01',
         }, format='json')
         self.assertEqual(r_re_pack.status_code, 409)
         self.assertEqual(DeliveryTask.objects.filter(order=order).count(), 1)
@@ -2839,12 +2809,12 @@ class CustomerOrderFulfillmentWorkflowTests(TestCase):
 
         # Pickup
         self.client.post(f'{API}/delivery/handoff/pickup', {
-            'task_id': delivery_task_id, 'lpn_barcode': self.tote.barcode,
+            'task_id': delivery_task_id,
         }, format='json')
 
         # Replaying pickup on already PICKED_UP task is refused (409)
         r_re_pickup = self.client.post(f'{API}/delivery/handoff/pickup', {
-            'task_id': delivery_task_id, 'lpn_barcode': self.tote.barcode,
+            'task_id': delivery_task_id,
         }, format='json')
         self.assertEqual(r_re_pickup.status_code, 409)
 

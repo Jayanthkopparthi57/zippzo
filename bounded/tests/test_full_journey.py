@@ -7,8 +7,8 @@ what a customer would be told at the end:
 
     shopper      places the order on the real /orders/checkout endpoint
     dark store   allocates, picks each unit off a shelf by scanning the bin
-    packer       seals the goods into a scanned tote at a staging slot
-    rider        collects that tote, gets a code, collects cash, delivers
+    packer       stages the picked bag at a staging slot
+    rider        collects the bag, gets a code, collects cash, delivers
 
 Nothing is written to the database to make any of it happen. Stock arrives
 through `apply_stock` like real inbound goods, the order is placed by the
@@ -17,8 +17,7 @@ database directly is the delivery code the *customer* would read off their
 phone - because that is the one thing the rider must never be able to see.
 
 The stock ledger is the real one, so this doubles as a check that a whole
-lifecycle leaves the ledger balanced: goods leave the shelf, enter the tote,
-leave the site, and never come back.
+lifecycle leaves the ledger balanced: goods leave the shelf and never come back.
 """
 import uuid
 from decimal import Decimal
@@ -34,7 +33,7 @@ from bounded.delivery.models import DeliveryTask, RiderProfile
 from bounded.ds_ops.allocation import allocations_for_order
 from bounded.iam.models import User
 from bounded.inventory.ledger import expected_balances, actual_balances
-from bounded.inventory.models import LpnContent, LpnMaster, StockBalance
+from bounded.inventory.models import StockBalance
 from bounded.inventory.stock import apply_stock
 from bounded.network.models import EmployeeSiteAssignment, Location, Site
 from bounded.routing.models import DeliveryArea
@@ -94,10 +93,6 @@ class FullJourneyTests(TestCase):
             site=cls.site, location_id='BIN-JRN-B', location_type='BIN',
             aisle='B7', rack='R4', level='L3', position='P6',
             barcode='BIN-JRN-B', is_sellable_bin=True, created_by='journey')
-
-        cls.tote = LpnMaster.objects.create(
-            lpn_id='LPN-JRN-1', barcode='TOTE-JRN-1', lpn_type='TOTE',
-            current_site=cls.site, status='EMPTY', created_by='journey')
 
         # -- what the store sells ---------------------------------------------
         cls.milk = Sku.objects.create(
@@ -228,29 +223,20 @@ class FullJourneyTests(TestCase):
         }, format='json')
         self.assertEqual(200, completed.status_code, completed.data)
 
-        # ── 3. the packer seals a scanned tote at a staging slot ──────────
+        # ── 3. the packer stages the picked bag at a staging slot ──────────
         packed = packer.post('/api/ds-ops/pack-order', {
             'order_id': str(order.order_id),
-            # What the operator actually scans is the barcode on the tote.
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-A1',
         }, format='json')
         self.assertEqual(200, packed.status_code, packed.data)
 
         task = DeliveryTask.objects.get(order=order)
 
-        # ── 4. the rider collects the tote ─────────────────────────────────
+        # ── 4. the rider collects the bag ─────────────────────────────────
         picked_up = rider.post('/api/delivery/handoff/pickup', {
             'task_id': str(task.task_id),
-            'lpn_barcode': self.tote.barcode,
         }, format='json')
         self.assertEqual(200, picked_up.status_code, picked_up.data)
-
-        # What the tote looks like while it is out with the rider, before POD
-        # is allowed to put it back. Recorded here because the assertions below
-        # only ever see the end state.
-        self.tote.refresh_from_db()
-        tote_at_pickup = self.tote.status
 
         # ── 5. the rider asks for the code; the customer has it ────────────
         # Nothing has been issued yet, so the first attempt mints one and
@@ -280,7 +266,6 @@ class FullJourneyTests(TestCase):
         return {
             'order': order, 'task': task, 'response': delivered.data,
             'grand_total': order.grand_total,
-            'tote_at_pickup': tote_at_pickup,
         }
 
     def customer_otp(self, order):
@@ -300,12 +285,6 @@ class FullJourneyTests(TestCase):
         return sum(StockBalance.objects.filter(
             site=self.site, container='BIN', sku=sku).values_list('qty', flat=True))
 
-    def tote_qty(self, sku):
-        row = StockBalance.objects.filter(
-            site=self.site, container='LPN', container_ref=self.tote.lpn_id,
-            sku=sku).first()
-        return row.qty if row else 0
-
 
 class TheJourneyWorksTests(FullJourneyTests):
 
@@ -322,22 +301,12 @@ class TheJourneyWorksTests(FullJourneyTests):
         self.assertEqual(3, sum(l.packed_qty for l in order.lines.all()))
         self.assertEqual(3, sum(l.shipped_qty for l in order.lines.all()))
 
-    def test_the_goods_went_from_shelf_to_tote_to_the_rider(self):
+    def test_the_goods_went_from_shelf_to_the_rider(self):
         result = self.complete_journey()
 
         # 7 milk and 2 bread arrived; 2 milk and 1 bread were sold.
         self.assertEqual(5, self.shelf_qty(self.milk))
         self.assertEqual(1, self.shelf_qty(self.bread))
-
-        # The tote is empty at the end because pickup moved the goods out of the
-        # LPN into the rider's custody - the units left the store rather than
-        # sitting in a container at it.
-        self.assertEqual(0, self.tote_qty(self.milk))
-        self.assertEqual(0, self.tote_qty(self.bread))
-
-        # What the tote carried is still recorded, which is what makes a
-        # discrepancy investigable afterwards. One row per SKU/lot, not per unit.
-        self.assertEqual(2, LpnContent.objects.filter(lpn=self.tote).count())
 
     def test_cash_was_collected_and_matches_the_order(self):
         result = self.complete_journey()
@@ -353,42 +322,27 @@ class TheJourneyWorksTests(FullJourneyTests):
         blob = str(result['response']).lower()
         self.assertNotIn('otp', blob)
 
-    def test_the_tote_is_sealed_then_leaves_the_store_with_the_rider(self):
+    def test_the_bag_is_staged_then_leaves_the_store_with_the_rider(self):
         result = self.complete_journey()
 
-        # Sealed when packed, in transit once collected - and back in the
-        # store's own pool once the customer has it. The goods leave the tote
-        # at the door, so the tote is empty from then on; leaving it IN_TRANSIT
-        # with no site (which is what used to happen) meant a store that had
-        # delivered once ran out of plastic and could never pack again.
-        self.assertEqual('IN_TRANSIT', result['tote_at_pickup'],
-                         'the tote left the store with the rider')
+        # The bag left with the rider, so the task carries the staging slot and
+        # no tote anywhere. The order line's packed/shipped counts move too.
+        task = result['task']
+        self.assertEqual('STAGE-A1', task.staging_bin)
+        self.assertIsNone(task.bin, 'outbound tasks carry no tote')
+        self.assertEqual('DELIVERED', result['response']['status'])
+        self.assertEqual(3, sum(l.shipped_qty for l in result['order'].lines.all()))
 
-        self.tote.refresh_from_db()
-        self.assertEqual('EMPTY', self.tote.status)
-        self.assertEqual(self.site, self.tote.current_site,
-                         'it goes back to the store that packed it')
-        self.assertIsNone(self.tote.current_container)
-        self.assertIsNone(self.tote.current_ref_id)
-        self.assertIsNone(
-            self.tote.sealed_at,
-            'the next pack stamps its own seal time, not this delivery\'s')
-        self.assertEqual('STAGE-A1', result['task'].staging_bin)
+    def test_the_pack_carries_no_tote_at_all(self):
+        """The outbound flow never touches an LPN."""
+        result = self.complete_journey()
 
-    def test_the_tote_is_back_where_the_packer_would_look_for_it(self):
-        """The pool the pack screen reads has to offer it, not just the row."""
-        self.complete_journey()
-
-        # Exactly the query `emptyLpns()` sends for the "totes to fill" list.
-        pool = LpnMaster.objects.filter(
-            current_site=self.site, status__in=['EMPTY', 'CREATED'])
-        self.assertIn(
-            self.tote, list(pool),
-            'the packer would be told there is nothing to pack into')
-
-        # And the record of what it carried survives the round trip, because
-        # that is what makes a discrepancy investigable afterwards.
-        self.assertTrue(LpnContent.objects.filter(lpn=self.tote).exists())
+        # Every delivery task on this store's books has no tote, and nothing
+        # in the store's custody is inside an LPN for this order.
+        from bounded.inventory.models import LpnContent
+        from bounded.delivery.models import DeliveryTask as DT
+        self.assertFalse(DT.objects.filter(bin__isnull=False).exists())
+        self.assertEqual(0, LpnContent.objects.count())
 
     def test_the_ledger_is_balanced_after_a_whole_delivery(self):
         """A full lifecycle must leave the books agreeing with the movements."""

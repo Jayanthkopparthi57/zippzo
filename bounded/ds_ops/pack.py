@@ -1,32 +1,34 @@
 """
-Packing: units that left the shelf now go into a tote the rider will collect.
+Packing: units that left the shelf are staged and handed to a rider.
 
 Before this existed, `COMPLETE_PICK` set the order straight to PACKED. "Packed"
 then meant two unrelated things - stock had been scanned off a shelf, and stock
-was sitting in an LPN with a staging slot - and there was no operation that told
-the truth about the second one. The order was declared PACKED while the goods
-were still on the floor, so a rider could be dispatched to collect from a bin
-that had nothing in it.
+was waiting at a staging slot - and there was no operation that told the truth
+about the second one. The order was declared PACKED while the goods were still
+on the floor, so a rider could be dispatched to collect from a bin that had
+nothing in it.
 
 Packing is where those two facts are separated:
 
-  1. every picked unit is moved from the store's custody into the LPN's balance,
-     so the tote holds real stock rather than being a label;
-  2. LpnContent records what is inside, so a wrong tote is detectable;
-  3. a PackTask per line closes the picking side out;
-  4. the LPN is sealed and staged, and the staging slot is recorded on the order
-     side of the record rather than only on the tote;
-  5. the DeliveryTask is created - this is the moment a rider job comes into
+  1. every picked unit stays in the store's custody (it never joined an LPN),
+     recorded as staged and awaiting the rider;
+  2. a PackTask per line closes the picking side out;
+  3. the staging slot is recorded on the record;
+  4. the DeliveryTask is created - this is the moment a rider job comes into
      existence, so it must not happen earlier;
-  6. order.packed and delivery_task.created go to the outbox inside the same
+  5. order.packed and delivery_task.created go to the outbox inside the same
      transaction. If the pack rolls back, so does the promise to notify.
 
-Re-running is safe. The movements are idempotent on (PACK, order line, LPN), and
-an existing open DeliveryTask is reused rather than duplicated, so a retry after
-a dropped response does not put two riders on one order.
+Loose bags are the only outbound container: the store bags groceries straight
+onto the shelf for the rider to carry. Totes/LPNs remain in the inbound side of
+the warehouse (receiving transfers into the store) - they are not part of the
+customer delivery flow at all.
+
+Re-running is safe. An existing open DeliveryTask is reused rather than
+duplicated, so a retry after a dropped response does not put two riders on one
+order.
 """
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 
 
@@ -56,9 +58,9 @@ def _barcode_value(raw):
 
 @transaction.atomic
 def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None):
+    # ``lpn_barcode``/``lpn_id`` are accepted and ignored: the outbound flow carries no
+    # tote. Kept so older callers do not 500; they simply pack loose.
     from bounded.delivery.models import DeliveryTask
-    from bounded.inventory.models import LpnContent, LpnMaster, StockBalance
-    from bounded.inventory.stock import already_applied, apply_stock
     from bounded.orders.models import CustomerOrderLine, OrderStatusHistory
     from bounded.outbox.services import enqueue_event
     from .models import PackTask
@@ -100,95 +102,48 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
             delivery_task_id=str(existing.task_id),
             delivery_task_status=existing.status)
 
-    # -- resolve the tote ------------------------------------------------
-    lpn = None
-    if lpn_barcode:
-        lpn = LpnMaster.objects.select_for_update().filter(
-            barcode__iexact=_barcode_value(lpn_barcode)).first()
-        if lpn is None:
-            raise PackError(f'No LPN with barcode {lpn_barcode!r}.', status=404)
-    elif lpn_id:
-        lpn = LpnMaster.objects.select_for_update().filter(pk=_barcode_value(lpn_id)).first()
-        if lpn is None:
-            raise PackError(f'No LPN with id {lpn_id!r}.', status=404)
-    else:
-        raise PackError(
-            'A tote is required: send lpn_barcode (what the operator scanned) or '
-            'lpn_id (an allocated tote).', status=400)
-
-    if lpn.current_site_id and lpn.current_site_id != order.site_id and \
-            lpn.status in {'PACKED', 'STAGED', 'IN_TRANSIT', 'SEALED'}:
-        raise PackError(
-            f'Tote {lpn.barcode} is at {lpn.current_site.code} and already holds '
-            f'goods; it cannot be filled for {order.site.code}.',
-            status=409, lpn_status=lpn.status)
-
-    # Only a tote with nothing in it can be filled. The check above only
-    # catches a busy tote belonging to *another* store, so a STAGED or
-    # IN_TRANSIT tote sitting at this one - sealed onto a different order by
-    # this store, or still out with a rider - walked straight through and a
-    # second order's units were added to a tote that already carried somebody
-    # else's goods under a different delivery task.
-    #
-    # Packing the *same* order again stays allowed: that is a retry after a
-    # dropped response, the goods are already in there, and `already_applied`
-    # below is what stops them being credited twice.
-    carrying_this_order = (
-        lpn.current_ref_id is not None
-        and str(lpn.current_ref_id) == str(order.order_id))
-    if lpn.status not in {'EMPTY', 'CREATED'} and not carrying_this_order:
-        raise PackError(
-            f'Tote {lpn.barcode} is {lpn.status} and is not empty, so it '
-            f'cannot be filled for {order.site.code}.',
-            status=409, lpn_status=lpn.status)
-
     staging_bin = str(staging_bin or '').strip()
     if not staging_bin:
         raise PackError(
             'staging_bin is required: the rider has to be told which slot to '
-            'collect the tote from.', status=400)
+            'collect from.', status=400)
 
-    # -- move the units into the tote ------------------------------------
-    packed, skipped = [], []
+    # -- record the pack per line --------------------------------------
+    # The units go from the picker's custody into the staged bag. This creates
+    # the per-line CUSTODY balance the pickup leg ships back out of; without
+    # it the ship leg has nothing to decrement and the units exist nowhere in
+    # the ledger. No LPN is involved - the bag itself is the container, keyed
+    # by line id.
+    from bounded.inventory.stock import already_applied, apply_stock
+    packed = []
     for line in lines:
-        if line.lot_id is None:
-            skipped.append({'line_id': str(line.line_id),
-                            'sku_code': line.sku.sku_code,
-                            'reason': 'line has no lot allocated'})
-            continue
-
-        already = already_applied(
-            site=order.site, sku=line.sku, lot=line.lot,
-            movement_type='PACK', ref_type='ORDERLINE', ref_id=line.line_id,
-            direction='IN', container='LPN', container_ref=lpn.lpn_id)
-        if not already:
-            apply_stock(
-                site=order.site, sku=line.sku, lot=line.lot, qty=line.picked_qty,
-                direction='IN', movement_type='PACK',
-                ref_type='ORDERLINE', ref_id=line.line_id,
-                actor_id=str(actor.user_id), actor_type=actor.role,
-                container='LPN', container_ref=lpn.lpn_id,
-                # The units are already out of sellable stock; this is a custody
-                # move into the tote, not new sellable inventory.
-                sellable=False,
-                # It is a hand-off, not a purchase. SUPPLIER would say these
-                # units were bought here, which would then read as negative
-                # shrinkage against the store.
-                supply_from='CUSTODY', supply_from_ref=str(line.line_id),
-            )
-
         line.packed_qty = line.picked_qty
         line.status = 'PICKED'
         line.save(update_fields=['packed_qty', 'status'])
 
-        LpnContent.objects.update_or_create(
-            lpn=lpn, sku=line.sku, lot=line.lot,
-            defaults={'qty': line.packed_qty})
+        if line.lot_id is not None and line.packed_qty > 0:
+            already = already_applied(
+                site=order.site, sku=line.sku, lot=line.lot,
+                movement_type='PACK', ref_type='ORDERLINE', ref_id=line.line_id,
+                direction='IN', container='CUSTODY',
+                container_ref=str(line.line_id))
+            if not already:
+                apply_stock(
+                    site=order.site, sku=line.sku, lot=line.lot,
+                    qty=line.packed_qty, direction='IN',
+                    movement_type='PACK',
+                    ref_type='ORDERLINE', ref_id=line.line_id,
+                    actor_id=str(actor.user_id), actor_type=actor.role,
+                    container='CUSTODY', container_ref=str(line.line_id),
+                    # Out of sellable stock; a custody move, not new inventory.
+                    sellable=False,
+                    supply_from='CUSTODY', supply_from_ref=str(line.line_id),
+                )
 
         PackTask.objects.update_or_create(
             packlist_id=order.order_id, sku=line.sku_id,
             defaults={
-                'order': order, 'lpn': lpn.lpn_id, 'qty': line.qty,
+                'order': order, 'lpn': '', 'qty': line.qty,
                 'packed_qty': line.packed_qty, 'staging_bin': staging_bin,
                 'status': 'COMPLETED',
                 'assigned_to': str(actor.user_id),
@@ -199,20 +154,11 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
                        'sku_code': line.sku.sku_code,
                        'qty': line.packed_qty})
 
-    # -- seal and stage the tote -----------------------------------------
-    lpn.status = 'STAGED'
-    lpn.current_site = order.site
-    lpn.current_container = 'LPN'
-    lpn.current_ref_id = str(order.order_id)
-    lpn.sealed_at = lpn.sealed_at or timezone.now()
-    lpn.save(update_fields=['status', 'current_site', 'current_container',
-                            'current_ref_id', 'sealed_at'])
-
     # -- rider job is born here ------------------------------------------
     now = timezone.now()
     if existing is None:
         task = DeliveryTask.objects.create(
-            order=order, site=order.site, bin=lpn.lpn_id, status='UNASSIGNED',
+            order=order, site=order.site, bin=None, status='UNASSIGNED',
             staging_bin=staging_bin, packed_at=now,
             order_weight_kg=_order_weight_kg(order, lines),
         )
@@ -221,7 +167,7 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
         # transaction rolled back, or the task exists from an earlier pack of a
         # cancelled order. Reuse it rather than dispatching a second rider.
         task = existing
-        task.bin = lpn.lpn_id
+        task.bin = None
         task.staging_bin = staging_bin
         task.packed_at = task.packed_at or now
         task.save(update_fields=['bin', 'staging_bin', 'packed_at'])
@@ -250,8 +196,6 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
             'order_id': str(order.order_id),
             'order_no': order.order_no,
             'site_code': order.site.code,
-            'lpn_id': lpn.lpn_id,
-            'lpn_barcode': lpn.barcode,
             'staging_bin': staging_bin,
             'lines': packed,
             'packed_by': str(actor.user_id),
@@ -266,37 +210,35 @@ def pack_order(*, order, actor, lpn_barcode=None, lpn_id=None, staging_bin=None)
             'order_id': str(order.order_id),
             'order_no': order.order_no,
             'site_code': order.site.code,
-            'lpn_barcode': lpn.barcode,
             'staging_bin': staging_bin,
             'status': task.status,
         },
     )
-
-    tote_qty = StockBalance.objects.filter(
-        site=order.site, container='LPN', container_ref=lpn.lpn_id
-    ).aggregate(total=Sum('qty'))['total'] or 0
 
     return {
         'order_id': str(order.order_id),
         'order_no': order.order_no,
         'status': order.status,
         'previous_status': previous_status,
-        'lpn': {'lpn_id': lpn.lpn_id, 'barcode': lpn.barcode, 'status': lpn.status},
         'staging_bin': staging_bin,
         'lines': packed,
-        'skipped': skipped,
+        'skipped': [{'line_id': str(l.line_id),
+                      'sku_code': l.sku.sku_code,
+                      'qty': l.qty,
+                      'picked_qty': l.picked_qty,
+                      'outstanding': l.qty - l.picked_qty}
+                     for l in lines if l.lot_id is None],
         'delivery_task': {
             'task_id': str(task.task_id),
             'status': task.status,
-            'bin': task.bin,
+            'bin': None,
             'staging_bin': task.staging_bin,
         },
-        'tote_qty': tote_qty,
     }
 
 
 def _order_weight_kg(order, lines):
-    """Best-effort tote weight, for rider acceptance decisions.
+    """Best-effort bag weight, for rider acceptance decisions.
 
     Sku.weight_g is optional in the catalogue, so this stays None rather than
     guessing: a rider accepting a job on a fabricated weight is worse than a

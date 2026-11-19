@@ -3,7 +3,7 @@
 Every earlier test fakes something to isolate one rule. This one fakes nothing:
 stock is put away through the ledger, the order is allocated, each unit is
 scanned off a shelf, the pick is completed, the order is packed into a scanned
-tote, a rider collects that tote, and the customer reads a code off their phone
+bag, a rider collects the bag, and the customer reads a code off their phone
 so the delivery can close.
 
 The assertions are the ones that matter at the end: where the stock is, what the
@@ -23,7 +23,7 @@ from bounded.delivery.handoff import _hash_otp
 from bounded.delivery.models import DeliveryTask, RiderProfile
 from bounded.ds_ops.allocation import allocate_order
 from bounded.iam.models import User
-from bounded.inventory.models import LpnContent, LpnMaster, StockBalance, StockMovement
+from bounded.inventory.models import StockBalance, StockMovement
 from bounded.network.models import EmployeeSiteAssignment, Location, Site
 from bounded.notifications.models import Notification
 from bounded.notifications.publish import publish_batch
@@ -81,9 +81,6 @@ class EndToEndWorkflowTests(TestCase):
             barcode='BIN-E2E-B', qr_payload='loc:e2e-b',
             is_sellable_bin=True, created_by='test')
 
-        cls.tote = LpnMaster.objects.create(
-            lpn_id='LPN-E2E-1', barcode='TOTE-E2E-1', lpn_type='TOTE',
-            current_site=cls.site, status='EMPTY', created_by='test')
 
         cls.cereal = Sku.objects.create(
             sku_code='E2E-CEREAL', name='Cereal', sub_category='Grocery',
@@ -142,11 +139,6 @@ class EndToEndWorkflowTests(TestCase):
         if sku is not None:
             qs = qs.filter(sku=sku, lot=lot)
         return sum(q.qty for q in qs)
-
-    def tote_qty(self):
-        return sum(
-            q.qty for q in StockBalance.objects.filter(
-                site=self.site, container='LPN', container_ref=self.tote.lpn_id))
 
     def scan_next_bin(self, line, expect_bin=None):
         """Walk the work list: read it, scan the bin it names, scan one unit."""
@@ -235,7 +227,8 @@ class EndToEndWorkflowTests(TestCase):
             self.bin_2.location_id, self.cereal, self.cereal_lot))
         self.assertEqual(2, self.bin_qty(
             self.bin_1.location_id, self.milk, self.milk_lot))
-        self.assertEqual(0, self.tote_qty())
+        self.assertEqual(0, StockBalance.objects.filter(
+            site=self.site, container='LPN').count())
 
         # 4. Complete the pick.
         completed = self.picker_api.post(ORDER_ACTION, {
@@ -245,21 +238,18 @@ class EndToEndWorkflowTests(TestCase):
         self.assertEqual(200, completed.status_code, completed.data)
         self.assertEqual('PICKED', completed.data['status'])
 
-        # 5. Pack into the scanned tote, staged where the rider will be told.
+        # 5. Pack the loose bag, staged where the rider will be told.
         packed = self.picker_api.post(PACK, {
             'order_id': str(self.order.order_id),
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-E2E-7',
         }, format='json')
         self.assertEqual(200, packed.status_code, packed.data)
         self.assertEqual('PACKED', packed.data['status'])
-        self.assertEqual(6, self.tote_qty())
         self.assertEqual('STAGE-E2E-7', packed.data['delivery_task']['staging_bin'])
 
-        # 6. The rider collects, scanning the tote that was staged.
+        # 6. The rider collects the bag, no tote involved at all.
         picked_up = self.rider_api.post(PICKUP, {
             'task_id': str(self.pickup_task().task_id),
-            'lpn_barcode': self.tote.barcode,
         }, format='json')
         self.assertEqual(200, picked_up.status_code, picked_up.data)
         self.assertEqual('PICKED_UP', picked_up.data['status'])
@@ -337,13 +327,11 @@ class EndToEndWorkflowTests(TestCase):
             type='DELIVERY_OTP', user=str(self.customer_user.user_id)
         ).exists(), 'the customer never received the pickup code')
 
-        # 9. Final ledger. Six units out of the bins, six in the tote, and the
-        #    chain intact.
+        # 9. Final ledger. Six units out of the bins, six out with the rider.
         refs = {}
         for m in StockMovement.objects.filter(site=self.site):
             refs[m.movement_ref] = refs.get(m.movement_ref, 0) + m.qty
         self.assertEqual(6, refs['PICK'])
-        self.assertEqual(6, refs['PACK'])
         self.assertEqual(6, refs['SHIP'])
 
         order = CustomerOrder.objects.get(pk=self.order.pk)
@@ -367,12 +355,12 @@ class EndToEndWorkflowTests(TestCase):
 
         response = self.picker_api.post(PACK, {
             'order_id': str(self.order.order_id),
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-E2E-7',
         }, format='json')
 
         self.assertEqual(409, response.status_code)
-        self.assertEqual(0, self.tote_qty())
+        self.assertEqual(0, StockBalance.objects.filter(
+            site=self.site, container='LPN').count())
         self.assertEqual(0, DeliveryTask.objects.count())
         self.assertEqual(3, self.bin_qty(
             self.bin_1.location_id, self.cereal, self.cereal_lot))
@@ -382,11 +370,10 @@ class EndToEndWorkflowTests(TestCase):
         self.pick_everything()
         self.picker_api.post(PACK, {
             'order_id': str(self.order.order_id),
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-E2E-8'}, format='json')
         self.rider_api.post(PICKUP, {
             'task_id': str(self.pickup_task().task_id),
-            'lpn_barcode': self.tote.barcode}, format='json')
+            }, format='json')
 
         first = self.rider_api.post(POD, {
             'task_id': str(self.pickup_task().task_id)}, format='json')
@@ -423,7 +410,6 @@ class EndToEndWorkflowTests(TestCase):
         self.pick_everything()
         self.picker_api.post(PACK, {
             'order_id': str(self.order.order_id),
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-E2E-9'}, format='json')
 
         for action in ('HANDOFF_RIDER', 'DELIVERED'):
@@ -450,7 +436,6 @@ class EndToEndWorkflowTests(TestCase):
         self.pick_everything()
         self.picker_api.post(PACK, {
             'order_id': str(self.order.order_id),
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-E2E-7'}, format='json')
 
         first, _ = publish_batch()
@@ -465,7 +450,6 @@ class EndToEndWorkflowTests(TestCase):
         self.pick_everything()
         self.picker_api.post(PACK, {
             'order_id': str(self.order.order_id),
-            'lpn_barcode': self.tote.barcode,
             'staging_bin': 'STAGE-E2E-7'}, format='json')
 
         task = self.pickup_task()

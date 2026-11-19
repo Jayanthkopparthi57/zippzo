@@ -10,13 +10,13 @@ from .access import require_order_access, require_session_facility
 
 
 class DSPackOrderView(APIView):
-    """Seal a picked order into a tote and raise the rider job.
+    """Stage a picked order: move it to PACKED at a staging slot and raise the rider job.
 
     This is the operation that earns the word PACKED. It refuses anything that is
-    not fully picked, requires the tote the operator scanned and the staging slot
-    the rider will collect from, and writes the delivery task and the outbox
-    events in the same transaction as the stock move - so a rolled-back pack
-    cannot leave a promise to notify a rider behind.
+    not fully picked, requires the staging slot the rider will collect from, and
+    writes the delivery task and the outbox events in the same transaction as the
+    pack record - so a rolled-back pack cannot leave a promise to notify a rider
+    behind. Outbound orders are loose bags; no tote is involved.
     """
     permission_classes = [IsAuthenticated, IsFieldSurface]
 

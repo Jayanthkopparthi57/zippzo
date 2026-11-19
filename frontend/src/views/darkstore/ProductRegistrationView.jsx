@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Check, PackagePlus, RefreshCw } from 'lucide-react';
 import StoreGate from './StoreGate';
 import { useDarkStore, useAsyncData, asList } from './useDarkStore';
@@ -6,7 +6,6 @@ import { useAuth } from '../../context/AuthContext';
 import ScanInput from '../../components/ui/ScanInput';
 import { fetchApi, patchApi, postApi, uploadFile, describeError } from '../../api/client';
 
-const money = (value) => `₹${Number(value || 0).toFixed(2)}`;
 const emptyForm = (scan = '') => ({
   scan,
   skuId: '',
@@ -32,10 +31,6 @@ function Registration({ siteId, storeCode }) {
   const [message, setMessage] = useState(null);
   const [notice, setNotice] = useState(null);
 
-  const { data: skuRows, reload: reloadSkus } = useAsyncData(
-    () => fetchApi('/catalog/skus/?status=ACTIVE&page_size=1000').then((r) => asList(r, '/catalog/skus')),
-    [],
-  );
   const { data: listingRows, reload: reloadListings } = useAsyncData(
     () => siteId ? fetchApi(`/catalog/listings/?site=${encodeURIComponent(siteId)}&page_size=1000`).then((r) => asList(r, '/catalog/listings')) : Promise.resolve([]),
     [siteId],
@@ -48,40 +43,11 @@ function Registration({ siteId, storeCode }) {
     () => siteId ? fetchApi(`/network/locations/?site=${encodeURIComponent(siteId)}&page_size=500`).then((r) => asList(r, '/network/locations')) : Promise.resolve([]),
     [siteId],
   );
-  const { data: balanceRows, reload: reloadBalances } = useAsyncData(
-    () => siteId ? fetchApi(`/inventory/balances/?site=${encodeURIComponent(siteId)}&page_size=1000`).then((r) => asList(r, '/inventory/balances')) : Promise.resolve([]),
-    [siteId],
-  );
   const { data: userRows, reload: reloadUsers } = useAsyncData(
     () => fetchApi('/iam/users/?page_size=500').then((r) => asList(r, '/iam/users')),
     [],
   );
-
-  const products = useMemo(() => {
-    const skuById = new Map();
-    (skuRows || []).forEach((sku) => skuById.set(String(sku.sku_id), sku));
-    const balBySku = new Map();
-    (balanceRows || []).forEach((row) => {
-      if (row.container !== 'BIN') return;
-      const key = String(row.sku);
-      if (!balBySku.has(key)) balBySku.set(key, []);
-      balBySku.get(key).push(row);
-    });
-    return (listingRows || []).map((listing) => {
-      const sku = skuById.get(String(listing.sku)) || {};
-      const balances = balBySku.get(String(listing.sku)) || [];
-      return {
-        ...listing,
-        sku_name: sku.name || '',
-        sku_code: sku.sku_code || '',
-        pack_size: sku.pack_size || '',
-        is_available: listing.is_available,
-        is_listed: listing.is_listed,
-        locations: balances.map((b) => `${b.container_ref} × ${b.qty}`).join(', ') || '—',
-        available: balances.reduce((sum, b) => sum + Number(b.qty || 0), 0),
-      };
-    });
-  }, [skuRows, listingRows, balanceRows]);
+  const nameRef = useRef(null);
 
   // The opening-stock POST requires a *different* estate-role approver than the
   // person requesting it. Offering the signed-in user made the save fail with a
@@ -96,6 +62,15 @@ function Registration({ siteId, storeCode }) {
       return true;
     });
   }, [userRows, user?.user_id, user?.email]);
+
+  // What the scanned code most likely is, used to file the barcode and the EAN
+  // correctly instead of saving everything as CODE128.
+  const detectSymbology = (code) => {
+    const c = String(code || '').trim();
+    if (/^\d{12}$/.test(c)) return 'UPC';
+    if (/^(\d{8}|\d{13}|\d{14})$/.test(c)) return 'EAN';
+    return 'CODE128';
+  };
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
@@ -167,6 +142,9 @@ function Registration({ siteId, storeCode }) {
       } else {
         setForm(emptyForm(code));
         setMessage({ type: 'hint', message: 'New product. The SKU code will be generated automatically on save — enter name, brand, price and MRP.' });
+        // The barcode is already in the form; jump the employee straight to
+        // the first blank required field.
+        setTimeout(() => nameRef.current?.focus(), 0);
       }
     } catch (error) {
       setMessage({ type: 'error', message: error.message || 'Could not look up this barcode.' });
@@ -227,7 +205,7 @@ function Registration({ siteId, storeCode }) {
       if (form.scan.trim()) {
         await postApi('/catalog/barcodes/', {
           barcode: form.scan.trim(),
-          symbology: 'CODE128',
+          symbology: detectSymbology(form.scan),
           sku: skuId,
           pack_level: 'EACH',
           qty_in_base: 1,
@@ -306,7 +284,7 @@ function Registration({ siteId, storeCode }) {
       }
 
       setForm(emptyForm());
-      await Promise.all([reloadSkus({ quiet: true }), reloadListings({ quiet: true }), reloadBalances({ quiet: true }), reloadUsers({ quiet: true })]);
+      await Promise.all([reloadListings({ quiet: true }), reloadUsers({ quiet: true })]);
       setMessage({ type: 'ok', message: `${isNew ? 'Product registered' : 'Product updated'}${skuCode ? ` as ${skuCode}` : ''} and listed for ${storeCode}.${stockNotice ? ' ' + stockNotice : ''}` });
     } catch (error) {
       setMessage({ type: 'error', message: describeError(error) || 'Could not save the product.' });
@@ -321,13 +299,12 @@ function Registration({ siteId, storeCode }) {
         <div>
           <div className="screen-title">
             <span>PRODUCT REGISTRATION</span>
-            <span className="screen-count-tag">{products.length} live</span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
             Scan a barcode, fill the details below, save. The product is listed for this store instantly.
           </div>
         </div>
-        <button className="btn-ui neutral" onClick={() => Promise.all([reloadSkus(), reloadListings(), reloadBalances(), reloadUsers()])}>
+        <button className="btn-ui neutral" onClick={() => Promise.all([reloadListings(), reloadUsers()])}>
           <RefreshCw size={13} /> Refresh
         </button>
       </div>
@@ -368,7 +345,7 @@ function Registration({ siteId, storeCode }) {
           </div>
           <div className="form-group">
             <label className="form-label">Product name *</label>
-            <input className="form-input" value={form.name} onChange={(e) => set('name', e.target.value)} required />
+            <input ref={nameRef} className="form-input" autoFocus={!!form.scan && !form.skuId} value={form.name} onChange={(e) => set('name', e.target.value)} required />
           </div>
           <div className="form-group">
             <label className="form-label">Brand</label>
@@ -473,39 +450,9 @@ function Registration({ siteId, storeCode }) {
         </div>
       </form>
 
-      {/* Live list */}
-      <div className="wf-panel" style={{ marginTop: 18 }}>
-        <div className="screen-title" style={{ fontSize: 15, marginBottom: 10 }}>
-          <span>LISTED PRODUCTS</span>
-          <span className="screen-count-tag">{products.length} live</span>
-        </div>
-        {products.length === 0 ? (
-          <div style={{ padding: '16px 18px', color: 'var(--text-muted)', fontSize: 12.5 }}>No products listed yet. Register one above.</div>
-        ) : (
-          <div className="product-list">
-            {products.map((p) => (
-              <div key={p.listing_id || p.sku_id || Math.random()} className="product-row">
-                <div>
-                  <strong>{p.sku_name}</strong>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{p.sku_code}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{money(p.price)}</div>
-                  <div style={{ fontSize: 10, color: p.available > 0 ? 'var(--c-emerald)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                    {p.available} in stock
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
       <style>{`
         .product-form .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
         .product-form .form-actions { display: flex; gap: 8px; margin-top: 14px; }
-        .product-list { display: flex; flex-direction: column; gap: 8px; }
-        .product-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-card); }
         @media (max-width: 720px) { .product-form .form-grid { grid-template-columns: 1fr; } }
       `}</style>
     </div>

@@ -48,12 +48,9 @@ class DeliveryTaskSerializer(serializers.ModelSerializer):
     delivery_address = serializers.SerializerMethodField()
     grand_total = serializers.SerializerMethodField()
     payment_method = serializers.SerializerMethodField()
-    # The counter is a physical place: the operator has to see the rider's name
-    # and the barcode printed on the tote, not two UUIDs. `bin` is the tote's
-    # lpn_id (a bare column, not a FK), so the barcode is resolved here in one
-    # batched query for the page.
+    # The counter is a physical place: the operator has to see the rider's name,
+    # not a bare UUID.
     rider_name = serializers.SerializerMethodField()
-    tote_barcode = serializers.SerializerMethodField()
     # The rider has to navigate and ring the doorbell, so the address alone is
     # not enough: the map pin and the phone number are part of doing the job.
     # They follow the same rule as the address (assigned rider / store staff),
@@ -73,38 +70,12 @@ class DeliveryTaskSerializer(serializers.ModelSerializer):
         # is written only through the `toggle-cash-collected` action — PATCH on
         # this field is left out on purpose because it is the counter's own
         # memo, not something a rider should be able to set on the order.
-        fields = ['task_id','order','order_no','shipped_qty','site','rider','rider_name','bin','tote_barcode','staging_bin','status','offer_count','offer_surge','order_weight_kg','order_volume_cbm','requires_cold_chain','offered_at','accepted_at','pickup_at','packed_at','delivered_at','distance_m','eta_at','attempt_no','route_plan_id','route_seq','customer_name','customer_phone','delivery_address','geo_lat','geo_lng','grand_total','delivery_fee','payment_method','payment_status','cash_collected_at','created_at']
+        fields = ['task_id','order','order_no','shipped_qty','site','rider','rider_name','staging_bin','status','offer_count','offer_surge','order_weight_kg','order_volume_cbm','requires_cold_chain','offered_at','accepted_at','pickup_at','packed_at','delivered_at','distance_m','eta_at','attempt_no','route_plan_id','route_seq','customer_name','customer_phone','delivery_address','geo_lat','geo_lng','grand_total','delivery_fee','payment_method','payment_status','cash_collected_at','created_at']
         read_only_fields = ['task_id','created_at']
 
     def get_rider_name(self, obj):
         rider = getattr(obj, 'rider', None)
         return getattr(rider, 'name', None) or ''
-
-    def get_tote_barcode(self, obj):
-        if not obj.bin:
-            return None
-        return self._tote_barcodes().get(str(obj.bin))
-
-    def _tote_barcodes(self):
-        """lpn_id -> printed barcode for every tote on this page.
-
-        One query per response instead of one per row: a 100-task handoff queue
-        would otherwise fire 100 lookups just to label the tote column.
-        """
-        if getattr(self, '_tote_map', None) is None:
-            from bounded.inventory.models import LpnMaster
-
-            objs = self.instance
-            if isinstance(objs, (list, tuple)):
-                bins = [o.bin for o in objs if getattr(o, 'bin', None)]
-            else:
-                bins = [objs.bin] if getattr(objs, 'bin', None) else []
-            self._tote_map = {
-                str(lpn_id): barcode
-                for lpn_id, barcode in LpnMaster.objects
-                    .filter(lpn_id__in=bins).values_list('lpn_id', 'barcode')
-            }
-        return self._tote_map
 
     def get_order_no(self, obj):
         return getattr(getattr(obj, 'order', None), 'order_no', None)

@@ -8,9 +8,10 @@ and without settling COD, and no order status or shipped_qty moved with it.
 
 `HandoffService` puts both steps behind one guarded operation each:
 
-  * pickup  requires the tote barcode, moves the order to PICKED_UP, sets
-    shipped_qty on every line and clears the store's custody of the units -
-    the last point at which the store still owns them.
+  * pickup  requires the order to be staged and handed to a rider, moves the
+    order to PICKED_UP, sets shipped_qty on every line and clears the store's
+    custody of the units - the last point at which the store still owns them.
+    Outbound orders ride in loose bags; no LPN/tote barcode is read here.
   * pod     requires the pickup OTP, and for cash orders requires the amount
     actually collected, before the order is allowed to reach DELIVERED.
 
@@ -188,8 +189,8 @@ def _settle_delivery(*, order, task, actor, cod, delivered_at,
 
 
 @transaction.atomic
-def rider_pickup(*, task, actor, lpn_barcode=None):
-    from bounded.inventory.models import LpnMaster, StockBalance
+def rider_pickup(*, task, actor):
+    from bounded.inventory.models import StockBalance
     from bounded.inventory.stock import already_applied, apply_stock
     from bounded.orders.models import CustomerOrderLine, OrderStatusHistory
     from bounded.outbox.services import enqueue_event
@@ -203,51 +204,50 @@ def rider_pickup(*, task, actor, lpn_barcode=None):
             f'Delivery task {task.task_id} is {task.status}; it cannot be picked '
             f'up from there.')
 
-    # Only set when a barcode was scanned or the order is staged in a tote.
-    # Without this the reply below referenced a name that neither branch had
-    # bound, so a pickup with no tote barcode - the normal case for a loose
-    # bag - raised UnboundLocalError after the stock had already moved.
-    lpn = None
-    if lpn_barcode:
-        lpn = LpnMaster.objects.filter(barcode__iexact=str(lpn_barcode).strip()).first()
-        if lpn is None:
-            raise HandoffError(f'No tote with barcode {lpn_barcode!r}.', status=404)
-        if task.bin and lpn.lpn_id != task.bin:
-            raise HandoffError(
-                f'This order is staged in tote {task.bin}, not {lpn.barcode}. '
-                f'Wrong tote at the collection point.', status=409,
-                expected_lpn=task.bin)
-
     previous = order.status
     now = timezone.now()
 
     # shipped_qty is the count of units that actually left the store with the
-    # rider. Until it is written the order has no notion of what is in the tote,
+    # rider. Until it is written the order has no notion of what the rider carried,
     # so a short or wrong pickup would be invisible.
     lines = list(CustomerOrderLine.objects.select_for_update(of=('self',))
                  .filter(order=order).select_related('sku', 'lot'))
 
+    # Two shapes of task exist on outbound orders:
+    #   * loose bag (current code): goods live in a per-line CUSTODY balance
+    #     created at pack;
+    #   * legacy tote task: goods live in the LPN balance the order was sealed
+    #     into before outbound totes were removed. Ship from that balance so the
+    #     ledger stays balanced for orders packed under the old flow.
+    if task.bin:
+        ship_container, ship_ref = 'LPN', task.bin
+    else:
+        ship_container, ship_ref = 'CUSTODY', None
+
     for line in lines:
         if line.lot_id is None or not line.packed_qty:
             continue
+        container = ship_container
+        container_ref = ship_ref if ship_ref is not None else str(line.line_id)
         if not already_applied(
             site=order.site, sku=line.sku, lot=line.lot,
             movement_type='SHIP', ref_type='ORDERLINE', ref_id=line.line_id,
-            direction='OUT', container='LPN', container_ref=task.bin):
+            direction='OUT', container=container, container_ref=container_ref):
             apply_stock(
                 site=order.site, sku=line.sku, lot=line.lot, qty=line.packed_qty,
                 direction='OUT', movement_type='SHIP',
                 ref_type='ORDERLINE', ref_id=line.line_id,
                 actor_id=str(actor.user_id), actor_type=actor.role,
-                container='LPN', container_ref=task.bin,
+                container=container, container_ref=container_ref,
                 sellable=False,
-                # Custody leaves the store with the rider, not to a supplier.
-                supply_from='CUSTODY', supply_from_ref=str(line.line_id),
             )
         line.shipped_qty = line.packed_qty
         line.save(update_fields=['shipped_qty'])
 
     if task.bin:
+        # Legacy tote task: the tote leaves the store with the rider. New
+        # loose-bag tasks carry no bin and skip this entirely.
+        from bounded.inventory.models import LpnMaster
         lpn = LpnMaster.objects.select_for_update().filter(pk=task.bin).first()
         if lpn is not None:
             lpn.status = 'IN_TRANSIT'
@@ -301,10 +301,6 @@ def rider_pickup(*, task, actor, lpn_barcode=None):
         'status': order.status,
         'task_status': task.status,
         'previous_status': previous,
-        # Echoed so the counter can confirm which tote it just emptied, rather
-        # than repeating what the operator scanned and trusting it.
-        'lpn_id': lpn.lpn_id if lpn else (task.bin or None),
-        'lpn_barcode': lpn.barcode if lpn else None,
         'pickup_at': task.pickup_at,
         'shipped_qty': sum(l.shipped_qty for l in lines),
         'can_request_pod': True,
@@ -457,34 +453,179 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
     fields.append('pod_otp_hash')
     order.save(update_fields=fields)
 
-    # The goods leave the tote at the customer's door, so from here it is an
-    # empty tote again and it goes back into service at the store that packed
-    # it. That store's pool is `current_site = store AND status in (EMPTY,
-    # CREATED)`, which is what the pack screen offers the packer - and until
-    # this existed pickup parked the tote IN_TRANSIT with no site at all and
-    # nothing ever brought it back, so a store that had delivered once ran out
-    # of plastic and could never pack a second order.
-    #
-    # `LpnContent` is deliberately left alone. The manifest is the record of
-    # what the tote carried, and the journey suite leans on that: a discrepancy
-    # has to stay investigable after the delivery rather than being erased by
-    # the tote going back on the shelf.
-    if task.bin:
-        from bounded.inventory.models import LpnMaster
+    OrderStatusHistory.objects.create(
+        order=order, from_status=previous, to_status='PICKED_UP',
+        actor_type=actor.role, actor_id=str(actor.user_id))
 
-        returned = LpnMaster.objects.select_for_update().filter(
-            pk=task.bin).first()
-        if returned is not None:
-            returned.status = 'EMPTY'
-            returned.current_site_id = order.site_id
-            returned.current_container = None
-            returned.current_ref_id = None
-            # Each load is sealed as it is packed, so keeping the old stamp
-            # would date the next pack of this tote to the delivery before it.
-            returned.sealed_at = None
-            returned.save(update_fields=[
-                'status', 'current_site', 'current_container',
-                'current_ref_id', 'sealed_at'])
+    enqueue_event(
+        aggregate_type='CustomerOrder', aggregate_id=order.order_id,
+        event_type='order.picked_up', correlation_id=order.order_id,
+        payload_json={
+            'order_id': str(order.order_id),
+            'order_no': order.order_no,
+            'task_id': str(task.task_id),
+            'rider_user_id': str(actor.user_id),
+            'shipped_units': sum(l.shipped_qty for l in lines),
+        },
+    )
+
+    return {
+        'order_id': str(order.order_id),
+        'order_no': order.order_no,
+        'status': order.status,
+        'task_status': task.status,
+        'previous_status': previous,
+        'pickup_at': task.pickup_at,
+        'shipped_qty': sum(l.shipped_qty for l in lines),
+        'can_request_pod': True,
+    }
+
+
+@transaction.atomic
+def complete_pod(*, task, actor, otp=None, cod_amount=None,
+                 signature=None, method=None):
+    from bounded.orders.models import OrderStatusHistory
+    from bounded.outbox.services import enqueue_event
+
+    order = type(task.order).objects.select_for_update().select_related(
+        'site').get(pk=task.order_id)
+    task = type(task).objects.select_for_update().get(pk=task.pk)
+
+    if task.status not in {'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING'}:
+        raise HandoffError(
+            f'Delivery task {task.task_id} is {task.status}; the order has not '
+            f'been picked up yet.')
+
+    # `advance` will walk AT_DS straight to EN_ROUTE, and `complete_pod` used
+    # to read the status alone, so a task could be delivered without ever
+    # leaving the store: shipped_qty stayed 0, no SHIP movement was written and
+    # the units were still counted as sellable on the shelf while the customer
+    # had them. Pickup is the step that books them out, so it is required here
+    # regardless of what the task now says about itself.
+    if task.pickup_at is None:
+        raise HandoffError(
+            f'{order.order_no} has not been collected from the store yet; '
+            f'record the pickup before handing it over.',
+            pickup_required=True)
+
+    if not order.pod_otp_hash:
+        _start_pod(order, actor)
+        # Park the task so the rider's screen shows "waiting for the customer's
+        # code" instead of a task that looks abandoned. Committed here rather
+        # than in _start_pod because both rows belong to the same transaction
+        # as the OTP - see the note below.
+        task.status = 'POD_PENDING'
+        task.save(update_fields=['status'])
+        # Returned, not raised. complete_pod runs inside a transaction, so
+        # raising here would roll back the very OTP it just minted: the customer
+        # would never be sent a code, the order would never carry a hash, and
+        # every subsequent attempt would mint a fresh code instead of checking
+        # the one the customer is holding.
+        return {
+            'otp_required': True,
+            # The code itself is deliberately absent. It reaches the customer
+            # through the outbox notification; handing it back to the caller would
+            # make the code a secret the rider already holds, which is the whole
+            # thing the code exists to prove.
+            'order_id': str(order.order_id),
+            'order_no': order.order_no,
+            'status': order.status,
+            'task_status': task.status,
+        }
+    if not otp:
+        raise HandoffError('otp is required to close a delivery.', status=400,
+                           otp_required=True)
+    if not secrets.compare_digest(order.pod_otp_hash, _hash_otp(str(otp).strip())):
+        raise HandoffError('That pickup code does not match this order.',
+                           status=400, otp_required=True)
+
+    cod = None
+    cod_due = None
+    cod_variance = None
+    # A COD order can be settled online at the door (card / UPI / UPI QR via
+    # Cashfree). The webhook may confirm that capture while the rider's phone
+    # is offline, so `order.payment_method` can still say COD even though the
+    # customer has already paid. If this delivery also records cash, the same
+    # order is collected twice; the provider attempt is the authority, not what
+    # the rider's screen happened to show.
+    from bounded.orders.models import PaymentAttempt
+
+    paid_online_attempt = None
+    if order.payment_method == 'COD':
+        paid_online_attempt = PaymentAttempt.objects.filter(
+            order=order, status='PAID').order_by('-updated_at').first()
+
+    if order.payment_method == 'COD' and paid_online_attempt is None:
+        if cod_amount is None or str(cod_amount).strip() == '':
+            raise HandoffError(
+                f'{order.order_no} is cash on delivery; record what was '
+                f'collected.', status=400, cod_required=True,
+                cod_due=str(order.grand_total))
+        # `str(x)` never raises, so the previous `try: str(...) except ValueError`
+        # could not have caught a non-number - any junk string was recorded as
+        # cash collected and then set payment_status to CAPTURED. The amount has
+        # to actually parse as money.
+        try:
+            cod = Decimal(str(cod_amount).strip()).quantize(Decimal('0.01'))
+        except (InvalidOperation, ValueError, ArithmeticError):
+            raise HandoffError(
+                f'cod_amount {str(cod_amount)!r} is not an amount.',
+                status=400, cod_due=str(order.grand_total))
+        # Decimal parses NaN and Infinity happily, and then refuses to be
+        # compared - so the check below would raise instead of reporting bad
+        # input. Reject them while they are still values.
+        if not cod.is_finite():
+            raise HandoffError(
+                f'cod_amount {str(cod_amount)!r} is not a finite amount.',
+                status=400, cod_due=str(order.grand_total))
+        if cod < 0:
+            raise HandoffError('cod_amount cannot be negative.', status=400,
+                               cod_due=str(order.grand_total))
+        cod_due = Decimal(order.grand_total).quantize(Decimal('0.01'))
+        cod_variance = cod - cod_due
+
+    now = timezone.now()
+    previous = order.status
+
+    if paid_online_attempt is not None:
+        # The customer paid Cashfree, not the rider. Record the capture so the
+        # door handover, the payment row and the order agree, and deliberately
+        # write no cash movement: no note ever entered the rider's custody.
+        from bounded.money.models import Payment
+
+        order.payment_method = 'CASHFREE'
+        order.payment_status = 'CAPTURED'
+        Payment.objects.get_or_create(
+            order=order,
+            gateway_order_id=paid_online_attempt.provider_order_id,
+            defaults={
+                'customer_id': order.customer_id,
+                'method': 'COD_UPI',
+                'gateway': 'CASHFREE',
+                'gateway_payment_id': paid_online_attempt.provider_payment_id,
+                'amount': paid_online_attempt.amount,
+                'status': 'CAPTURED',
+                'captured_at': now,
+            })
+
+    task.status = 'DELIVERED'
+    task.delivered_at = now
+    task.save(update_fields=['status', 'delivered_at'])
+    # Capacity freed: the next waiting task at this store goes to whoever is
+    # online with room for it.
+    from bounded.delivery.dispatch import assign_pending_at
+    assign_pending_at(task.site, actor)
+
+    order.status = 'DELIVERED'
+    order.delivered_at = now
+    fields = ['status', 'delivered_at', 'payment_method', 'payment_status']
+    if order.payment_method == 'COD':
+        order.payment_status = 'CAPTURED'
+    # The code is single use. Keeping it would let a captured screenshot close
+    # the same order again later.
+    order.pod_otp_hash = None
+    fields.append('pod_otp_hash')
+    order.save(update_fields=fields)
 
     OrderStatusHistory.objects.create(
         order=order, from_status=previous, to_status='DELIVERED',
@@ -531,3 +672,4 @@ def complete_pod(*, task, actor, otp=None, cod_amount=None,
     if settlement:
         result.update(settlement)
     return result
+

@@ -1,6 +1,6 @@
 ﻿import React, { useMemo, useState } from 'react';
 import {
-  Bike, Check, AlertTriangle, MapPin, RefreshCw, KeyRound, X,
+  Bike, Check, AlertTriangle, RefreshCw, KeyRound, X,
 } from 'lucide-react';
 import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
@@ -19,15 +19,12 @@ import {
  *   - assign: riders are stamped onto tasks automatically at checkout; this
  *     screen never assigns manually. The UNASSIGNED queue clears when the
  *     assignment engine retries (a rider coming online drains the queue).
- *   - pickup: scan the tote barcode to confirm it matches the tote the task was
- *     packed into (`task.bin`), which ships the stock and starts custody.
+ *   - pickup: the rider takes the staged bag; the server ships what was packed
+ *     and starts custody. No tote is scanned - outbound orders are loose bags.
  *   - POD: the customer's pickup code and, for COD, the cash taken.
  *
- * Every earlier version of this file called these with the wrong argument
- * shape (`{task_id, tote_barcode, rider_id, store_code}`), so the server read
- * `task_id` but never saw an `lpn_barcode` or an `otp`, and the screen filled
- * the gaps with `STAGE-01` and `0.8 kg`. Nothing below is invented: a missing
- * value renders as a dash.
+ * Outbound orders are loose bags; nothing about this screen knows about
+ * totes or LPNs. A missing value renders as a dash.
  */
 
 const PICKUP_STATUSES = new Set([
@@ -54,8 +51,6 @@ function Handoff({ siteId }) {
 
   const [selectedTask, setSelectedTask] = useState(null);
   const [modalMode, setModalMode] = useState(null); // 'pickup' | 'pod'
-  const [toteBarcode, setToteBarcode] = useState('');
-  const [loosePickup, setLoosePickup] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [cashCollected, setCashCollected] = useState('');
   const [busy, setBusy] = useState(false);
@@ -71,8 +66,6 @@ function Handoff({ siteId }) {
     if (busy && force !== true) return;
     setSelectedTask(null);
     setModalMode(null);
-    setToteBarcode('');
-    setLoosePickup(false);
     setOtpCode('');
     setCashCollected('');
   };
@@ -80,8 +73,6 @@ function Handoff({ siteId }) {
   const openModal = (task, mode) => {
     setSelectedTask(task);
     setModalMode(mode);
-    setToteBarcode(mode === 'pickup' ? (task.tote_barcode || '') : '');
-    setLoosePickup(false);
     setOtpCode('');
     setCashCollected('');
     setFeedback(null);
@@ -92,16 +83,10 @@ function Handoff({ siteId }) {
 
   const handlePickup = async () => {
     if (!selectedTask) return;
-    // The tote scan is the check that the right bag is leaving the counter. A
-    // pickup without it would ship whatever `task.bin` happens to point at.
-    if (!loosePickup && !toteBarcode.trim()) {
-      setFeedback({ type: 'error', message: 'Scan the tote barcode â€” or pick "Loose handoff" if this order has no tote.' });
-      return;
-    }
     setBusy(true);
     setFeedback(null);
     try {
-      await riderPickup(selectedTask.task_id, loosePickup ? '' : toteBarcode.trim());
+      await riderPickup(selectedTask.task_id);
       toast.success(`${selectedTask.order_no || 'Order'} handed to the rider.`);
       closeModal(true);
       reload();
@@ -139,8 +124,7 @@ function Handoff({ siteId }) {
       return (
         String(t.order_no || t.order || '').toLowerCase().includes(q) ||
         String(t.rider_name || '').toLowerCase().includes(q) ||
-        String(t.staging_bin || '').toLowerCase().includes(q) ||
-        String(t.tote_barcode || '').toLowerCase().includes(q)
+        String(t.staging_bin || '').toLowerCase().includes(q)
       );
     });
   }, [taskList, statusFilter, filterQuery]);
@@ -163,7 +147,7 @@ function Handoff({ siteId }) {
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
             {historyMode
               ? 'Delivered orders are shown separately from active rider handoffs.'
-              : 'Active work only. Riders are assigned automatically; verify the tote on handover, and close cash-on-delivery jobs.'}
+              : 'Active work only. Riders are assigned automatically; hand off the staged bag and close cash-on-delivery jobs.'}
           </div>
         </div>
 
@@ -242,7 +226,7 @@ function Handoff({ siteId }) {
         <input
           type="text"
           className="table-filter-input"
-          placeholder="Filter order, rider, tote or staging slot..."
+          placeholder="Filter order, rider or staging slot..."
           value={filterQuery}
           onChange={(e) => setFilterQuery(e.target.value)}
         />
@@ -256,7 +240,6 @@ function Handoff({ siteId }) {
           <thead>
             <tr>
               <th>ORDER REF</th>
-              <th>TOTE</th>
               <th>STAGING SLOT</th>
               <th>ASSIGNED RIDER</th>
               <th>WEIGHT</th>
@@ -281,11 +264,6 @@ function Handoff({ siteId }) {
                           TASK: {String(t.task_id).slice(0, 10)}
                         </div>
                       </div>
-                    </td>
-                    <td>
-                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontWeight: 600 }}>
-                        {t.tote_barcode || 'â€”'}
-                      </span>
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)' }}>
@@ -333,7 +311,7 @@ function Handoff({ siteId }) {
               })
             ) : (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                <td colSpan={6} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
                   No active delivery tasks in this queue.
                 </td>
               </tr>
@@ -372,33 +350,12 @@ function Handoff({ siteId }) {
               )}
 
               {modalMode === 'pickup' && (
-                <>
-                  <div style={{ background: 'var(--bg-panel)', padding: 10, borderRadius: 'var(--radius-xs)', fontSize: 12 }}>
-                    <div><strong>Tote on the job:</strong> {selectedTask.tote_barcode || 'â€”'}</div>
-                    <div style={{ marginTop: 4 }}><strong>Rider:</strong> {selectedTask.rider_name || 'Unassigned'}</div>
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                      <MapPin size={11} /> Scan the tote barcode
-                    </label>
-                    <input
-                      type="text"
-                      autoFocus
-                      placeholder={loosePickup ? 'No tote for this bag' : 'Tote barcode'}
-                      value={toteBarcode}
-                      onChange={(e) => setToteBarcode(e.target.value)}
-                      disabled={loosePickup}
-                      style={{ width: '100%', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 12, background: loosePickup ? 'var(--bg-panel)' : 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-xs)', opacity: loosePickup ? 0.6 : 1 }}
-                    />
-                    <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 4 }}>
-                      The server refuses a tote that does not match the one this order was packed into.
-                    </div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 11, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                      <input type="checkbox" style={{ accentColor: 'var(--c-teal)' }} checked={loosePickup} onChange={(e) => setLoosePickup(e.target.checked)} />
-                      Loose handoff â€” this bag has no tote barcode
-                    </label>
-                  </div>
-                </>
+                <div style={{ background: 'var(--bg-panel)', padding: 10, borderRadius: 'var(--radius-xs)', fontSize: 12 }}>
+                  <div><strong>Order:</strong> {selectedTask.order_no || '—'}</div>
+                  <div style={{ marginTop: 4 }}><strong>Rider:</strong> {selectedTask.rider_name || 'Unassigned'}</div>
+                  <div style={{ marginTop: 4 }}><strong>Staging:</strong> {selectedTask.staging_bin || '—'}</div>
+                  <div style={{ marginTop: 4, color: 'var(--text-muted)' }}>Bags travel loose — confirm the rider takes the staged bag.</div>
+                </div>
               )}
 
               {modalMode === 'pod' && (
