@@ -296,6 +296,29 @@ def dev_echo_allowed():
     )
 
 
+def initial_setup_login_allowed(user):
+    """Whether this account may finish a password-only sign-in during setup.
+
+    A freshly provisioned estate has a Super Admin (created by the deploy
+    bootstrap) but no active MH/DS site, and possibly no OTP provider either.
+    The normal staff flow requires both, which would lock out the only account
+    that can create the first site and configure delivery. This is that narrow
+    escape hatch; it closes by itself as soon as the estate is usable.
+
+    It applies to SUPER_ADMIN only, while either no ACTIVE MH/DS site exists or
+    the OTP step cannot run at all. Password and ACTIVE-status checks are still
+    performed by the caller, and every use writes an audited event. As soon as
+    a site exists *and* OTP delivery works, the standard facility + code flow
+    applies to everyone again.
+    """
+    if getattr(user, 'role', None) != 'SUPER_ADMIN':
+        return False
+    from bounded.network.models import Site
+    if not Site.objects.filter(status='ACTIVE', site_type__in=('MH', 'DS')).exists():
+        return True
+    return not (getattr(settings, 'IAM_OTP_SENDER', None) or dev_echo_allowed())
+
+
 def issue_otp(challenge, *, request=None):
     """Generate and deliver a code for a challenge, returning the plain code.
 

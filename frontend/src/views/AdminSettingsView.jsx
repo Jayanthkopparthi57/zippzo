@@ -284,6 +284,11 @@ export default function AdminSettingsView() {
         name: storeForm.name.trim(),
         site_type: storeForm.site_type,
         address: storeForm.address.trim(),
+        // This console registers live sites; leaving the model's ONBOARDING
+        // default here would create a site nobody (including this admin) can
+        // sign in to, because login only considers ACTIVE MH/DS sites.
+        status: 'ACTIVE',
+        is_accepting_orders: true,
       });
       setShowStoreModal(false);
       setStoreForm({ code: '', name: '', site_type: 'DS', address: '' });

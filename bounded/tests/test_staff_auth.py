@@ -5,6 +5,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from bounded.audit.models import AuditLog
 from bounded.iam import staff_auth
 from bounded.iam.models import LoginChallenge, User
 from bounded.inventory.models import StockBalance, StockMovement
@@ -409,3 +410,44 @@ class AdminSecondFactorPolicyTests(TestCase):
         self.assertEqual(403, r.status_code)
         self.assertTrue(r.data.get('otp_required'))
         self.assertEqual('p***@zippzo.in', r.data.get('otp_sent_to'))
+
+
+@override_settings(DEBUG=False, OTP_DEV_ECHO=False, IAM_OTP_SENDER=None,
+                   IAM_ADMIN_OTP_REQUIRED=True)
+class InitialSetupLoginTests(TestCase):
+    """The narrow, audited window that lets a provisioned admin set up the estate."""
+
+    def test_super_admin_signs_in_when_estate_has_no_sites(self):
+        _user('setup-admin@zippzo.in', 'SUPER_ADMIN')
+        r = _login(APIClient(), 'setup-admin@zippzo.in')
+        self.assertEqual(200, r.status_code)
+        self.assertIn('token', r.data)
+        self.assertTrue(r.data.get('initial_setup'))
+        self.assertIsNone(r.data.get('facility'))
+        self.assertTrue(r.data['user']['is_super_admin'])
+        self.assertTrue(AuditLog.objects.filter(action='IAM_INITIAL_SETUP_LOGIN').exists())
+
+    def test_other_estate_roles_still_get_the_facility_error(self):
+        _user('setup-ops@zippzo.in', 'OPS_MANAGER')
+        r = _login(APIClient(), 'setup-ops@zippzo.in')
+        self.assertEqual(403, r.status_code)
+        self.assertIn('No active facility assignment', r.data['error'])
+        self.assertFalse(AuditLog.objects.filter(action='IAM_INITIAL_SETUP_LOGIN').exists())
+
+    @override_settings(DEBUG=True, OTP_DEV_ECHO=True)
+    def test_normal_otp_flow_resumes_once_a_site_exists(self):
+        _site('MH-SETUP')
+        _user('setup-normal@zippzo.in', 'SUPER_ADMIN')
+        r = _login(APIClient(), 'setup-normal@zippzo.in')
+        self.assertEqual(403, r.status_code)
+        self.assertTrue(r.data.get('otp_required'))
+        self.assertNotIn('token', r.data)
+        self.assertFalse(AuditLog.objects.filter(action='IAM_INITIAL_SETUP_LOGIN').exists())
+
+    def test_password_only_fallback_when_no_otp_sender_exists(self):
+        site = _site('MH-NOOTP')
+        _user('setup-no-otp@zippzo.in', 'SUPER_ADMIN')
+        r = _login(APIClient(), 'setup-no-otp@zippzo.in')
+        self.assertEqual(200, r.status_code)
+        self.assertTrue(r.data.get('initial_setup'))
+        self.assertEqual(site.code, r.data['facility']['code'])

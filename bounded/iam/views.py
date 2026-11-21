@@ -402,6 +402,33 @@ class LoginAPIView(APIView):
                 'refresh_token': refresh,
             })
 
+        # Initial setup: a freshly provisioned estate can have a Super Admin
+        # but no active facility, and no OTP provider to prove presence with.
+        # Since that account is the only one allowed to create the first site,
+        # let it in with password alone while the estate is being set up. The
+        # window is role-scoped, audited, and closes as soon as a site and a
+        # working OTP sender both exist (see initial_setup_login_allowed).
+        if staff_auth.initial_setup_login_allowed(user):
+            facilities = staff_auth.authorized_facilities(user, requested_app or target_app)
+            initial_facility = _pick_default_site(facilities, requested_app or target_app)
+            session, access, refresh = staff_auth.create_session(
+                user, initial_facility, surface, request,
+            )
+            reason = ('no active facility' if not facilities
+                      else 'no OTP delivery provider')
+            staff_auth.audit('IAM_INITIAL_SETUP_LOGIN', actor_id=user.user_id,
+                             entity_type='Session', entity_id=session.session_id,
+                             request=request, result='ALLOWED', reason=reason)
+            context = staff_auth.session_context(session, request)
+            context['target_app'] = requested_app or context.get('target_app')
+            return Response({
+                'status': 'success',
+                'token': access,
+                'refresh_token': refresh,
+                'initial_setup': True,
+                **context,
+            }, status=200)
+
         facilities = staff_auth.authorized_facilities(user, requested_app or target_app)
         if not facilities:
             staff_auth.audit('IAM_LOGIN_DENIED', actor_id=user.user_id, request=request,
