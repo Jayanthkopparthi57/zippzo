@@ -27,7 +27,7 @@ const TAB_CONFIG = {
       field('dh_precedence', 'DH Precedence', { defaultValue: 'DEFAULT' }),
       field('ss_precedence', 'SS Precedence', { defaultValue: 'SS_DEFAULT' }),
       field('is_accepting_orders', 'Accepting Orders', { type: 'boolean', defaultValue: false }),
-      field('status', 'Status', { type: 'select', options: [choice('ONBOARDING'), choice('ACTIVE'), choice('SUSPENDED'), choice('RETIRED')], defaultValue: 'ONBOARDING' }),
+      field('status', 'Status', { type: 'select', options: [choice('ONBOARDING'), choice('ACTIVE'), choice('SUSPENDED'), choice('RETIRED')], defaultValue: 'ACTIVE' }),
     ],
     columns: [
       { label: 'Site Code', key: 'code', isCode: true },
