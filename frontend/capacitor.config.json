@@ -1,6 +1,6 @@
 {
-  "appId": "com.zippzo.darkstore",
-  "appName": "Zippzo Dark Store",
+  "appId": "com.zippzo.rider",
+  "appName": "Zippzo Rider",
   "webDir": "dist-native",
   "server": {
     "androidScheme": "https"

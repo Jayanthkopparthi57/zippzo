@@ -252,7 +252,10 @@ function Handoff({ siteId }) {
               filteredTasks.map((t) => {
                 const canPickup = PICKUP_STATUSES.has(t.status);
                 const canPod = POD_STATUSES.has(t.status);
-                // (no manual assignment here; checkout assigns automatically)
+                // No rider, no handover: the bag leaves the counter in someone's
+                // hands. The server retries dispatch here, but showing the
+                // action first invites a click that can only be refused.
+                const hasRider = Boolean(String(t.rider_name || '').trim());
                 return (
                   <tr key={t.task_id}>
                     <td>
@@ -279,7 +282,7 @@ function Handoff({ siteId }) {
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        {canPickup && (
+                        {canPickup && hasRider && (
                           <button
                             type="button"
                             className="btn-ui primary"
@@ -289,6 +292,14 @@ function Handoff({ siteId }) {
                             <Bike size={12} />
                             <span>Rider Handoff</span>
                           </button>
+                        )}
+                        {canPickup && !hasRider && (
+                          <span
+                            style={{ fontSize: 11, color: 'var(--text-muted)' }}
+                            title="Packing assigns a rider automatically; this job waits until one comes online at this store."
+                          >
+                            Waiting for rider
+                          </span>
                         )}
                         {canPod && (
                           <button

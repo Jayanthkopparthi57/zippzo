@@ -42,8 +42,8 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
 
 from bounded.inventory.ledger import (
-    BALANCE_CONTAINERS, actual_balances, balance_key, expected_balances,
-    line_movement_totals,
+    BALANCE_CONTAINERS, actual_balances, balance_key, chain_breaks,
+    expected_balances, line_movement_totals, movement_chain,
 )
 from bounded.inventory.models import StockBalance, StockMovement, StockMovementsChain
 
@@ -108,14 +108,18 @@ class Command(BaseCommand):
             StockMovement.objects.filter(site__code=site_code).count()
 
         phantom = 0
+        # A row with nothing in it is not stock that appeared from nowhere. The
+        # pack leg writes a CUSTODY row per line and the ship leg takes it back
+        # to zero, so every completed order leaves one behind; counting those
+        # would fail this gate forever on a healthy store.
         for b in (StockBalance.objects.all() if not site_code
                   else StockBalance.objects.filter(site__code=site_code)
-                  ).exclude(container__in=BALANCE_CONTAINERS):
+                  ).exclude(container__in=BALANCE_CONTAINERS).exclude(qty=0):
             phantom += 1
             if phantom <= 10:
                 self.stdout.write(self.style.WARNING(
                     f'  balance row on {b.container}, which holds no stock: '
-                    f'{b.site.code}/{b.container_ref}'))
+                    f'{b.site.code}/{b.container_ref} qty={b.qty}'))
 
         found = phantom
         # `StockBalance` has a unique constraint on
@@ -217,29 +221,32 @@ class Command(BaseCommand):
             chains = chains.filter(site__code=site_code)
 
         for chain in chains:
-            last_seq = None
-            expected_seq = 0
-            rows = self._movements(chain.site.code).order_by(
-                'site_seq', 'entry_id').values_list('site_seq', 'entry_id')
-            for site_seq, entry_id in rows.iterator(chunk_size=5000):
-                if site_seq == 0:
-                    # Rows written before the chain existed are not linked.
-                    continue
-                expected_seq += 1
-                if site_seq != expected_seq:
-                    found += 1
-                    if found <= 40:
-                        self.stdout.write(self.style.ERROR(
-                            f'  {chain.site.code}: site_seq jumped from '
-                            f'{expected_seq - 1} to {site_seq} at entry {entry_id}'))
-                    expected_seq = site_seq
-                last_seq = site_seq
-            if chain.head_seq and last_seq is not None and chain.head_seq != last_seq:
+            rows = movement_chain(chain.site)
+            seq_breaks, hash_breaks, _linked = chain_breaks(chain.site, rows)
+
+            for brk in seq_breaks[:20]:
                 found += 1
-                if found <= 40:
-                    self.stdout.write(self.style.ERROR(
-                        f'  {chain.site.code}: chain head is {chain.head_seq} '
-                        f'but the last movement is {last_seq}'))
+                self.stdout.write(self.style.ERROR(
+                    f'  {chain.site.code}: site_seq {brk["expected"]} expected, '
+                    f'found {brk["found"]} at entry {brk["entry_id"]}'))
+            for brk in hash_breaks[:20]:
+                found += 1
+                self.stdout.write(self.style.ERROR(
+                    f'  {chain.site.code}: entry {brk["entry_id"]} '
+                    f'{brk["reason"]}'))
+
+            last_seq = rows[-1].site_seq if rows else 0
+            last_hash = rows[-1].row_hash if rows else None
+            head = bytes(chain.head_hash or b'')
+            tail = bytes(last_hash or b'')
+            if chain.head_seq != last_seq or head != tail:
+                found += 1
+                head = head.hex()[:12] if head else 'none'
+                tail = tail.hex()[:12] if tail else 'none'
+                self.stdout.write(self.style.ERROR(
+                    f'  {chain.site.code}: chain head is (seq '
+                    f'{chain.head_seq}, hash {head}) but the last movement is '
+                    f'(seq {last_seq}, hash {tail})'))
 
         self.stdout.write(
             f'  {chains.count()} site chain(s) -> '

@@ -15,6 +15,7 @@ import hashlib
 from django.db import transaction
 from django.db.models import F, Sum
 
+from .ledger import row_hash as _row_hash
 from .models import StockBalance, StockMovement, StockMovementsChain
 
 SITE = 'SITE'
@@ -30,20 +31,6 @@ RETURN = 'RETURN'
 
 class InsufficientStock(Exception):
     pass
-
-
-def _row_hash(mv, prev_hash):
-    """Tamper-evident link: hash of this row plus the previous row's hash."""
-    parts = [
-        str(mv.site_id), str(mv.site_seq), mv.movement_ref, mv.ref_id,
-        str(mv.sku_id), str(mv.lot_id), str(mv.qty),
-        mv.from_container, str(mv.from_ref_id or ''),
-        mv.to_container, str(mv.to_ref_id or ''),
-        str(mv.sellable_delta), str(mv.site_custody_delta),
-        mv.idempotency_key or '',
-        prev_hash.hex() if prev_hash else '',
-    ]
-    return hashlib.sha256('|'.join(parts).encode()).digest()
 
 
 def _key(movement_type, ref_type, ref_id, sku, lot, site, direction, container,

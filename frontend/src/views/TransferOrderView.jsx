@@ -8,6 +8,7 @@ import StatusBadge from '../components/ui/StatusBadge';
 import { PageHead, SubTabs } from '../components/ui/WmsUI';
 import { useToast } from '../components/ui/Toast';
 import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../api/client';
+import { newId } from '../utils/id';
 
 /**
  * Stock Transfer Orders (STO) — the outbound ledger.
@@ -247,7 +248,7 @@ export default function TransferOrderView() {
         total_qty: totalQty,
       });
       // PickTask.picklist_id is a required UUIDField — "PL-1712..." is a 400.
-      const picklistId = crypto.randomUUID();
+      const picklistId = newId();
       for (let i = 0; i < validLines.length; i += 1) {
         const l = validLines[i];
         await postApi('/ds-ops/pick-tasks/', {

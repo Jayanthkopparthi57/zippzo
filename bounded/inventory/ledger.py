@@ -34,6 +34,7 @@ duplicate row cannot exist; `balance_key` mirrors that constraint exactly, which
 is why balances are summed per key rather than compared one row at a time.
 """
 
+import hashlib
 from collections import defaultdict
 
 from bounded.inventory.models import StockBalance, StockMovement
@@ -140,3 +141,90 @@ def line_movement_totals(site_code=None):
             continue
         (picked if movement_ref == PICK_REF else shipped)[ref_id] += qty
     return picked, shipped
+
+
+def row_hash(movement, prev_hash):
+    """Tamper-evident link: hash of this row plus the previous row's hash.
+
+    Lives here rather than next to `apply_stock` so the writer, the checker and
+    the repair all compute the same digest. A rebuild that hashed the row
+    slightly differently from the writer would leave a chain that looks intact
+    and fails the next time it is walked.
+    """
+    parts = [
+        str(movement.site_id), str(movement.site_seq), movement.movement_ref,
+        movement.ref_id, str(movement.sku_id), str(movement.lot_id),
+        str(movement.qty), movement.from_container,
+        str(movement.from_ref_id or ''), movement.to_container,
+        str(movement.to_ref_id or ''), str(movement.sellable_delta),
+        str(movement.site_custody_delta), movement.idempotency_key or '',
+        prev_hash.hex() if prev_hash else '',
+    ]
+    return hashlib.sha256('|'.join(parts).encode()).digest()
+
+
+# The name `apply_stock` used internally before this was shared.
+_row_hash = row_hash
+
+
+def movement_chain(site):
+    """A site's movements in chain order, oldest first."""
+    return list(
+        StockMovement.objects.filter(site=site).order_by('site_seq', 'entry_id')
+    )
+
+
+def chain_breaks(site, rows=None):
+    """Every place where a site's movement chain does not join up.
+
+    Returns `(seq_breaks, hash_breaks, linked)`:
+
+      * `seq_breaks`  - `site_seq` values that are not one more than the row
+        before them, which can only happen if a row was deleted out of band;
+      * `hash_breaks` - rows whose stored `prev_hash`/`row_hash` do not follow
+        from the row in front, the signature of a row being edited in place;
+      * `linked`      - how many rows carry a chain position at all.
+
+    Rows written before the chain existed carry `site_seq=0` and are skipped:
+    they were never linked, so scoring them as corruption would make every old
+    site report as tampered. They still show up as the gap between `len(rows)`
+    and `linked`.
+    """
+    rows = movement_chain(site) if rows is None else rows
+
+    seq_breaks = []
+    hash_breaks = []
+    linked = 0
+    expected = 0
+    prev = None
+
+    for movement in rows:
+        if movement.site_seq == 0:
+            continue
+        linked += 1
+        expected += 1
+        if movement.site_seq != expected:
+            seq_breaks.append({
+                'entry_id': movement.entry_id,
+                'expected': expected,
+                'found': movement.site_seq,
+            })
+            expected = movement.site_seq
+        if prev is not None:
+            # psycopg hands binary columns back as memoryview(format='c'), and
+            # comparing one of those to `bytes` is False even when the bytes are
+            # identical. Normalise both sides or every healthy row looks edited.
+            prev_bytes = bytes(prev.row_hash or b'')
+            if bytes(movement.prev_hash or b'') != prev_bytes:
+                hash_breaks.append({
+                    'entry_id': movement.entry_id,
+                    'reason': 'prev_hash does not match the row in front',
+                })
+            elif bytes(movement.row_hash or b'') != row_hash(movement, prev_bytes):
+                hash_breaks.append({
+                    'entry_id': movement.entry_id,
+                    'reason': 'row_hash does not follow from the row content',
+                })
+        prev = movement
+
+    return seq_breaks, hash_breaks, linked

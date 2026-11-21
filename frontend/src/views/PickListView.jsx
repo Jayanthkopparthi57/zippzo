@@ -4,14 +4,7 @@ import BarcodeGenerator from '../components/ui/BarcodeGenerator';
 import { openBarcodePrintWindow } from '../utils/barcodeUtils';
 import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-
-const newUuid = () =>
-  (typeof crypto !== 'undefined' && crypto.randomUUID)
-    ? crypto.randomUUID()
-    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = (Math.random() * 16) | 0;
-      return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-    });
+import { newId } from '../utils/id';
 
 /**
  * Picklists tab — dark-store replenishment, end to end, all via backend APIs:
@@ -157,7 +150,7 @@ export default function PickListView() {
         status: 'ALLOCATED',
         total_qty: totalQty,
       });
-      const picklist_id = newUuid();
+      const picklist_id = newId();
       for (let i = 0; i < validLines.length; i++) {
         const l = validLines[i];
         await postApi('/ds-ops/pick-tasks/', {
@@ -266,7 +259,7 @@ export default function PickListView() {
         status: 'PACKED',
         created_by: 'WMS-UI',
       });
-      const packlist_id = newUuid();
+      const packlist_id = newId();
       for (const t of activeGroup.tasks) {
         let lots = await fetchApi(`/catalog/lots/?sku=${t.sku}&site=${transfer.source_site}`);
         let lotId = Array.isArray(lots) && lots.length > 0 ? lots[0].lot_id : null;

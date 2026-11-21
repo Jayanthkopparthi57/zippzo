@@ -1,13 +1,15 @@
-# Rebuild a single variant: build-one.ps1 -Variant shopper -Out Zippzo-Shopper.apk
+# Rebuild a single variant:
+#   .\build-one.ps1 -Variant rider -Out Zippzo-Rider.apk
+# Pass -ApiBase http://192.168.1.100:8001/api only for an on-device staging build.
 param(
   [string]$Variant = 'shopper',
-  [string]$Out = 'Zippzo-Shopper.apk'
+  [string]$Out = 'Zippzo-Shopper.apk',
+  [string]$ApiBase = 'https://zippzo-wms-ha2c.onrender.com/api'
 )
 $ErrorActionPreference = 'Continue'
 $mobile = 'C:\Users\jayan\Downloads\WEBPROJECTS\zippzo-v1\mobile'
 $apks = Join-Path $mobile 'apks'
 $localPropsBak = 'C:\Users\jayan\AppData\Local\Temp\opencode\local.properties.bak'
-$apiBase = 'http://192.168.1.100:8001/api'
 
 function Log($msg) {
   $line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg
@@ -29,7 +31,8 @@ if (Test-Path (Join-Path $mobile 'android')) {
 }
 
 $env:EXPO_PUBLIC_APP_VARIANT = $Variant
-$env:EXPO_PUBLIC_API_BASE = $apiBase
+$env:EXPO_PUBLIC_API_BASE = $ApiBase
+Log "API base: $ApiBase"
 
 Push-Location $mobile
 npx expo prebuild --platform android --non-interactive --clean 2>&1 | ForEach-Object { Log "  prebuild: $_" }

@@ -106,6 +106,14 @@ class LedgerBase(TestCase):
         except CommandError as exc:
             return out.getvalue(), exc
 
+    def run_repair(self, *args):
+        out = io.StringIO()
+        try:
+            call_command('repair_ledger_chain', *args, stdout=out, stderr=out)
+            return out.getvalue(), None
+        except CommandError as exc:
+            return out.getvalue(), exc
+
 
 class LedgerCheckTests(LedgerBase):
     """verify_ledger has to be right about clean data before it can be trusted."""
@@ -326,3 +334,133 @@ class ZeroUnsupportedPicksTests(LedgerBase):
         line_b.refresh_from_db()
         self.assertEqual(0, line_a.picked_qty)
         self.assertEqual(2, line_b.picked_qty)
+
+class CustodyBalanceTests(LedgerBase):
+    """A shipped bag leaves a zero CUSTODY row behind; that is not corruption."""
+
+    def _custody_row(self, qty):
+        return StockBalance.objects.create(
+            site=self.site, container='CUSTODY',
+            container_ref=str(uuid.uuid4()), container_ref_type='ORDERLINE',
+            sku=self.sku, lot=self.lot, qty=qty, sellable=False,
+            counts_toward_site_custody=False)
+
+    def test_a_shipped_bag_that_now_holds_nothing_is_not_stock_from_nowhere(self):
+        self.receive(10)
+        self._custody_row(0)
+
+        output, error = self.run_verify()
+
+        self.assertIsNone(error, output)
+        self.assertNotIn('which holds no stock', output)
+        self.assertNotIn('on CUSTODY', output)
+        self.assertIn('Ledger is consistent', output)
+
+    def test_a_bag_that_still_holds_stock_is_reported(self):
+        """Zero is bookkeeping; units left in a bag nobody shipped are real stock."""
+        self.receive(10)
+        self._custody_row(3)
+
+        output, error = self.run_verify()
+
+        self.assertIsNotNone(error, output)
+        self.assertIn('which holds no stock', output)
+
+
+class ChainRepairTests(LedgerBase):
+    """A hole in the chain is reported, and only an explicit --apply closes it."""
+
+    def _make_hole(self):
+        for _ in range(3):
+            self.receive(1)
+        movements = list(
+            StockMovement.objects.filter(site=self.site).order_by('site_seq'))
+        self.assertEqual([1, 2, 3], [m.site_seq for m in movements])
+        # Deleting history is exactly what a partial restore does.
+        movements[1].delete()
+        return movements
+
+    def test_the_check_names_the_missing_sequence(self):
+        self._make_hole()
+
+        output, error = self.run_verify()
+
+        self.assertIsNotNone(error, output)
+        self.assertIn('site_seq 2 expected, found 3', output)
+
+    def test_dry_run_changes_nothing(self):
+        self._make_hole()
+        before = list(
+            StockMovement.objects.filter(site=self.site)
+            .order_by('entry_id').values_list('entry_id', 'site_seq', 'row_hash'))
+
+        output, error = self.run_repair()
+
+        self.assertIsNone(error, output)
+        self.assertIn('Dry run', output)
+        after = list(
+            StockMovement.objects.filter(site=self.site)
+            .order_by('entry_id').values_list('entry_id', 'site_seq', 'row_hash'))
+        self.assertEqual(before, after)
+        self.assertFalse(
+            AuditLog.objects.filter(action='LEDGER_CHAIN_REBUILT').exists())
+
+    def test_apply_closes_the_hole_and_audits_the_rebuild(self):
+        self._make_hole()
+        # The missing row took its unit with it; the cached balance has to be
+        # brought in line or the balance gate fails for a different reason.
+        StockBalance.objects.filter(site=self.site).update(qty=2)
+
+        output, error = self.run_repair('--apply')
+
+        self.assertIsNone(error, output)
+        self.assertIn('rebuilt', output)
+
+        rows = list(StockMovement.objects.filter(site=self.site)
+                    .order_by('site_seq'))
+        self.assertEqual([1, 2], [m.site_seq for m in rows])
+        prev = None
+        for row in rows:
+            self.assertEqual(prev, row.prev_hash)
+            prev = row.row_hash
+
+        audit = AuditLog.objects.get(action='LEDGER_CHAIN_REBUILT')
+        self.assertEqual('SUCCESS', audit.result)
+        self.assertEqual('SITE', audit.entity_type)
+        # The pre-rebuild head and the break it hid are preserved in the audit.
+        self.assertEqual(3, audit.before_json['head_seq'])
+        self.assertEqual(1, len(audit.before_json['seq_breaks']))
+
+        # And the gate that blocked the deploy now passes.
+        output, error = self.run_verify()
+        self.assertIsNone(error, output)
+        self.assertIn('intact', output)
+
+    def test_an_intact_chain_is_left_alone(self):
+        self.receive(1)
+
+        output, error = self.run_repair('--apply')
+
+        self.assertIsNone(error, output)
+        self.assertIn('All chains are intact', output)
+        self.assertFalse(
+            AuditLog.objects.filter(action='LEDGER_CHAIN_REBUILT').exists())
+
+    def test_a_site_whose_movements_were_all_pruned_verifies_clean_again(self):
+        """A head pointing at rows that no longer exist is a dangling head."""
+        self.receive(1)
+        StockMovement.objects.filter(site=self.site).delete()
+        # The cached balance went with the history, or it would be stock
+        # standing on no movements at all.
+        StockBalance.objects.filter(site=self.site).delete()
+
+        output, error = self.run_verify()
+        self.assertIsNotNone(error, output)
+        self.assertIn('chain head is', output)
+
+        output, error = self.run_repair('--apply')
+        self.assertIsNone(error, output)
+
+        output, error = self.run_verify()
+        self.assertIsNone(error, output)
+        self.assertIn('intact', output)

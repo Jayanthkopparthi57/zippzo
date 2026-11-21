@@ -3,6 +3,7 @@ import { Truck, RefreshCw, AlertTriangle, Search, Trash2, Send, Building2, Packa
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useToast } from '../../components/ui/Toast';
 import { fetchApi, postApi, patchApi, unwrapList, describeError } from '../../api/client';
+import { newId } from '../../utils/id';
 
 /**
  * Build a replenishment (transfer) order from real, available inventory.
@@ -219,7 +220,7 @@ export default function CreateOrderView() {
       // PickTask.picklist_id is a required UUIDField — a "PL-1712" string is a
       // 400. One picklist per order, batch = the transfer id so packing can
       // find these lines again with ?batch=.
-      const picklistId = crypto.randomUUID();
+      const picklistId = newId();
       const created = [];
       for (const [i, line] of lines.entries()) {
         const task = await postApi('/ds-ops/pick-tasks/', {

@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
+import { newId } from '../../utils/id';
 import {
   useDarkStore, useAsyncData, loadOrderQueue, loadPickLines, allocateOrder,
   completePick, pickLine, resolveStoreBin, rackDrop, ORDER_QUEUE_STATUSES,
@@ -109,7 +110,7 @@ function Picker({ siteId, storeCode }) {
     }
     setBusy(true);
     setFeedback(null);
-    const scanId = draft.scanId || crypto.randomUUID();
+    const scanId = draft.scanId || newId();
     setPickDrafts(prev => ({
       ...prev,
       [line.line_id]: { ...prev[line.line_id], scanId },
@@ -169,7 +170,7 @@ function Picker({ siteId, storeCode }) {
       setSelectedOrder((prev) => (prev ? { ...prev, status: 'PICKED' } : prev));
       setFeedback({
         type: 'success',
-        message: `${selectedOrder.order_no} is picked. Carry the tote to the rack and confirm the drop.`,
+        message: `${selectedOrder.order_no} is picked. Carry the bag to the rack and confirm the drop.`,
       });
       reload();
     } catch (err) {
@@ -360,7 +361,7 @@ function Picker({ siteId, storeCode }) {
                 <strong style={{ fontSize: 13 }}>Rack Drop</strong>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
                   Carry the picked units to the packing rack, then record the rack
-                  label. The pack station seals the tote and raises the rider job.
+                  label. The pack station stages the loose bag and raises the rider job.
                 </div>
               </div>
               <input
@@ -554,7 +555,7 @@ function Picker({ siteId, storeCode }) {
                         </div>
                       </td>
                       <td style={{ fontFamily: 'var(--font-mono)' }}>{o.total_items ?? '—'} SKUs</td>
-                      <td style={{ fontFamily: 'var(--font-mono)' }}>₹{parseFloat(o.total_amount || 0).toFixed(2)}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>₹{parseFloat(o.grand_total || 0).toFixed(2)}</td>
                       <td>
                         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
                           {o.placed_at ? new Date(o.placed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}

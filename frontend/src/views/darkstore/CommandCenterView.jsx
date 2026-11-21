@@ -220,8 +220,8 @@ function Overview({ storeCode }) {
                 { label: 'Orders waiting for a picker', value: data.pending_pick_queue, screen: 'ds-order-picking' },
                 { label: 'Orders being picked', value: data.orders_picking, screen: 'ds-order-picking' },
                 { label: 'Picked, waiting at the rack', value: data.orders_picked, screen: 'ds-order-picking' },
-                { label: 'Rack dropped, waiting for a tote', value: data.orders_rack_dropped, screen: 'ds-packing' },
-                { label: 'Packed totes waiting for a rider', value: data.orders_ready, screen: 'ds-rider-handoff' },
+                { label: 'Rack dropped, waiting to be bagged', value: data.orders_rack_dropped, screen: 'ds-packing' },
+                { label: 'Bagged orders waiting for a rider', value: data.orders_ready, screen: 'ds-rider-handoff' },
               ].map((row) => (
                 <tr key={row.screen} data-testid={`ds-queue-${row.screen}`}>
                   <td>{row.label}</td>

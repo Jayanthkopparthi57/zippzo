@@ -610,7 +610,7 @@ class StoreHandoffTests(ConsoleBase):
             role='RIDER', status='ACTIVE')
         cls.rider = RiderProfile.objects.create(
             user=cls.rider_user, name='Console Rider', phone='9999999999',
-            vehicle_type='BIKE', current_site=cls.store)
+            vehicle_type='BIKE', current_site=cls.store, is_online=True)
 
         cls.foreign_op = User.objects.create(
             email='console-foreign-op@zippzo.in',
@@ -640,6 +640,43 @@ class StoreHandoffTests(ConsoleBase):
         self.assertTrue(StockMovement.objects.filter(
             site=self.store, movement_ref='SHIP',
             ref_id=str(self.out_line.line_id)).exists())
+
+    def test_a_packed_order_with_no_rider_online_is_not_handed_over(self):
+        """A bag may not leave the counter into nobody's hands.
+
+        Packing assigns an online rider; a store with nobody online leaves the
+        task UNASSIGNED. Handing that over shipped the stock and set the order
+        PICKED_UP against no rider at all, so the job was invisible in every
+        rider app and could never be delivered or closed.
+        """
+        self.rider.is_online = False
+        self.rider.save(update_fields=['is_online'])
+
+        response = self.api.post(self.PICKUP, self.payload(), format='json')
+
+        self.assertEqual(409, response.status_code, response.data)
+        self.assertTrue(response.data.get('rider_required'),
+                        'the console needs a reason it can show the counter')
+        self.task.refresh_from_db()
+        self.assertEqual('UNASSIGNED', self.task.status)
+        self.assertIsNone(self.task.pickup_at)
+        self.assertIsNone(self.task.rider_id, 'nobody took this job')
+        self.out_line.refresh_from_db()
+        self.assertEqual(0, self.out_line.shipped_qty,
+                         'nothing left the store')
+        self.staged.refresh_from_db()
+        self.assertEqual('STAGED', self.staged.status,
+                         'the bag is still on the staging rack')
+
+    def test_handover_assigns_the_rider_that_came_online(self):
+        """The counter retries dispatch: a rider online now takes the bag."""
+        self.assertIsNone(self.task.rider_id)
+        response = self.api.post(self.PICKUP, self.payload(), format='json')
+
+        self.assertEqual(200, response.status_code, response.data)
+        self.task.refresh_from_db()
+        self.assertEqual(self.rider.rider_id, self.task.rider_id)
+        self.assertEqual('PICKED_UP', self.task.status)
 
     def test_the_store_can_ask_for_the_customer_pickup_code(self):
         picked = self.api.post(self.PICKUP, self.payload(), format='json')

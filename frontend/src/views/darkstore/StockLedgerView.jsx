@@ -21,8 +21,17 @@ import {
  * pretending to know the product.
  */
 
+// Custody moves (PACK / SHIP of a loose bag) deliberately leave sellable
+// stock alone, so sellable_delta is zero and the row used to render "—" for a
+// line that really moved units. The custody delta carries the direction there.
+function movementDelta(m) {
+  const sellable = num(m.sellable_delta);
+  if (sellable) return sellable;
+  return num(m.site_custody_delta);
+}
+
 function directionOf(m) {
-  const d = num(m.sellable_delta);
+  const d = movementDelta(m);
   if (d > 0) return 'IN';
   if (d < 0) return 'OUT';
   return 'MOVE';
@@ -277,7 +286,8 @@ function Ledger({ siteId, storeCode }) {
                 {filtered.map((m, i) => {
                   const dir = directionOf(m);
                   const sku = skuFor(m.sku);
-                  const delta = num(m.sellable_delta);
+                  const delta = movementDelta(m);
+                  const qty = num(m.qty);
                   return (
                     <tr
                       key={m.entry_id}
@@ -314,7 +324,9 @@ function Ledger({ siteId, storeCode }) {
                             color: delta > 0 ? 'var(--success)' : delta < 0 ? 'var(--danger)' : 'var(--text-muted)',
                           }}
                         >
-                          {delta > 0 ? `+${delta}` : delta || '—'}
+                          {qty > 0
+                            ? (delta > 0 ? `+${qty}` : delta < 0 ? `−${qty}` : qty)
+                            : '—'}
                         </div>
                       </td>
                       <td>{m.actor_type}</td>
