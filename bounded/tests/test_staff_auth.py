@@ -454,6 +454,25 @@ class InitialSetupLoginTests(TestCase):
         self.assertFalse(r.data.get('initial_setup'))
         self.assertEqual(site.code, r.data['facility']['code'])
 
+    def test_super_admin_can_open_wms_when_only_a_dark_store_exists(self):
+        _site('DS-ONLY', 'DS')
+        _user('setup-ds-only@zippzo.in', 'SUPER_ADMIN')
+        r = _login(APIClient(), 'setup-ds-only@zippzo.in', app='WMS')
+        self.assertEqual(200, r.status_code)
+        self.assertIn('token', r.data)
+        self.assertTrue(r.data.get('initial_setup'))
+        self.assertIsNone(r.data.get('facility'))
+        self.assertTrue(AuditLog.objects.filter(action='IAM_INITIAL_SETUP_LOGIN').exists())
+
+    def test_dark_store_workspace_uses_existing_site_without_setup_escape(self):
+        site = _site('DS-WORKSPACE', 'DS')
+        _user('setup-ds-workspace@zippzo.in', 'SUPER_ADMIN')
+        r = _login(APIClient(), 'setup-ds-workspace@zippzo.in', app='DARK_STORE')
+        self.assertEqual(200, r.status_code)
+        self.assertIn('token', r.data)
+        self.assertFalse(r.data.get('initial_setup'))
+        self.assertEqual(site.code, r.data['facility']['code'])
+
     def test_field_staff_also_skip_mailed_otp_without_a_sender(self):
         site = _site('MH-FIELD-NOOTP')
         user = _user('field-no-otp@zippzo.in')

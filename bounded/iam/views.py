@@ -403,12 +403,13 @@ class LoginAPIView(APIView):
             })
 
         # Initial setup: a freshly provisioned estate can have a Super Admin
-        # but no active facility, and no OTP provider to prove presence with.
-        # Since that account is the only one allowed to create the first site,
-        # let it in with password alone while the estate is being set up. The
-        # window is role-scoped, audited, and closes as soon as a site and a
-        # working OTP sender both exist (see initial_setup_login_allowed).
-        if staff_auth.initial_setup_login_allowed(user):
+        # but no active site for the workspace being opened, so there is no
+        # facility to select. Since that account is the only one allowed to
+        # create the first site, let it in with password alone. This is
+        # role-scoped, audited, and closes as soon as an ACTIVE site for that
+        # workspace exists (see initial_setup_login_allowed). Mailed OTP is
+        # handled separately and is never the reason for this branch.
+        if staff_auth.initial_setup_login_allowed(user, requested_app or target_app):
             facilities = staff_auth.authorized_facilities(user, requested_app or target_app)
             initial_facility = _pick_default_site(facilities, requested_app or target_app)
             session, access, refresh = staff_auth.create_session(

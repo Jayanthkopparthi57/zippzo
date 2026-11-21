@@ -311,20 +311,25 @@ def dev_echo_allowed():
     )
 
 
-def initial_setup_login_allowed(user):
-    """Whether this account may sign in before any facility exists.
+def initial_setup_login_allowed(user, requested_app=None):
+    """Whether this Super Admin may sign in before a facility can be selected.
 
-    A freshly provisioned estate has a Super Admin but no active MH/DS site,
-    so the normal facility guard would lock out the only account allowed to
-    create the first one. This narrow escape hatch is SUPER_ADMIN-only and
-    audited; it closes by itself as soon as the first site is ACTIVE. Mailed
-    OTP is handled separately by ``email_otp_required_for`` and is never the
-    reason this branch is taken.
+    A freshly provisioned estate has a Super Admin but no active site for the
+    workspace being opened, so the normal facility guard would lock out the
+    only account allowed to create one. This narrow escape hatch is
+    SUPER_ADMIN-only and audited; it closes by itself as soon as an ACTIVE site
+    for that workspace exists. Mailed OTP is handled separately by
+    ``email_otp_required_for`` and is never the reason this branch is taken.
     """
     if getattr(user, 'role', None) != 'SUPER_ADMIN':
         return False
     from bounded.network.models import Site
-    return not Site.objects.filter(status='ACTIVE', site_type__in=('MH', 'DS')).exists()
+    sites = Site.objects.filter(status='ACTIVE', site_type__in=('MH', 'DS'))
+    if requested_app == 'WMS':
+        sites = sites.filter(site_type='MH')
+    elif requested_app == 'DARK_STORE':
+        sites = sites.filter(site_type='DS')
+    return not sites.exists()
 
 
 def issue_otp(challenge, *, request=None):
