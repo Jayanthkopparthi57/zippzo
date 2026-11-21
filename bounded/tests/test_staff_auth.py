@@ -444,10 +444,26 @@ class InitialSetupLoginTests(TestCase):
         self.assertNotIn('token', r.data)
         self.assertFalse(AuditLog.objects.filter(action='IAM_INITIAL_SETUP_LOGIN').exists())
 
-    def test_password_only_fallback_when_no_otp_sender_exists(self):
+    def test_mailed_otp_is_skipped_when_no_sender_exists(self):
         site = _site('MH-NOOTP')
         _user('setup-no-otp@zippzo.in', 'SUPER_ADMIN')
         r = _login(APIClient(), 'setup-no-otp@zippzo.in')
         self.assertEqual(200, r.status_code)
-        self.assertTrue(r.data.get('initial_setup'))
+        self.assertIn('token', r.data)
+        self.assertNotIn('otp_required', r.data)
+        self.assertFalse(r.data.get('initial_setup'))
         self.assertEqual(site.code, r.data['facility']['code'])
+
+    def test_field_staff_also_skip_mailed_otp_without_a_sender(self):
+        site = _site('MH-FIELD-NOOTP')
+        user = _user('field-no-otp@zippzo.in')
+        _assign(user, site)
+        r = _login(APIClient(), 'field-no-otp@zippzo.in')
+        self.assertEqual(200, r.status_code)
+        self.assertIn('token', r.data)
+        self.assertEqual(site.code, r.data['facility']['code'])
+
+    def test_daily_store_code_policy_is_unchanged(self):
+        user = _user('ds-code@zippzo.in')
+        self.assertTrue(staff_auth.otp_required_for(user))
+        self.assertFalse(staff_auth.email_otp_required_for(user))

@@ -277,13 +277,28 @@ def challenge_rate_limited(user, ip):
 def otp_required_for(user):
     """Whether this account must prove presence with a one-time code.
 
-    Field employees always do. Estate roles may be exempted for local
-    operations through ``IAM_ADMIN_OTP_REQUIRED=False``; production settings
-    force the flag back on, so this can never open an estate in production.
+    This backs the DS daily store code (phone sign-in and store activation),
+    which is derived on the server and never mailed. It is independent of email
+    delivery. Field employees always take it; estate roles may be exempted via
+    ``IAM_ADMIN_OTP_REQUIRED`` (forced on in production).
     """
     if user.role not in ESTATE_ROLES:
         return True
     return bool(getattr(settings, 'IAM_ADMIN_OTP_REQUIRED', True))
+
+
+def email_otp_required_for(user):
+    """Whether email/password sign-in must pass a *mailed* one-time code.
+
+    This is a different factor from the daily store code above. With no OTP
+    delivery provider configured, demanding a mailed code can only end in a
+    503 and lock staff out of the console, so the emailed step is skipped for
+    now. Configuring ``IAM_OTP_SENDER`` restores the normal policy without a
+    code change; the store code is never relaxed by this switch.
+    """
+    if not (getattr(settings, 'IAM_OTP_SENDER', None) or dev_echo_allowed()):
+        return False
+    return otp_required_for(user)
 
 
 def dev_echo_allowed():
@@ -297,26 +312,19 @@ def dev_echo_allowed():
 
 
 def initial_setup_login_allowed(user):
-    """Whether this account may finish a password-only sign-in during setup.
+    """Whether this account may sign in before any facility exists.
 
-    A freshly provisioned estate has a Super Admin (created by the deploy
-    bootstrap) but no active MH/DS site, and possibly no OTP provider either.
-    The normal staff flow requires both, which would lock out the only account
-    that can create the first site and configure delivery. This is that narrow
-    escape hatch; it closes by itself as soon as the estate is usable.
-
-    It applies to SUPER_ADMIN only, while either no ACTIVE MH/DS site exists or
-    the OTP step cannot run at all. Password and ACTIVE-status checks are still
-    performed by the caller, and every use writes an audited event. As soon as
-    a site exists *and* OTP delivery works, the standard facility + code flow
-    applies to everyone again.
+    A freshly provisioned estate has a Super Admin but no active MH/DS site,
+    so the normal facility guard would lock out the only account allowed to
+    create the first one. This narrow escape hatch is SUPER_ADMIN-only and
+    audited; it closes by itself as soon as the first site is ACTIVE. Mailed
+    OTP is handled separately by ``email_otp_required_for`` and is never the
+    reason this branch is taken.
     """
     if getattr(user, 'role', None) != 'SUPER_ADMIN':
         return False
     from bounded.network.models import Site
-    if not Site.objects.filter(status='ACTIVE', site_type__in=('MH', 'DS')).exists():
-        return True
-    return not (getattr(settings, 'IAM_OTP_SENDER', None) or dev_echo_allowed())
+    return not Site.objects.filter(status='ACTIVE', site_type__in=('MH', 'DS')).exists()
 
 
 def issue_otp(challenge, *, request=None):

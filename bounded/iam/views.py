@@ -498,10 +498,10 @@ class LoginAPIView(APIView):
             challenge.facility = selected
             challenge.save(update_fields=['facility', 'surface'])
 
-        # Estate roles may be configured to skip the second factor for local
-        # operations (IAM_ADMIN_OTP_REQUIRED=False). Field employees never take
-        # this branch, and production settings force the requirement back on.
-        if not staff_auth.otp_required_for(user):
+        # Mailed OTP is skipped while no delivery provider is configured;
+        # configuring one restores the normal policy with no code change.
+        # The DS daily store code is a separate factor and is unaffected.
+        if not staff_auth.email_otp_required_for(user):
             session, access, refresh = staff_auth.create_session(
                 user, challenge.facility, surface, request,
             )
@@ -791,7 +791,7 @@ class FacilitySelectView(APIView):
 
         challenge.facility = selected
         challenge.save(update_fields=['facility', 'surface'])
-        if not staff_auth.otp_required_for(challenge.user):
+        if not staff_auth.email_otp_required_for(challenge.user):
             session, access, refresh = staff_auth.create_session(
                 challenge.user, challenge.facility, challenge.surface, request,
             )
@@ -1445,13 +1445,14 @@ class UserViewSet(viewsets.ModelViewSet):
 
         Estate roles skip OTP in production; this exists for WAREHOUSE_STAFF
         and other field employees who must prove presence at login in either
-        the console or the app. Returns 503 when no delivery provider is
-        configured, which is a deployment setting, not a product error.
+        the console or the app. With no delivery provider configured, the
+        mailed code is currently skipped, so this endpoint reports that the
+        role signs in without it. The DS daily store code is unaffected.
         """
         target = self.get_object()
         if target.role not in ('WAREHOUSE_STAFF',):
             return Response({'error': 'This role logs in without OTP.'}, status=400)
-        if not staff_auth.otp_required_for(target):
+        if not staff_auth.email_otp_required_for(target):
             return Response({'error': 'This role logs in without OTP.'}, status=400)
         site_code = str(request.data.get('site_code') or '').strip().upper()
         facilities = staff_auth.authorized_facilities(target)
