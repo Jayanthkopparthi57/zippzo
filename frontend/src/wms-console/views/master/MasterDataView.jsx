@@ -455,7 +455,15 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
   const openCreateModal = () => {
     setError('');
     setEditingRecord(null);
-    setFormData(buildInitialForm(editableFields));
+    const initial = buildInitialForm(editableFields);
+    // The dark-store console already knows which store this modal belongs to.
+    // Seed the required site reference instead of leaving React state empty
+    // while the browser visually shows the first option; submitting that empty
+    // state produced "site: This field may not be null."
+    if (siteId && editableFields.some(f => f.name === 'site')) {
+      initial.site = siteId;
+    }
+    setFormData(initial);
     setModalMode('create');
   };
 
@@ -626,7 +634,9 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
                         </select>
                       ) : f.type === 'reference' ? (
                         <select value={formData[f.name] ?? ''} onChange={(event) => updateField(f.name, event.target.value)} required={f.required}>
-                          {(f.allowBlank || !f.required) && <option value="">None</option>}
+                          {(f.allowBlank || !f.required || !formData[f.name]) && (
+                            <option value="">{f.allowBlank || !f.required ? 'None' : 'Select…'}</option>
+                          )}
                           {(referenceData[f.ref] || []).map(option => (
                             <option key={option[f.valueKey]} value={option[f.valueKey]}>
                               {option[f.labelKey]}{option.name && option[f.labelKey] !== option.name ? ` - ${option.name}` : ''}
