@@ -77,9 +77,25 @@ class Command(BaseCommand):
                             "A Super Admin already exists; skipping creation.")
                         return
                     raise CommandError("A Super Admin already exists.")
-                if User.objects.filter(email__iexact=email).exists():
-                    raise CommandError(
-                        "That email already belongs to an account.")
+                existing = User.objects.filter(email__iexact=email).first()
+                if existing:
+                    if not env_key:
+                        raise CommandError(
+                            "That email already belongs to an account.")
+                    # Shopper self-registration often claims the operator's
+                    # email before the first deploy finishes. The env-var
+                    # bootstrap is an explicit instruction to make this
+                    # address the super admin, so promote that account rather
+                    # than failing the whole build.
+                    existing.full_name = full_name
+                    existing.role = "SUPER_ADMIN"
+                    existing.status = "ACTIVE"
+                    existing.password_hash = make_password(password)
+                    existing.save(update_fields=[
+                        "full_name", "role", "status", "password_hash"])
+                    self.stdout.write(self.style.SUCCESS(
+                        f"Existing account promoted to Super Admin for {email}."))
+                    return
                 User.objects.create(
                     email=email,
                     full_name=full_name,
