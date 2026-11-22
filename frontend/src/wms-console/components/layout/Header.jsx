@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Menu, User, Building2, LogOut, Download } from 'lucide-react';
-import ExportModal from '../../../components/ui/ExportModal';
+import ExportModal from '../ui/ExportModal';
 
 export default function Header({ user, logout, onToggleSidebar, facilityLabel, appKey = 'wms' }) {
   const [exportOpen, setExportOpen] = useState(false);
