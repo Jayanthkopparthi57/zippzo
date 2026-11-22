@@ -35,7 +35,7 @@ function Registration({ siteId, storeCode }) {
     () => siteId ? fetchApi(`/catalog/listings/?site=${encodeURIComponent(siteId)}&page_size=1000`).then((r) => asList(r, '/catalog/listings')) : Promise.resolve([]),
     [siteId],
   );
-  const { data: categoryRows } = useAsyncData(
+  const { data: categoryRows, reload: reloadCategories } = useAsyncData(
     () => fetchApi('/catalog/categories/?page_size=500').then((r) => asList(r, '/catalog/categories')),
     [],
   );
@@ -73,6 +73,22 @@ function Registration({ siteId, storeCode }) {
   };
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
+  const createCategory = async () => {
+    const name = window.prompt('New category name (e.g. Grocery, Beverages):');
+    if (!name || !name.trim()) return;
+    setBusy('category');
+    try {
+      const created = await postApi('/catalog/categories/', { name: name.trim() });
+      await reloadCategories();
+      if (created?.category_id) set('category', created.category_id);
+      setMessage({ type: 'ok', message: `Category “${name.trim()}” created.` });
+    } catch (error) {
+      setMessage({ type: 'error', message: describeError(error) || 'Could not create the category.' });
+    } finally {
+      setBusy('');
+    }
+  };
 
   const onPickImage = async (event, slot = 0) => {
     const file = event.target.files?.[0];
@@ -357,12 +373,23 @@ function Registration({ siteId, storeCode }) {
           </div>
           <div className="form-group">
             <label className="form-label">Category</label>
-            <select className="form-input" value={form.category} onChange={(e) => set('category', e.target.value)}>
-              <option value="">— None —</option>
-              {(categoryRows || []).map((c) => (
-                <option key={c.category_id} value={c.category_id}>{c.name}</option>
-              ))}
-            </select>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <select className="form-input" value={form.category} onChange={(e) => set('category', e.target.value)} style={{ flex: 1 }}>
+                <option value="">— None —</option>
+                {(categoryRows || []).map((c) => (
+                  <option key={c.category_id} value={c.category_id}>{c.name}</option>
+                ))}
+              </select>
+              <button type="button" className="btn-ui neutral" onClick={createCategory} disabled={busy === 'category'}
+                title="Create a new category" style={{ padding: '0 10px' }}>
+                {busy === 'category' ? '…' : '+'}
+              </button>
+            </div>
+            {(categoryRows || []).length === 0 && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                No categories yet — click + to create one.
+              </div>
+            )}
           </div>
           <div className="form-group">
             <label className="form-label">MRP (₹) *</label>
