@@ -57,7 +57,7 @@ export default function ExportModal({ open, onClose, appKey = 'wms' }) {
     setDownloading(true);
     setError('');
     try {
-      const params = new URLSearchParams({ resource, format: 'xlsx' });
+      const params = new URLSearchParams({ resource });
       if (from) params.set('from', from);
       if (to) params.set('to', to);
       const token = localStorage.getItem(`zippzo_jwt:${appKey}`);
