@@ -43,6 +43,18 @@ class LocationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     'barcode': ['A bin with this barcode already exists.'],
                 })
+        # A bin cannot be detached from its site, and it cannot borrow another
+        # site's zone: that would let putaway route stock to the wrong building.
+        site = attrs.get('site') or getattr(self.instance, 'site', None)
+        if 'site' in attrs and attrs['site'] is None and self.instance is not None:
+            raise serializers.ValidationError({
+                'site': ['A bin must stay attached to a site.'],
+            })
+        zone = attrs.get('zone', getattr(self.instance, 'zone', None))
+        if zone is not None and site is not None and zone.site_id != site.site_id:
+            raise serializers.ValidationError({
+                'zone': ['The zone belongs to a different site.'],
+            })
         return attrs
 
 class ZoneSerializer(serializers.ModelSerializer):

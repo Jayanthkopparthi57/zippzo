@@ -373,10 +373,14 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
       const res = await apiClient.get(config.endpoint, {
         page_size: 500,
         ...((siteId && ['bins', 'zones'].includes(currentTab)) ? { site: siteId } : {}),
+        ...(currentTab === 'bins' ? { location_type: 'BIN' } : {}),
       });
       let rows = resultsFrom(res);
       if (siteId && ['bins', 'zones'].includes(currentTab)) {
         rows = rows.filter(row => String(row.site || '') === String(siteId));
+      }
+      if (currentTab === 'bins') {
+        rows = rows.filter(row => (row.location_type || 'BIN') === 'BIN');
       }
 
       if (['bins', 'zones', 'dock-doors'].includes(currentTab)) {
@@ -499,7 +503,9 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
     // the record stores a zone UUID. Translate so the dropdown shows the code.
     if (tab === 'bins' && initial.zone) {
       const zone = (referenceData.zones || []).find(z => String(z.zone_id) === String(initial.zone));
-      initial.zone = zone?.code || '';
+      // Keep the UUID when the lookup misses (directory still loading) so a
+      // save does not silently wipe the bin's zone.
+      initial.zone = zone?.code || initial.zone;
     }
     setFormData(initial);
     setModalMode('edit');
@@ -521,14 +527,33 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
   // the row on first use so the operator never has to visit a zone screen.
   const resolveZoneId = async (code, site) => {
     if (!code) return null;
+    // Editing an older bin can hand us the zone UUID when the zone directory
+    // has not loaded; that is already a valid reference, so keep it as-is
+    // instead of inventing a zone whose code is a UUID.
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(code)) {
+      return code;
+    }
     const zones = referenceData.zones || [];
     const existing = zones.find(z => z.code === code
       && (!site || String(z.site) === String(site)));
     if (existing) return existing.zone_id;
-    const created = await apiClient.post('/network/zones/', {
-      site, code, zone_type: 'GENERAL', status: 'ACTIVE',
-    });
-    return created.zone_id;
+    try {
+      const created = await apiClient.post('/network/zones/', {
+        site, code, zone_type: 'GENERAL', status: 'ACTIVE',
+      });
+      return created.zone_id;
+    } catch (err) {
+      // Two operators can pick the same new condition at once; the second POST
+      // loses the unique (site, code) race. Re-read the directory and reuse the
+      // zone the other save created instead of failing the bin.
+      if (err?.status === 400) {
+        const fresh = await apiClient.get(REFERENCE_ENDPOINTS.zones, { page_size: 500 });
+        const match = resultsFrom(fresh).find(z => z.code === code
+          && String(z.site) === String(site));
+        if (match) return match.zone_id;
+      }
+      throw err;
+    }
   };
 
   const handleSubmit = async (event) => {
@@ -540,8 +565,10 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
       const payload = normalizePayload(editableFields, formData);
       if (tab === 'bins') {
         // Bins are always BIN type and always belong to the store the console
-        // is working in; neither is a decision worth asking for.
-        payload.location_type = 'BIN';
+        // is working in; neither is a decision worth asking for. An edit keeps
+        // whatever type the record already had, so a dock cannot be silently
+        // converted by opening it from this screen.
+        if (modalMode === 'create') payload.location_type = 'BIN';
         payload.site = payload.site || resolveDefaultSite() || null;
         payload.zone = await resolveZoneId(payload.zone, payload.site);
       } else if (editableFields.some(f => f.name === 'site') && !payload.site) {
@@ -764,7 +791,7 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
               <div className="mono-num" style={{ fontSize: 15, fontWeight: 900, margin: '4px 0 10px', wordBreak: 'break-word' }}>{printBin.barcode || 'BIN—'}</div>
               <QRCodeSVG value={printBin.barcode || printBin.location_id || ''} size={170} />
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
-                {printBin.location_type || 'BIN'} · {printBin.container || ''}{printBin.aisle ? ` · Aisle ${printBin.aisle}` : ''}{printBin.rack ? ` · Rack ${printBin.rack}` : ''}{printBin.level ? ` · Level ${printBin.level}` : ''}
+                {printBin.location_type || 'BIN'}{printBin.category ? ` · ${printBin.category}` : ''}{printBin.aisle ? ` · Aisle ${printBin.aisle}` : ''}{printBin.rack ? ` · Rack ${printBin.rack}` : ''}{printBin.level ? ` · Level ${printBin.level}` : ''}
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8 }}>Scan to see this bin’s contents in the app.</div>
             </div>

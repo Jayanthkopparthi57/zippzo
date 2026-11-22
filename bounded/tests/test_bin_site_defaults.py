@@ -12,7 +12,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from bounded.iam.models import User
-from bounded.network.models import Location, Site
+from bounded.network.models import Location, Site, Zone
 
 LOCATIONS = '/api/network/locations/'
 
@@ -76,3 +76,50 @@ class BinSiteDefaultTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(
             Location.objects.get(location_id='BIN-CHOSEN-1').site_id, chosen.site_id)
+
+    def test_bin_takes_a_zone_from_its_own_site(self):
+        site = self._create_site('DS-BIN-ZONED')
+        zone = Zone.objects.create(site=site, code='COLD')
+
+        response = self.client.post(
+            LOCATIONS,
+            {'location_id': 'BIN-ZONED-1', 'zone': str(zone.zone_id), 'category': 'Dairy'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        bin_row = Location.objects.get(location_id='BIN-ZONED-1')
+        self.assertEqual(bin_row.zone_id, zone.zone_id)
+        self.assertEqual(bin_row.location_type, 'BIN')
+
+    def test_another_site_s_zone_is_rejected(self):
+        site = self._create_site('DS-BIN-HOME')
+        other = self._create_site('DS-BIN-FOREIGN')
+        foreign_zone = Zone.objects.create(site=other, code='FROZEN')
+
+        response = self.client.post(
+            LOCATIONS,
+            {'location_id': 'BIN-CROSS-1', 'site': str(site.site_id),
+             'zone': str(foreign_zone.zone_id)},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('zone', response.data)
+        self.assertFalse(Location.objects.filter(location_id='BIN-CROSS-1').exists())
+
+    def test_a_bin_cannot_be_detached_from_its_site(self):
+        site = self._create_site('DS-BIN-KEEP')
+        bin_row = Location.objects.create(
+            location_id='BIN-KEEP-1', site=site, location_type='BIN', barcode='BIN-KEEP-1')
+
+        response = self.client.patch(
+            f'{LOCATIONS}BIN-KEEP-1/',
+            {'site': None},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('site', response.data)
+        bin_row.refresh_from_db()
+        self.assertEqual(bin_row.site_id, site.site_id)
