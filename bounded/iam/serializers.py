@@ -9,7 +9,7 @@ class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, allow_blank=False,
                                      min_length=6, max_length=128,
                                      help_text="Plain text password; stored hashed.")
-    site_id = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    site_id = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
     site_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
     role_at_site = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
