@@ -101,7 +101,7 @@ class UserSerializer(serializers.ModelSerializer):
         elif role_at_site and asgn:
             # Role-only change (no site change): keep the existing site.
             asgn.role_at_site = role_at_site
-            asgn.save(update_fields=['role_at_site', 'updated_at'])
+            asgn.save(update_fields=['role_at_site'])
         return instance
 
     def to_representation(self, instance):
