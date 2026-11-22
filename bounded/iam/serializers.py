@@ -78,11 +78,11 @@ class UserSerializer(serializers.ModelSerializer):
         elif site_id:
             target_site = Site.objects.filter(site_id=site_id).first()
 
+        asgn = EmployeeSiteAssignment.objects.filter(user=instance).first()
         if target_site:
             mode = 'DARKHOUSE' if target_site.site_type == 'DS' else 'WAREHOUSE'
             role_name = role_at_site or ('STORE_MANAGER' if instance.role == 'OPS_MANAGER' else 'OPERATOR')
             emp_code = instance.email.split('@')[0].upper()[:20]
-            asgn = EmployeeSiteAssignment.objects.filter(user=instance).first()
             if asgn:
                 asgn.site = target_site
                 asgn.mode = mode
@@ -98,6 +98,10 @@ class UserSerializer(serializers.ModelSerializer):
                     is_primary=True,
                     is_active=True
                 )
+        elif role_at_site and asgn:
+            # Role-only change (no site change): keep the existing site.
+            asgn.role_at_site = role_at_site
+            asgn.save(update_fields=['role_at_site', 'updated_at'])
         return instance
 
     def to_representation(self, instance):
