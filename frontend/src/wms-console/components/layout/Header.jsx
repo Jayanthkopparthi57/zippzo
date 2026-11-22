@@ -1,7 +1,9 @@
-import React from 'react';
-import { Menu, User, Building2, LogOut } from 'lucide-react';
+import React, { useState } from 'react';
+import { Menu, User, Building2, LogOut, Download } from 'lucide-react';
+import ExportModal from '../../../components/ui/ExportModal';
 
-export default function Header({ user, logout, onToggleSidebar, facilityLabel }) {
+export default function Header({ user, logout, onToggleSidebar, facilityLabel, appKey = 'wms' }) {
+  const [exportOpen, setExportOpen] = useState(false);
   return (
     <header className="facility-bar">
       <div className="facility-bar-left">
@@ -22,6 +24,16 @@ export default function Header({ user, logout, onToggleSidebar, facilityLabel })
       </div>
 
       <div className="facility-bar-right">
+        {/* Export */}
+        <button
+          type="button"
+          className="btn-ui neutral"
+          onClick={() => setExportOpen(true)}
+          title="Export data to Excel"
+        >
+          <Download size={13} />
+          <span>Export</span>
+        </button>
         {/* User Info */}
         {user && (
           <div
@@ -44,6 +56,7 @@ export default function Header({ user, logout, onToggleSidebar, facilityLabel })
           <LogOut size={13} />
         </button>
       </div>
+      <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} appKey={appKey} />
     </header>
   );
 }

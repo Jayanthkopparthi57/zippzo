@@ -84,6 +84,7 @@ urlpatterns = [
     # Last Mile
     path('api/delivery/', include('bounded.delivery.urls')),
     path('api/lastmile/', include('bounded.lastmile.urls')),
+    path('api/export/', include('bounded.common.urls')),
     # Money
     path('api/money/', include('bounded.money.urls')),
     path('api/reverse/', include('bounded.reverse.urls')),
