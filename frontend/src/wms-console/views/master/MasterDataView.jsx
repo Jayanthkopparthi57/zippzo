@@ -452,16 +452,23 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
   const config = TAB_CONFIG[tab];
   const editableFields = config?.editableFields || [];
 
+  // The console knows its store; fall back to the only site in the directory
+  // when the session has no facility yet. Used to seed the form and as a last
+  // line of defence on submit, because a required reference rendered as a
+  // <select> can *look* filled while React state is still empty.
+  const resolveDefaultSite = () => {
+    if (siteId) return siteId;
+    const siteOptions = referenceData.sites || [];
+    return siteOptions.length === 1 ? siteOptions[0].site_id : '';
+  };
+
   const openCreateModal = () => {
     setError('');
     setEditingRecord(null);
     const initial = buildInitialForm(editableFields);
-    // The dark-store console already knows which store this modal belongs to.
-    // Seed the required site reference instead of leaving React state empty
-    // while the browser visually shows the first option; submitting that empty
-    // state produced "site: This field may not be null."
-    if (siteId && editableFields.some(f => f.name === 'site')) {
-      initial.site = siteId;
+    const defaultSite = resolveDefaultSite();
+    if (defaultSite && editableFields.some(f => f.name === 'site')) {
+      initial.site = defaultSite;
     }
     setFormData(initial);
     setModalMode('create');
@@ -492,6 +499,9 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
     setError('');
     try {
       const payload = normalizePayload(editableFields, formData);
+      if (editableFields.some(f => f.name === 'site') && !payload.site) {
+        payload.site = resolveDefaultSite() || null;
+      }
       if (modalMode === 'edit' && editingRecord) {
         await apiClient.patch(`${config.endpoint}${editingRecord[config.idField]}/`, payload);
       } else {
@@ -633,16 +643,25 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
                           {(f.options || []).map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                         </select>
                       ) : f.type === 'reference' ? (
-                        <select value={formData[f.name] ?? ''} onChange={(event) => updateField(f.name, event.target.value)} required={f.required}>
-                          {(f.allowBlank || !f.required || !formData[f.name]) && (
-                            <option value="">{f.allowBlank || !f.required ? 'None' : 'Select…'}</option>
+                        <>
+                          <select value={formData[f.name] ?? ''} onChange={(event) => updateField(f.name, event.target.value)} required={f.required}>
+                            {(f.allowBlank || !f.required || !formData[f.name]) && (
+                              <option value="">{f.allowBlank || !f.required ? 'None' : 'Select…'}</option>
+                            )}
+                            {(referenceData[f.ref] || []).map(option => (
+                              <option key={option[f.valueKey]} value={option[f.valueKey]}>
+                                {option[f.labelKey]}{option.name && option[f.labelKey] !== option.name ? ` - ${option.name}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                          {!(referenceData[f.ref] || []).length && (
+                            <span className="crud-field-hint">
+                              {f.ref === 'zones'
+                                ? 'No zones exist yet. Optional here — create one under MH Configs → Zones to assign bins to a zone.'
+                                : `No ${f.label.toLowerCase()} records exist yet; create one first to choose it here.`}
+                            </span>
                           )}
-                          {(referenceData[f.ref] || []).map(option => (
-                            <option key={option[f.valueKey]} value={option[f.valueKey]}>
-                              {option[f.labelKey]}{option.name && option[f.labelKey] !== option.name ? ` - ${option.name}` : ''}
-                            </option>
-                          ))}
-                        </select>
+                        </>
                       ) : f.type === 'textarea' ? (
                         <textarea value={formData[f.name] ?? ''} onChange={(event) => updateField(f.name, event.target.value)} required={f.required} rows={3} />
                       ) : f.type === 'boolean' ? (

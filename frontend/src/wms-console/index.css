@@ -924,6 +924,12 @@ html, body {
   resize: vertical;
 }
 
+.crud-field-hint {
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
 .crud-checkbox {
   min-height: 32px;
   display: inline-flex;
