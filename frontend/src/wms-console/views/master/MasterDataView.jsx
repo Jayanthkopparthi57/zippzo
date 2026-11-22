@@ -368,10 +368,10 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
     try {
       const res = await apiClient.get(config.endpoint, {
         page_size: 500,
-        ...((siteId && currentTab === 'bins') ? { site: siteId } : {}),
+        ...((siteId && ['bins', 'zones'].includes(currentTab)) ? { site: siteId } : {}),
       });
       let rows = resultsFrom(res);
-      if (siteId && currentTab === 'bins') {
+      if (siteId && ['bins', 'zones'].includes(currentTab)) {
         rows = rows.filter(row => String(row.site || '') === String(siteId));
       }
 
@@ -428,7 +428,13 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
     const entries = await Promise.all([...neededRefs].map(async ref => {
       try {
         const res = await apiClient.get(REFERENCE_ENDPOINTS[ref], { page_size: 500 });
-        return [ref, resultsFrom(res)];
+        let rows = resultsFrom(res);
+        // A dark-store session only cares about its own store's zones; showing
+        // another site's zones would attach bins to the wrong geography.
+        if (ref === 'zones' && siteId) {
+          rows = rows.filter(zone => String(zone.site || '') === String(siteId));
+        }
+        return [ref, rows];
       } catch (err) {
         console.error(`Failed loading ${ref} reference data:`, err);
         return [ref, []];

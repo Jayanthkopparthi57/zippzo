@@ -1,6 +1,6 @@
 import uuid
 
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
@@ -68,12 +68,39 @@ class LocationViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated()]
         return [IsAdminUser()]
 
+    def _default_site(self):
+        """The site a bin belongs to when the client omits it.
+
+        A dark-store session already chose its store at sign-in, and a
+        single-site estate has only one possible answer, so both are safe to
+        infer. More than one site must be explicit: guessing between
+        warehouses would file stock in the wrong building.
+        """
+        session = getattr(getattr(self.request, 'user', None), 'session', None)
+        if session is not None and session.facility_id:
+            return session.facility
+        sites = list(Site.objects.all()[:2])
+        return sites[0] if len(sites) == 1 else None
+
     def perform_create(self, serializer):
         site = serializer.validated_data.get('site')
+        if site is None:
+            site = self._default_site()
+            if site is None:
+                raise serializers.ValidationError({
+                    'site': ['Choose the site this bin belongs to.'],
+                })
+            serializer.validated_data['site'] = site
         barcode = serializer.validated_data.get('barcode') or ''
         if not barcode.strip():
+            # Counting rows breaks the moment a bin is deleted. Walk forward
+            # until a free number is found so re-creating a bin cannot collide
+            # with the global unique barcode.
             seq = Location.objects.filter(site=site).count() + 1
             barcode = f'BIN-{site.code}-{seq:04d}'
+            while Location.objects.filter(barcode=barcode).exists():
+                seq += 1
+                barcode = f'BIN-{site.code}-{seq:04d}'
             serializer.validated_data['barcode'] = barcode
         qr_payload = serializer.validated_data.get('qr_payload') or ''
         if not qr_payload.strip():

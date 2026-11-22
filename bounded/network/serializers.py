@@ -20,9 +20,29 @@ class LocationSerializer(serializers.ModelSerializer):
                   'is_sellable_bin','is_active','created_at']
         read_only_fields = ['created_at']
         extra_kwargs = {
+            # The view fills both of these in when the client cannot: the site
+            # from the signed-in facility (or the only site in a one-site
+            # estate) and the barcode from the site code. Leaving them optional
+            # keeps a stale console bundle from failing with "may not be null",
+            # and the DRF unique-together validator is replaced by validate()
+            # below because it cannot evaluate a barcode that does not exist yet.
+            'site': {'required': False, 'allow_null': True},
             'barcode': {'allow_blank': True, 'required': False},
             'qr_payload': {'allow_blank': True, 'required': False},
         }
+        validators = []
+
+    def validate(self, attrs):
+        barcode = (attrs.get('barcode') or '').strip()
+        if barcode:
+            clash = Location.objects.filter(barcode=barcode)
+            if self.instance is not None:
+                clash = clash.exclude(pk=self.instance.pk)
+            if clash.exists():
+                raise serializers.ValidationError({
+                    'barcode': ['A bin with this barcode already exists.'],
+                })
+        return attrs
 
 class ZoneSerializer(serializers.ModelSerializer):
     class Meta:

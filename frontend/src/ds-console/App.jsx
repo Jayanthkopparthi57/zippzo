@@ -134,7 +134,7 @@ function AppContent({ user, logout }) {
 
       // Storage
       case 'ds-bins':
-        return <MasterDataView initialTab="bins" allowedTabs={['bins']} siteId={site?.site_id || ''} description="Create and manage storage bins at this dark store." darkStoreMode />;
+        return <MasterDataView initialTab="bins" allowedTabs={['bins', 'zones']} siteId={site?.site_id || ''} description="Create and manage storage bins and zones at this dark store." darkStoreMode />;
 
       // Returns & QC
       case 'ds-returns':
