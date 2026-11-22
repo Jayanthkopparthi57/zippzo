@@ -47,9 +47,6 @@ function Register({ site, siteId, storeCode }) {
   const [compEdit, setCompEdit] = useState(null); // { comp_id?, user_id, employee, basis, amount }
   const [compBusy, setCompBusy] = useState(false);
   const [compError, setCompError] = useState('');
-  const [editUser, setEditUser] = useState(null); // { user_id, full_name, role, role_at_site, status }
-  const [editBusy, setEditBusy] = useState(false);
-  const [editError, setEditError] = useState('');
 
   const payByUser = useMemo(() => {
     const map = new Map();
@@ -133,28 +130,6 @@ function Register({ site, siteId, storeCode }) {
     }[value] || 'PICKER';
     return { ...current, role: value, role_at_site: department };
   });
-
-  const saveUserEdit = async () => {
-    if (!editUser) return;
-    setEditBusy(true);
-    setEditError('');
-    try {
-      const payload = {
-        role: editUser.role,
-        status: editUser.status,
-        role_at_site: editUser.role_at_site,
-        full_name: editUser.full_name,
-      };
-      if (editUser.password) payload.password = editUser.password;
-      await patchApi(`/iam/users/${editUser.user_id}/`, payload);
-      setEditUser(null);
-      await reload({ quiet: true });
-    } catch (err) {
-      setEditError(err?.message || 'Could not update the employee.');
-    } finally {
-      setEditBusy(false);
-    }
-  };
 
   const createEmployee = async (event) => {
     event.preventDefault();
@@ -301,62 +276,6 @@ function Register({ site, siteId, storeCode }) {
           </div>
         )}
 
-      {editUser && (
-        <div className="modal-backdrop" onClick={() => editBusy ? undefined : setEditUser(null)}>
-          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420, maxHeight: '85vh', overflowY: 'auto' }}>
-            <div className="modal-header">
-              <div className="modal-title">Edit employee</div>
-              <button type="button" className="btn-ui neutral" onClick={() => setEditUser(null)} disabled={editBusy}><X size={14} /></button>
-            </div>
-            {editError && <div className="form-error-banner">{editError}</div>}
-            <div className="form-group">
-              <label className="form-label">Name</label>
-              <input className="form-input" value={editUser.full_name} onChange={(e) => setEditUser((c) => ({ ...c, full_name: e.target.value }))} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Role (account)</label>
-              <select className="form-input" value={editUser.role} onChange={(e) => setEditUser((c) => ({ ...c, role: e.target.value }))}>
-                <option value="SUPER_ADMIN">Super admin</option>
-                <option value="OPS_MANAGER">Ops manager</option>
-                <option value="WAREHOUSE_STAFF">Warehouse staff</option>
-                <option value="RIDER">Rider</option>
-                <option value="SENDER">Sender</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Role at this store</label>
-              <select className="form-input" value={editUser.role_at_site} onChange={(e) => setEditUser((c) => ({ ...c, role_at_site: e.target.value }))}>
-                <option value="PICKER">Picker</option>
-                <option value="PACKER">Packer / Rack drop</option>
-                <option value="INVENTORY_ASSOCIATE">Inventory Associate</option>
-                <option value="INBOUND_ASSOCIATE">Inbound Associate</option>
-                <option value="PUTAWAY_ASSOCIATE">Putaway Associate</option>
-                <option value="OPERATOR">Floor operator</option>
-                <option value="RIDER">Rider</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Status</label>
-              <select className="form-input" value={editUser.status} onChange={(e) => setEditUser((c) => ({ ...c, status: e.target.value }))}>
-                <option value="ACTIVE">Active</option>
-                <option value="INACTIVE">Inactive</option>
-                <option value="BLOCKED">Blocked</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">New password (leave blank to keep)</label>
-              <input className="form-input" type="password" value={editUser.password || ''} onChange={(e) => setEditUser((c) => ({ ...c, password: e.target.value }))} />
-            </div>
-            <div className="modal-footer">
-              <button type="button" className="btn-ui neutral" onClick={() => setEditUser(null)} disabled={editBusy}>Cancel</button>
-              <button type="button" className="btn-ui primary" disabled={editBusy} onClick={saveUserEdit}>
-                {editBusy ? 'Saving…' : 'Save changes'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="table-container">
         <table className="data-table">
           <thead>
@@ -378,7 +297,26 @@ function Register({ site, siteId, storeCode }) {
                     {row.email && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{row.email}</div>}
                     <div className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{row.employee || ''}</div>
                   </td>
-                  <td>{row.role_at_site || row.role || '—'}</td>
+                  <td>
+                     <select className="form-input" value={accountRole || row.role_at_site || 'PICKER'}
+                       onChange={(e) => {
+                         const newRole = e.target.value;
+                         patchApi(`/iam/users/${row.user}/`, { role: newRole, role_at_site: newRole })
+                           .then(() => reload({ quiet: true }))
+                           .catch((err) => setNotice({ type: 'error', message: err?.message || 'Could not update role.' }));
+                       }}
+                       style={{ padding: '3px 5px', fontSize: 11, height: 28, minWidth: 120 }}>
+                       <option value="PICKER">Picker</option>
+                       <option value="PACKER">Packer</option>
+                       <option value="INVENTORY_ASSOCIATE">Inventory</option>
+                       <option value="INBOUND_ASSOCIATE">Inbound</option>
+                       <option value="PUTAWAY_ASSOCIATE">Putaway</option>
+                       <option value="OPERATOR">Operator</option>
+                       <option value="RIDER">Rider</option>
+                       <option value="WAREHOUSE_STAFF">Floor staff</option>
+                       <option value="OPS_MANAGER">Ops manager</option>
+                     </select>
+                   </td>
                   <td>
                     <StatusBadge status={active ? 'ACTIVE' : 'OFFLINE'} />
                     {shift && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{new Date(shift.started_at).toLocaleString()}</div>}
@@ -421,19 +359,6 @@ function Register({ site, siteId, storeCode }) {
                     })()}
                   </td>
  
-                  <td>
-                    <button type="button" className="btn-ui neutral" style={{ padding: '3px 8px', fontSize: 11, height: 28 }}
-                      onClick={() => setEditUser({
-                        user_id: String(row.user || ''),
-                        full_name: row.name || '',
-                        role: accountRole || 'WAREHOUSE_STAFF',
-                        role_at_site: row.role_at_site || 'PICKER',
-                        status: 'ACTIVE',
-                      })}>
-                      Edit
-                    </button>
-                  </td>
-
                   <td>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                       {needsWarehouseOtp ? 'Use shared daily OTP' : accountRole === 'RIDER' ? 'Activates by scanning the store QR' : 'No OTP (admin)'}
