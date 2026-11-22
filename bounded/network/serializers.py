@@ -15,7 +15,7 @@ class SiteSerializer(serializers.ModelSerializer):
 class LocationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Location
-        fields = ['location_id','site','location_type','zone','container','aisle','rack','level','position',
+        fields = ['location_id','site','location_type','zone','container','category','aisle','rack','level','position',
                   'barcode','qr_payload','capacity_qty','capacity_weight_g','capacity_volume_ml',
                   'is_sellable_bin','is_active','created_at']
         read_only_fields = ['created_at']
@@ -27,6 +27,7 @@ class LocationSerializer(serializers.ModelSerializer):
             # and the DRF unique-together validator is replaced by validate()
             # below because it cannot evaluate a barcode that does not exist yet.
             'site': {'required': False, 'allow_null': True},
+            'location_type': {'required': False},
             'barcode': {'allow_blank': True, 'required': False},
             'qr_payload': {'allow_blank': True, 'required': False},
         }

@@ -87,9 +87,13 @@ const TAB_CONFIG = {
     editableFields: [
       field('location_id', 'Location ID', { required: true }),
       field('site', 'Site', { type: 'reference', ref: 'sites', valueKey: 'site_id', labelKey: 'code', required: true }),
-      field('location_type', 'Location Type', { type: 'select', options: [choice('BIN'), choice('ZONE'), choice('DOCK'), choice('STAGING')], defaultValue: 'BIN' }),
-      field('zone', 'Zone', { type: 'reference', ref: 'zones', valueKey: 'zone_id', labelKey: 'code', allowBlank: true }),
-      field('container', 'Container', { defaultValue: 'PICK_FACE' }),
+      // Storage condition, not a warehousing abstraction: these codes match
+      // Sku.storage_zone, so putaway can keep cold stock out of ambient bins.
+      field('zone', 'Storage Zone', {
+        type: 'select', allowBlank: true,
+        options: [choice('DRY'), choice('COLD'), choice('FROZEN')],
+      }),
+      field('category', 'Category'),
       field('aisle', 'Aisle'),
       field('rack', 'Rack'),
       field('level', 'Level'),
@@ -102,8 +106,8 @@ const TAB_CONFIG = {
     columns: [
       { label: 'Bin Code', key: 'barcode', render: (v, row) => <span style={{ fontFamily: 'var(--font-mono)', background: 'var(--bg-input)', border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--c-amber)', padding: '2px 6px' }}>{v || row.location_id}</span> },
       { label: 'Site', key: 'site_code', render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{v || '-'}</span> },
-      { label: 'Location Type', key: 'location_type', badge: true },
-      { label: 'Container', key: 'container', badge: true },
+      { label: 'Zone', key: 'zone_code', render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{v || '-'}</span> },
+      { label: 'Category', key: 'category', render: v => <span style={{ fontSize: 11 }}>{v || '-'}</span> },
       { label: 'Aisle', key: 'aisle', render: v => <span style={{ fontFamily: 'var(--font-mono)' }}>{v || '-'}</span> },
       { label: 'Rack', key: 'rack', render: v => <span style={{ fontFamily: 'var(--font-mono)' }}>{v || '-'}</span> },
       { label: 'Level', key: 'level', render: v => <span style={{ fontFamily: 'var(--font-mono)' }}>{v || '-'}</span> },
@@ -468,6 +472,13 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
     return siteOptions.length === 1 ? siteOptions[0].site_id : '';
   };
 
+  // The site is not a choice: a bin belongs to the store the operator is
+  // signed in to (or to the only site in a single-site estate).
+  const defaultSite = resolveDefaultSite();
+  const siteLabel = (referenceData.sites || [])
+    .find(s => String(s.site_id) === String(defaultSite))?.code || defaultSite;
+  const lockSite = Boolean(defaultSite) && (tab === 'bins' || darkStoreMode);
+
   const openCreateModal = () => {
     setError('');
     setEditingRecord(null);
@@ -483,7 +494,14 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
   const openEditModal = (record) => {
     setError('');
     setEditingRecord(record);
-    setFormData(buildInitialForm(editableFields, record));
+    const initial = buildInitialForm(editableFields, record);
+    // The bin form asks for a storage condition (DRY / COLD / FROZEN), while
+    // the record stores a zone UUID. Translate so the dropdown shows the code.
+    if (tab === 'bins' && initial.zone) {
+      const zone = (referenceData.zones || []).find(z => String(z.zone_id) === String(initial.zone));
+      initial.zone = zone?.code || '';
+    }
+    setFormData(initial);
     setModalMode('edit');
   };
 
@@ -498,6 +516,21 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  // DRY / COLD / FROZEN are stored as a Zone row per site, because that is
+  // what putaway strategies and cycle-count scopes already understand. Create
+  // the row on first use so the operator never has to visit a zone screen.
+  const resolveZoneId = async (code, site) => {
+    if (!code) return null;
+    const zones = referenceData.zones || [];
+    const existing = zones.find(z => z.code === code
+      && (!site || String(z.site) === String(site)));
+    if (existing) return existing.zone_id;
+    const created = await apiClient.post('/network/zones/', {
+      site, code, zone_type: 'GENERAL', status: 'ACTIVE',
+    });
+    return created.zone_id;
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!config) return;
@@ -505,7 +538,13 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
     setError('');
     try {
       const payload = normalizePayload(editableFields, formData);
-      if (editableFields.some(f => f.name === 'site') && !payload.site) {
+      if (tab === 'bins') {
+        // Bins are always BIN type and always belong to the store the console
+        // is working in; neither is a decision worth asking for.
+        payload.location_type = 'BIN';
+        payload.site = payload.site || resolveDefaultSite() || null;
+        payload.zone = await resolveZoneId(payload.zone, payload.site);
+      } else if (editableFields.some(f => f.name === 'site') && !payload.site) {
         payload.site = resolveDefaultSite() || null;
       }
       if (modalMode === 'edit' && editingRecord) {
@@ -643,9 +682,19 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
                   {editableFields.map(f => (
                     <div key={f.name} className={f.type === 'textarea' ? 'crud-form-field wide' : 'crud-form-field'}>
                       <label>{f.label}</label>
-                      {f.type === 'select' ? (
+                      {f.name === 'site' && lockSite ? (
+                        <input
+                          value={siteLabel}
+                          readOnly
+                          disabled
+                          title="Bins belong to the store you are signed in to."
+                        />
+                      ) : f.type === 'select' ? (
                         <select value={formData[f.name] ?? ''} onChange={(event) => updateField(f.name, event.target.value)} required={f.required}>
                           {f.allowBlank && <option value="">None</option>}
+                          {formData[f.name] && !(f.options || []).some(opt => opt.value === formData[f.name]) && (
+                            <option value={formData[f.name]}>{formData[f.name]}</option>
+                          )}
                           {(f.options || []).map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                         </select>
                       ) : f.type === 'reference' ? (
@@ -662,9 +711,7 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
                           </select>
                           {!(referenceData[f.ref] || []).length && (
                             <span className="crud-field-hint">
-                              {f.ref === 'zones'
-                                ? 'No zones exist yet. Optional here — create one under MH Configs → Zones to assign bins to a zone.'
-                                : `No ${f.label.toLowerCase()} records exist yet; create one first to choose it here.`}
+                              {`No ${f.label.toLowerCase()} records exist yet; create one first to choose it here.`}
                             </span>
                           )}
                         </>

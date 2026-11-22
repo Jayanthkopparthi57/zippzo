@@ -38,13 +38,15 @@ class BinSiteDefaultTests(TestCase):
 
         response = self.client.post(
             LOCATIONS,
-            {'location_id': 'BIN-ONLY-1', 'location_type': 'BIN'},
+            {'location_id': 'BIN-ONLY-1', 'category': 'Grocery'},
             format='json',
         )
 
         self.assertEqual(response.status_code, 201, response.data)
         bin_row = Location.objects.get(location_id='BIN-ONLY-1')
         self.assertEqual(bin_row.site_id, site.site_id)
+        self.assertEqual(bin_row.location_type, 'BIN')
+        self.assertEqual(bin_row.category, 'Grocery')
         self.assertTrue(bin_row.barcode)
 
     def test_multiple_sites_require_an_explicit_site(self):

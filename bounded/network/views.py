@@ -91,6 +91,10 @@ class LocationViewSet(viewsets.ModelViewSet):
                     'site': ['Choose the site this bin belongs to.'],
                 })
             serializer.validated_data['site'] = site
+        # The console no longer asks for a location type: every row created
+        # from Add Storage Bins is a bin. Docks and staging still exist for
+        # inbound screens that name them explicitly.
+        serializer.validated_data.setdefault('location_type', 'BIN')
         barcode = serializer.validated_data.get('barcode') or ''
         if not barcode.strip():
             # Counting rows breaks the moment a bin is deleted. Walk forward

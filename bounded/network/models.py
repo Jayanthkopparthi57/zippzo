@@ -53,6 +53,7 @@ class Location(models.Model):
     location_type = models.CharField(max_length=10, choices=LOC_TYPE_CHOICES)
     zone = models.ForeignKey('network.Zone', null=True, blank=True, on_delete=models.SET_NULL, related_name='locations')
     container = models.CharField(max_length=30, default='PICK_FACE')
+    category = models.CharField(max_length=100, blank=True)
     aisle = models.CharField(max_length=20, blank=True)
     rack = models.CharField(max_length=20, blank=True)
     level = models.CharField(max_length=20, blank=True)
