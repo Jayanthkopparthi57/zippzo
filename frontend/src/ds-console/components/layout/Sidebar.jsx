@@ -80,6 +80,7 @@ const MENU_GROUPS = [
     defaultOpen: false,
     items: [
       { id: 'ds-bins', title: 'Storage Bins', view: 'MasterDataView', initialTab: 'bins' },
+      { id: 'ds-categories', title: 'Categories', view: 'MasterDataView', initialTab: 'categories' },
     ],
   },
   {

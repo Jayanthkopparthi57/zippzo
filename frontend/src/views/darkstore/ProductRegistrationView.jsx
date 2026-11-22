@@ -365,7 +365,7 @@ function Registration({ siteId, storeCode }) {
             </select>
             {(categoryRows || []).length === 0 && (
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                No categories yet. Create them in WMS → MH Configs → Catalog → Categories.
+                No categories yet. Create them in DS console → Storage → Categories.
               </div>
             )}
           </div>
