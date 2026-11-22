@@ -301,7 +301,8 @@ function Register({ site, siteId, storeCode }) {
                      <select className="form-input" value={accountRole || row.role_at_site || 'PICKER'}
                        onChange={(e) => {
                          const newRole = e.target.value;
-                         patchApi(`/iam/users/${row.user}/`, { role: newRole, role_at_site: newRole })
+                         const userRole = newRole === 'RIDER' ? 'RIDER' : 'WAREHOUSE_STAFF';
+                         patchApi(`/iam/users/${row.user}/`, { role: userRole, role_at_site: newRole })
                            .then(() => reload({ quiet: true }))
                            .catch((err) => setNotice({ type: 'error', message: err?.message || 'Could not update role.' }));
                        }}

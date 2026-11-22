@@ -363,11 +363,6 @@ function Registration({ siteId, storeCode }) {
                 <option key={c.category_id} value={c.category_id}>{c.name}</option>
               ))}
             </select>
-            {(categoryRows || []).length === 0 && (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                No categories yet. Create them in DS console → Storage → Categories.
-              </div>
-            )}
           </div>
           <div className="form-group">
             <label className="form-label">MRP (₹) *</label>
