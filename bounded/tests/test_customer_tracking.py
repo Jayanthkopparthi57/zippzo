@@ -172,3 +172,40 @@ class TrackingPayloadTests(TrackingBase):
         data = self.as_user(self.shopper_user).get(self.url()).data
         self.assertTrue(data['live'])
         self.assertIsNotNone(data['rider'])
+
+
+class AddressPinTests(TrackingBase):
+    """The device GPS pin a shopper adds to their own delivery address.
+
+    This is the pin the shopper app (and the web storefront) write when the
+    customer taps "Use my current location". The fields already exist on the
+    model; the contract worth protecting is that a shopper may set them on
+    their own row, get them back, and never see another shopper's.
+    """
+
+    URL = '/api/orders/addresses/'
+
+    def test_shopper_can_save_and_read_a_gps_pin(self):
+        api = self.as_user(self.shopper_user)
+        created = api.post(self.URL, {
+            'label': 'Work', 'line1': '9 Canal Road', 'city': 'Palakollu',
+            'pincode': '534260', 'geo_lat': 16.5123456, 'geo_lng': 81.7891234,
+            'geocode_confidence': 'GPS',
+        }, format='json')
+        self.assertEqual(201, created.status_code, created.data)
+
+        address = CustomerAddress.objects.get(address_id=created.data['address_id'])
+        self.assertEqual(self.shopper, address.customer)
+        self.assertAlmostEqual(16.5123456, float(address.geo_lat), places=6)
+        self.assertAlmostEqual(81.7891234, float(address.geo_lng), places=6)
+        self.assertEqual('GPS', address.geocode_confidence)
+
+        read = api.get(f'{self.URL}{address.address_id}/')
+        self.assertEqual(200, read.status_code, read.data)
+        self.assertAlmostEqual(16.5123456, float(read.data['geo_lat']), places=6)
+        self.assertAlmostEqual(81.7891234, float(read.data['geo_lng']), places=6)
+
+    def test_another_shopper_cannot_read_the_pin(self):
+        api = self.as_user(self.other_user)
+        read = api.get(f'{self.URL}{self.address.address_id}/')
+        self.assertEqual(404, read.status_code, read.data)

@@ -2,10 +2,10 @@
   "expo": {
     "name": "Zippzo WMS & DS",
     "slug": "zippzo-operations",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "android": { "package": "com.zippzo.operations", "usesCleartextTraffic": true, "versionCode": 2 },
+    "android": { "package": "com.zippzo.operations", "usesCleartextTraffic": true, "versionCode": 3 },
     "ios": {
       "bundleIdentifier": "com.zippzo.operations",
       "infoPlist": {

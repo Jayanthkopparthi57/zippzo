@@ -15,6 +15,7 @@ const zippzoLogo = require('../assets/zippzo-logo.png');
 import { useAuth } from '../auth';
 import { CFEnvironment, CFSession } from 'cashfree-pg-api-contract';
 import { CFPaymentGatewayService } from 'react-native-cashfree-pg-sdk';
+import * as Location from 'expo-location';
 
 type Store = { code: string; name: string; delivery_fee?: string };
 type Product = {
@@ -25,6 +26,13 @@ type Product = {
 type Address = {
   address_id: string; label?: string; line1: string; line2?: string;
   landmark?: string; city: string; pincode: string; is_default: boolean;
+  geo_lat?: number | string | null; geo_lng?: number | string | null;
+  geocode_confidence?: string | null;
+};
+type AddressDraft = {
+  label: string; line1: string; line2: string; landmark: string;
+  city: string; pincode: string;
+  geo_lat: number | null; geo_lng: number | null;
 };
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 type Tab = 'home' | 'categories' | 'cart' | 'orders' | 'profile';
@@ -188,7 +196,12 @@ export default function ShopperApp() {
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [addressId, setAddressId] = useState('');
   const [showAddressForm, setShowAddressForm] = useState(false);
-  const [addressDraft, setAddressDraft] = useState({ label: 'Home', line1: '', line2: '', landmark: '', city: '', pincode: '' });
+  const [addressDraft, setAddressDraft] = useState<AddressDraft>({
+    label: 'Home', line1: '', line2: '', landmark: '', city: '', pincode: '',
+    geo_lat: null, geo_lng: null,
+  });
+  const [geoStatus, setGeoStatus] = useState('');
+  const [locating, setLocating] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'COD' | 'CASHFREE'>('COD');
 
   /* orders */
@@ -526,6 +539,30 @@ export default function ShopperApp() {
     finally { setBusy(false); }
   };
 
+  // The web storefront offers the same GPS pin. Nothing is sent until the
+  // shopper saves the address, and permission is only asked on this tap.
+  const pinAddress = async () => {
+    setError('');
+    setGeoStatus('');
+    setLocating(true);
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (!perm.granted) {
+        setGeoStatus('Location permission is off. Enable it in phone settings to add a pin.');
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setAddressDraft((old) => ({
+        ...old,
+        geo_lat: pos.coords.latitude,
+        geo_lng: pos.coords.longitude,
+      }));
+      setGeoStatus('Map pin added from this device. Save the address to keep it.');
+    } catch (err) {
+      setGeoStatus(errMsg(err, 'Could not get your location. You can still save without a pin.'));
+    } finally { setLocating(false); }
+  };
+
   const saveAddress = async () => {
     setError('');
     setBusy(true);
@@ -533,13 +570,18 @@ export default function ShopperApp() {
       const saved = await api.createShopperAddress({
         ...addressDraft,
         pincode: addressDraft.pincode.trim(),
+        geocode_confidence: addressDraft.geo_lat != null ? 'GPS' : null,
         is_default: addresses.length === 0,
       });
       setAddresses((old) => [saved, ...old]);
       setAddressId(saved.address_id);
       setPincode(saved.pincode);
       setShowAddressForm(false);
-      setAddressDraft({ label: 'Home', line1: '', line2: '', landmark: '', city: '', pincode: saved.pincode });
+      setAddressDraft({
+        label: 'Home', line1: '', line2: '', landmark: '', city: '', pincode: saved.pincode,
+        geo_lat: null, geo_lng: null,
+      });
+      setGeoStatus('');
       setNotice('Your delivery address was saved.');
     } catch (err) { setError(errMsg(err, 'Could not save this address.')); }
     finally { setBusy(false); }
@@ -2241,6 +2283,12 @@ export default function ShopperApp() {
                 <Text style={s.addressText} numberOfLines={2}>
                   {address.line1}{address.line2 ? `, ${address.line2}` : ''}, {address.city} {address.pincode}
                 </Text>
+                {address.geo_lat != null && address.geo_lng != null ? (
+                  <View style={s.pinnedRow}>
+                    <Ionicons name="locate" size={11} color={C.purple} />
+                    <Text style={s.pinnedText}>Map pin set</Text>
+                  </View>
+                ) : null}
               </View>
             </TouchableOpacity>
             <View style={s.addressActions}>
@@ -2259,6 +2307,11 @@ export default function ShopperApp() {
         {showAddressForm && (
           <View style={s.card}>
             <Text style={s.blockTitle}>Add a new address</Text>
+            <TouchableOpacity style={[s.pinBtn, (locating || busy) && s.btnDisabled]} disabled={locating || busy} onPress={pinAddress}>
+              <Ionicons name="locate" size={17} color={C.purple} />
+              <Text style={s.pinBtnText}>{locating ? 'Getting your location…' : 'Use my current location'}</Text>
+            </TouchableOpacity>
+            {geoStatus ? <Text style={s.pinStatus}>{geoStatus}</Text> : null}
             {([
               ['label', 'Label (Home, Work…)'],
               ['line1', 'House / flat and street'],
@@ -2568,6 +2621,9 @@ const s = StyleSheet.create({
   goldBtn: { backgroundColor: C.gold, borderRadius: 14, minHeight: 52, alignItems: 'center', justifyContent: 'center', marginTop: 18, flexDirection: 'row', gap: 7, paddingHorizontal: 16, shadowColor: C.goldDeep, shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
   goldBtnText: { color: C.ink, fontSize: 15, fontWeight: '900', letterSpacing: 0.2 },
   btnDisabled: { opacity: 0.55 },
+  pinBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: C.purple, backgroundColor: C.purpleSoft || '#f1edff', marginBottom: 10 },
+  pinBtnText: { color: C.purple, fontSize: 13, fontWeight: '800' },
+  pinStatus: { color: C.ink2, fontSize: 11.5, lineHeight: 16, marginBottom: 8 },
   authLinks: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 },
   authLink: { color: C.purple, fontSize: 12.5, fontWeight: '800' },
   authBack: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 12 },
@@ -2879,6 +2935,8 @@ const s = StyleSheet.create({
   addressIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: C.purpleSoft, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
   addressLabel: { color: C.ink, fontSize: 13.5, fontWeight: '800' },
   addressText: { color: C.ink2, fontSize: 12.5 },
+  pinnedRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 4 },
+  pinnedText: { color: C.purple, fontSize: 10.5, fontWeight: '700' },
   addressTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   addressTap: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   defaultPill: { backgroundColor: C.goldSoft, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1, marginLeft: 8 },

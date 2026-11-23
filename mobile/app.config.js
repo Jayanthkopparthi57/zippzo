@@ -35,17 +35,17 @@ module.exports = ({ config }) => {
         { android: { usesCleartextTraffic: true } },
       ],
       // Riders push their position while on duty so the shopper's map and the
-      // ETA are live. Shopper-only builds do not need the permission.
-      ...(shopper ? [] : [
-        [
-          'expo-location',
-          {
-            locationWhenInUsePermission:
-              'Zippzo uses your location while you are delivering so the customer can follow the order.',
-          },
-        ],
-        ...(config.plugins || []),
-      ]),
+      // ETA are live. Shoppers can pin their delivery address with the device
+      // GPS, so both builds need the permission - each with its own wording.
+      [
+        'expo-location',
+        {
+          locationWhenInUsePermission: shopper
+            ? 'Zippzo uses your location only when you choose "Use my current location" to pin a delivery address.'
+            : 'Zippzo uses your location while you are delivering so the customer can follow the order.',
+        },
+      ],
+      ...(shopper ? [] : (config.plugins || [])),
     ],
   };
 };
