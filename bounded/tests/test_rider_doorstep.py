@@ -62,7 +62,10 @@ class RiderActivationAndSummaryTests(RiderAppBase):
         self.assertEqual(200, response.status_code, response.data)
         self.assertEqual(1, response.data['stats']['deliveries_total'])
         self.assertEqual(1, response.data['stats']['deliveries_today'])
-        self.assertEqual('20.00', str(response.data['stats']['earnings_total']))
+        # SQLite hands DecimalField back without trailing zeros; compare by
+        # value so this assertion holds on both the local test DB and Postgres.
+        self.assertEqual(
+            Decimal('20.00'), Decimal(str(response.data['stats']['earnings_total'])))
         self.assertEqual(1, len(response.data['earnings']))
         self.assertEqual('RA-1001', response.data['earnings'][0]['order_no'])
 

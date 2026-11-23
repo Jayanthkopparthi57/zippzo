@@ -1027,6 +1027,7 @@ class DSOverviewView(APIView):
     def get(self, request):
         from datetime import timedelta
         from django.utils import timezone
+        from django.db import connection
         from django.db.models import (
             Sum, Count, Avg, Q, F, DurationField, ExpressionWrapper,
         )
@@ -1085,13 +1086,24 @@ class DSOverviewView(APIView):
         # soon as one pick had both timestamps. Extract epoch seconds from an
         # explicit DurationField instead.
         picks = PickTask.objects.filter(completed_at__isnull=False, started_at__isnull=False)
-        avg_pick = picks.annotate(
-            duration=ExpressionWrapper(
-                F('completed_at') - F('started_at'), output_field=DurationField(),
+        if connection.vendor == 'sqlite':
+            # SQLite has no native DurationField, so Extract('epoch') raises
+            # "Extract requires native DurationField database support" here.
+            # The production (Postgres) path below is untouched; this keeps the
+            # local three-app workflow rehearsal runnable on the test database.
+            pairs = list(picks.values_list('started_at', 'completed_at'))
+            avg_pick = (
+                sum((done - started).total_seconds() for started, done in pairs) / len(pairs)
+                if pairs else None
             )
-        ).annotate(
-            secs=Extract('duration', 'epoch'),
-        ).aggregate(a=Avg('secs'))['a']
+        else:
+            avg_pick = picks.annotate(
+                duration=ExpressionWrapper(
+                    F('completed_at') - F('started_at'), output_field=DurationField(),
+                )
+            ).annotate(
+                secs=Extract('duration', 'epoch'),
+            ).aggregate(a=Avg('secs'))['a']
 
         pickers = EmployeeSiteAssignment.objects.filter(is_active=True)
         if site:

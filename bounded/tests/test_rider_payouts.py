@@ -112,7 +112,8 @@ class PayoutRunTests(RiderPayoutBase):
             f'{STATEMENT}?rider={self.rider.rider_id}')
 
         self.assertEqual(200, response.status_code, response.data)
-        self.assertEqual('85.00', response.data['paid_amount'])
+        # SQLite omits trailing zeros on DecimalField; compare money by value.
+        self.assertEqual(Decimal('85.00'), Decimal(str(response.data['paid_amount'])))
         self.assertEqual(2, response.data['paid_count'])
         self.assertEqual('0.00', response.data['pending_amount'])
         self.assertEqual(0, response.data['pending_count'])
