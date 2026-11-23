@@ -152,7 +152,7 @@ export default function ShopperApp() {
   /* auth + profile */
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [accessMode, setAccessMode] = useState<'login' | 'register' | 'verify' | 'reset' | 'reset-confirm'>('login');
+  const [accessMode, setAccessMode] = useState<'login' | 'register' | 'reset' | 'reset-confirm'>('login');
   const [accessName, setAccessName] = useState('');
   const [accessPhone, setAccessPhone] = useState('');
   const [accessCode, setAccessCode] = useState('');
@@ -494,15 +494,11 @@ export default function ShopperApp() {
     setBusy(true);
     try {
       if (accessMode === 'register') {
-        const result = await api.shopperRegister({ email: email.trim(), name: accessName.trim(), phone: accessPhone.trim(), password });
-        setNotice(result.message || 'Check your email for a verification code.');
-        setAccessMode('verify');
-      } else if (accessMode === 'verify') {
-        await api.shopperVerifyEmail(email.trim(), accessCode.trim());
-        setNotice('Email verified. Sign in to continue.');
-        setAccessMode('login');
-        setAccessCode('');
-        setPassword('');
+        await api.shopperRegister({ email: email.trim(), name: accessName.trim(), phone: accessPhone.trim(), password });
+        // Email verification is removed for launch: the account is active the
+        // moment it is created, so sign straight in like the web storefront.
+        await login(email.trim(), password);
+        setNotice('Account created — you are signed in.');
       } else if (accessMode === 'reset') {
         const result = await api.shopperPasswordReset(email.trim());
         setNotice(result.message || 'If the account exists, a reset code has been sent.');
@@ -873,17 +869,14 @@ export default function ShopperApp() {
   if (!user) {
     const title = accessMode === 'login' ? 'Welcome back'
       : accessMode === 'register' ? 'Create your account'
-        : accessMode === 'verify' ? 'Verify your email'
-          : accessMode === 'reset' ? 'Reset your password' : 'Choose a new password';
+        : accessMode === 'reset' ? 'Reset your password' : 'Choose a new password';
     const subtitle = accessMode === 'login'
       ? 'Groceries and daily essentials, delivered to your door in minutes.'
       : accessMode === 'register'
-        ? 'One account for your orders, addresses and offers.'
-        : accessMode === 'verify'
-          ? 'Enter the six-digit code we sent to your email.'
-          : accessMode === 'reset'
-            ? 'We will email a six-digit code if the account exists.'
-            : 'Enter the code from your email and pick a new password.';
+        ? 'One step — your account is live the moment you submit.'
+        : accessMode === 'reset'
+          ? 'We will email a six-digit code if the account exists.'
+          : 'Enter the code from your email and pick a new password.';
     return (
       <SafeAreaView style={s.splash}>
         <StatusBar barStyle="light-content" />
@@ -920,7 +913,7 @@ export default function ShopperApp() {
                 </>
               )}
 
-              {['verify', 'reset-confirm'].includes(accessMode) && (
+              {accessMode === 'reset-confirm' && (
                 <>
                   <Text style={s.fieldLabel}>Email code</Text>
                   <TextInput style={s.input} placeholder="6-digit code" placeholderTextColor={C.ink3}
@@ -936,8 +929,7 @@ export default function ShopperApp() {
                 <Text style={s.goldBtnText}>
                   {busy ? 'Please wait…' : accessMode === 'login' ? 'Sign in'
                     : accessMode === 'register' ? 'Create account'
-                      : accessMode === 'verify' ? 'Verify email'
-                        : accessMode === 'reset' ? 'Send reset code' : 'Change password'}
+                      : accessMode === 'reset' ? 'Send reset code' : 'Change password'}
                 </Text>
               </TouchableOpacity>
 

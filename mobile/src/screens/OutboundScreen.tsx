@@ -36,10 +36,11 @@ export default function OutboundScreen({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [q, setQ] = useState('');
-  const [scanTarget, setScanTarget] = useState<null | 'lpn' | 'staging' | 'pickBin'>(null);
+  const [scanTarget, setScanTarget] = useState<null | 'staging' | 'pickBin'>(null);
 
-  // Pack pad
-  const [packFields, setPackFields] = useState({ lpn: '', staging: '', orderId: '' });
+  // Pack pad — outbound moves in loose bags, so the only physical target is
+  // the staging slot the rider collects from. No tote or LPN is scanned.
+  const [packFields, setPackFields] = useState({ staging: '', orderId: '' });
 
   // Pick flow state
   const [activeOrderId, setActiveOrderId] = useState('');
@@ -144,12 +145,10 @@ export default function OutboundScreen({ onBack }: { onBack: () => void }) {
     setInfo(null);
     try {
       if (!packFields.orderId.trim()) throw new Error('Enter the order id to pack.');
-      if (!packFields.lpn.trim() && !packFields.staging.trim()) throw new Error('Scan the tote (LPN) or staging bin.');
+      if (!packFields.staging.trim()) throw new Error('Enter the staging slot where the rider collects the bag.');
       const res = await api.packOrder({
         order_id: packFields.orderId.trim(),
-        lpn_barcode: packFields.lpn.trim() || undefined,
-        lpn_id: packFields.lpn.trim() || undefined,
-        staging_bin: packFields.staging.trim() || undefined,
+        staging_bin: packFields.staging.trim(),
       });
       setInfo(res?.message || `Order ${res?.order_no || ''} packed and staged for the rider.`);
       load(true);
@@ -200,7 +199,7 @@ export default function OutboundScreen({ onBack }: { onBack: () => void }) {
         ))}
       </View>
 
-      <SearchRow value={q} onChange={setQ} placeholder="Search order / SKU / bin" onScan={() => setScanTarget(tab === 'pack' ? 'lpn' : 'pickBin')} />
+      <SearchRow value={q} onChange={setQ} placeholder="Search order / SKU / bin" onScan={() => setScanTarget(tab === 'pack' ? 'staging' : 'pickBin')} />
       {error ? <Text style={s.error}>{error}</Text> : null}
       {info ? <Text style={s.info}>{info}</Text> : null}
 
@@ -282,33 +281,12 @@ export default function OutboundScreen({ onBack }: { onBack: () => void }) {
               placeholder="Tap a pack task below to fill"
               placeholderTextColor="#64748b"
             />
-            <PadRow label="Tote / LPN" value={packFields.lpn} onScan={() => setScanTarget('lpn')} />
-            <PadRow label="Staging bin" value={packFields.staging} onScan={() => setScanTarget('staging')} />
-            <TouchableOpacity
-              style={s.createTote}
-              disabled={busy}
-              onPress={async () => {
-                setBusy(true);
-                try {
-                  const created = await api.createLpn({
-                    lpn_type: 'TOTE',
-                    current_site: facility?.site_id,
-                    source_site: facility?.site_id,
-                    status: 'EMPTY',
-                  });
-                  const barcode = created?.barcode || created?.lpn_id;
-                  if (barcode) setPackFields((f) => ({ ...f, lpn: barcode }));
-                  setInfo(`Created tote ${barcode}. Scan it to confirm, then seal.`);
-                } catch (e) {
-                  setError(errMsg(e, 'Could not create tote'));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              <Text style={s.createToteText}>+ Create a new empty tote</Text>
-            </TouchableOpacity>
-            <PrimaryBtn onPress={doPack} disabled={busy}>{busy ? 'Working…' : 'Seal & pack'}</PrimaryBtn>
+            <PadRow label="Staging slot" value={packFields.staging} onScan={() => setScanTarget('staging')} />
+            <Text style={s.padHint}>
+              Outbound orders move in loose bags. Park the bag in the staging slot and the rider
+              job goes live automatically.
+            </Text>
+            <PrimaryBtn onPress={doPack} disabled={busy}>{busy ? 'Working…' : 'Stage for rider'}</PrimaryBtn>
           </View>
           <Text style={s.section}>Pack tasks ({filter(packs).length})</Text>
           {filter(packs).length === 0 ? (
@@ -318,11 +296,11 @@ export default function OutboundScreen({ onBack }: { onBack: () => void }) {
               <TouchableOpacity
                 key={String(p.packlist_id || (p as any).id)}
                 style={s.card}
-                onPress={() => setPackFields((f) => ({ ...f, lpn: p.lpn || '', staging: p.staging_bin || '', orderId: p.order || p.order_id || '' }))}
+                onPress={() => setPackFields((f) => ({ ...f, staging: p.staging_bin || '', orderId: p.order || p.order_id || '' }))}
               >
                 <View style={{ flex: 1 }}>
                   <Text style={s.cardTitle}>{(p as any).order_no ? `Order ${(p as any).order_no}` : 'Pack task'} {p.sku_code ? `· ${p.sku_code}` : ''}</Text>
-                  <Text style={s.cardSub}>{p.packed_qty} of {p.qty} packed{p.lpn ? ` · Tote ${p.lpn}` : ''}{p.staging_bin ? ` · Stage ${p.staging_bin}` : ''}</Text>
+                  <Text style={s.cardSub}>{p.packed_qty} of {p.qty} picked{p.staging_bin ? ` · Stage ${p.staging_bin}` : ' · Enter a staging slot'}</Text>
                 </View>
                 <Chip tone="blue">{p.status}</Chip>
               </TouchableOpacity>
@@ -351,8 +329,7 @@ export default function OutboundScreen({ onBack }: { onBack: () => void }) {
       )}
 
       <Scanner visible={scanTarget === 'pickBin'} title="Scan bin" subtitle={pickLines.find((l) => l.bin)?.bin ? `Go to bin ${pickLines.find((l) => l.bin)?.bin}` : 'Scan the pick-face bin'} onScan={onPickBinScanned} onClose={() => setScanTarget(null)} />
-      <Scanner visible={scanTarget === 'lpn'} title="Scan tote" subtitle="Packing tote / LPN barcode" onScan={(c) => { setPackFields((f) => ({ ...f, lpn: c })); setScanTarget(null); }} onClose={() => setScanTarget(null)} />
-      <Scanner visible={scanTarget === 'staging'} title="Scan staging bin" subtitle="Where the rider collects" onScan={(c) => { setPackFields((f) => ({ ...f, staging: c })); setScanTarget(null); }} onClose={() => setScanTarget(null)} />
+      <Scanner visible={scanTarget === 'staging'} title="Scan staging slot" subtitle="Where the rider collects the bag" onScan={(c) => { setPackFields((f) => ({ ...f, staging: c })); setScanTarget(null); }} onClose={() => setScanTarget(null)} />
     </ScrollView>
   );
 }
@@ -389,12 +366,11 @@ const s = StyleSheet.create({
   padBtn: { backgroundColor: C.blue, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8 },
   padBtnText: { color: '#fff', fontWeight: '700' },
   padInput: { backgroundColor: C.cardAlt, color: C.text, borderRadius: 8, padding: 10, marginTop: 6, marginBottom: 6 },
+  padHint: { color: C.sub, fontSize: 11, lineHeight: 16, marginTop: 8, marginBottom: 8 },
   scanBtn: { backgroundColor: C.blue, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 8 },
   scanBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
   error: { color: '#b91c1c', backgroundColor: '#fecaca', padding: 10, borderRadius: 10, marginBottom: 10 },
   info: { color: '#6ee7b7', backgroundColor: '#064e3b', padding: 10, borderRadius: 10, marginBottom: 10 },
-  createTote: { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, padding: 12, borderRadius: 10, alignItems: 'center', marginTop: 8 },
-  createToteText: { color: C.text, fontWeight: '700', fontSize: 13 },
   abandonBtn: { backgroundColor: '#fecaca', padding: 12, borderRadius: 10, alignItems: 'center', marginTop: 8 },
   abandonText: { color: '#b91c1c', fontWeight: '700', fontSize: 13 },
 });

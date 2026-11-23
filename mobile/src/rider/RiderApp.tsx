@@ -13,7 +13,6 @@ import { api, errMsg } from '../api';
 import { C } from '../components/Ui';
 import { Scanner } from '../components/Scanner';
 import RiderLogin from './RiderLogin';
-import { QrMatrix } from './QrMatrix';
 import FacilityScreen from '../screens/FacilityScreen';
 import OtpScreen from '../screens/OtpScreen';
 
@@ -112,7 +111,6 @@ const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
   const [tab, setTab] = useState<'home' | 'jobs' | 'money' | 'history' | 'profile'>('home');
   const [scanner, setScanner] = useState<null | 'activation'>(null);
   const [podTask, setPodTask] = useState<Task | null>(null);
-  const [qrInfo, setQrInfo] = useState<any>(null);
 
   const load = useCallback(async () => {
     try {
@@ -241,7 +239,6 @@ const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
             if (summary?.profile?.rider_id) {
               await api.updateRider(summary.profile.rider_id, { is_online: false });
             }
-            setQrInfo(null);
             setTab('home');
             await load();
           }, 'Could not end the shift.'),
@@ -249,31 +246,6 @@ const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
       ],
     );
   };
-
-  const loadQr = () => withBusy(async () => {
-    setQrInfo(await api.riderQr());
-  }, 'Could not load your handoff QR.');
-
-  // The counter scans this code on every handoff; the server rotates the row
-  // to a fresh one at once. Pull it quietly in the background so whatever is
-  // on screen is never a burnt code — a stale code fails their scan.
-  const refreshQrQuiet = useCallback(async () => {
-    try {
-      setQrInfo(await api.riderQr());
-    } catch {
-      /* keep whatever is on screen */
-    }
-  }, []);
-
-  // Auto-refresh the handoff QR while the profile tab is open. The counter
-  // scans it on every delivery; each scan rotates the code. A manual GET is
-  // all the rider app needs to stay current.
-  useEffect(() => {
-    if (tab !== 'profile' || !summary?.profile) return;
-    refreshQrQuiet();
-    const timer = setInterval(refreshQrQuiet, 15000);
-    return () => clearInterval(timer);
-  }, [tab, summary?.profile, refreshQrQuiet]);
 
   if (booting) {
     return (
@@ -695,34 +667,8 @@ const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
               <Row label="KYC" value={profile.kyc_status || '—'} />
               <Row label="Store" value={summary.activation.site || '—'} />
               <Row label="Rating" value={profile.rating != null ? String(profile.rating) : '—'} />
-              <Row label="Handoffs" value={`${summary.activation.shift_id ? 'On shift' : 'Off shift'}`} />
+              <Row label="Shift" value={`${summary.activation.shift_id ? 'On shift' : 'Off shift'}`} />
               <Row label="Email" value={user?.email || '—'} />
-            </View>
-
-            <SectionHead title="My handoff QR" />
-            <View style={[s.panel, { alignItems: 'center' }]}>
-              {qrInfo ? (
-                <>
-                  <QrMatrix value={qrInfo.payload || qrInfo.code} size={200} />
-                  <Text style={s.qrCode}>{qrInfo.code}</Text>
-                  <Text style={s.qrNote}>
-                    The DS counter scans this to hand you a tote. It rotates after
-                    every scan — this screen refreshes itself while it is open.
-                  </Text>
-                  <TouchableOpacity style={s.ghostBtn} onPress={loadQr} disabled={busy}>
-                    <Text style={s.ghostBtnText}>Refresh QR</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <>
-                  <Text style={s.qrNote}>
-                    Show the store counter a fresh code when collecting a tote.
-                  </Text>
-                  <TouchableOpacity style={s.primaryBtn} onPress={loadQr} disabled={busy}>
-                    <Text style={s.primaryBtnText}>Show my QR</Text>
-                  </TouchableOpacity>
-                </>
-              )}
             </View>
 
             <TouchableOpacity style={s.ghostBtn} onPress={endShift} disabled={busy}>
@@ -776,7 +722,6 @@ const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
           setPodTask(null);
           flash('Delivered. Your ride earning has been credited.');
           await load();
-          refreshQrQuiet();
         }}
         onRefresh={load}
       />

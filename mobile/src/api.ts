@@ -662,9 +662,6 @@ export const api = {
       body: JSON.stringify({ qr }),
     }),
 
-  /** My personal handoff QR (the store scans it to assign a tote). */
-  riderQr: () => request<any>('/delivery/rider-profiles/me/qr/'),
-
   /** End the open shift; the rider must scan the store QR to start again. */
   riderEndShift: (shiftId: string) =>
     request<any>(`/delivery/rider-shifts/${encodeURIComponent(shiftId)}/close/`, {
