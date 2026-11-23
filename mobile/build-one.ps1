@@ -41,6 +41,17 @@ Pop-Location
 if ($pre -ne 0) { Log "!! prebuild failed"; exit 1 }
 
 if (Test-Path $localPropsBak) { Copy-Item $localPropsBak (Join-Path $mobile 'android\local.properties') -Force }
+else {
+  $sdk = $env:ANDROID_HOME
+  if (-not $sdk -and (Test-Path 'C:\Users\jayan\AppData\Local\Android\Sdk')) {
+    $sdk = 'C:\Users\jayan\AppData\Local\Android\Sdk'
+  }
+  if ($sdk) {
+    $forward = $sdk -replace '\\', '/'
+    "sdk.dir=$forward" | Set-Content -Path (Join-Path $mobile 'android\local.properties') -Encoding ascii
+    Log "local.properties -> $sdk"
+  }
+}
 
 Push-Location (Join-Path $mobile 'android')
 .\gradlew assembleRelease --no-daemon 2>&1 | ForEach-Object { Log "  gradle: $_" }

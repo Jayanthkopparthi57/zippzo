@@ -816,7 +816,7 @@ function SetupView({ onDone }: { onDone: () => Promise<void> }) {
       <Text style={s.activationTitle}>Set up your rider profile</Text>
       <Text style={s.activationText}>
         Your sign-in worked but this account has no delivery profile yet.
-        These details are what the store checks before handing you a tote.
+        These details are what the store checks before handing you a bag.
       </Text>
 
       <View style={s.panel}>
