@@ -5,6 +5,11 @@ from .models import User, Session, Role, Device, QRCode, IdempotencyKey
 
 
 class UserSerializer(serializers.ModelSerializer):
+    # Uniqueness is handled in create(): an administrator may register an
+    # address that already belongs to a shopper and promote that account.
+    # DRF's auto UniqueValidator would reject it before create() runs.
+    email = serializers.CharField(validators=[])
+
     # Write-only: the stored column is `password_hash`, but callers send `password`.
     password = serializers.CharField(write_only=True, required=False, allow_blank=False,
                                      min_length=6, max_length=128,
@@ -18,6 +23,12 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['user_id', 'email', 'phone', 'full_name', 'role', 'status',
                   'last_login_at', 'created_at', 'password', 'site_id', 'site_code', 'role_at_site']
         read_only_fields = ['user_id', 'created_at', 'updated_at', 'last_login_at']
+
+    def validate_email(self, value):
+        email = str(value).strip().lower()
+        if '@' not in email:
+            raise ValidationError('Enter a valid email address.')
+        return email
 
     def validate_password(self, value):
         if value.strip() != value or not value.strip():
@@ -33,7 +44,29 @@ class UserSerializer(serializers.ModelSerializer):
         if not password:
             raise ValidationError({'password': "This field is required."})
         validated_data['password_hash'] = make_password(password)
-        user = super().create(validated_data)
+
+        # A shopper can sign up with the same address an administrator later
+        # wants to register as staff. User.email is unique across every role,
+        # so a plain create used to 400 here. Promote the existing non-admin
+        # account instead: the Customer row and its order history stay intact.
+        existing = None
+        email = str(validated_data.get('email') or '').strip().lower()
+        if email:
+            existing = User.objects.filter(email__iexact=email).first()
+        if existing is not None:
+            if existing.role in ('SUPER_ADMIN', 'ADMIN', 'OPS_MANAGER'):
+                raise ValidationError({
+                    'email': 'This address belongs to an administrator account.'
+                })
+            for attr in ('full_name', 'phone', 'role', 'status', 'password_hash'):
+                if attr in validated_data:
+                    setattr(existing, attr, validated_data[attr])
+            existing.status = 'ACTIVE'
+            existing.save(update_fields=[
+                'full_name', 'phone', 'role', 'status', 'password_hash'])
+            user = existing
+        else:
+            user = super().create(validated_data)
 
         # Create or update site assignment
         from bounded.network.models import Site, EmployeeSiteAssignment
@@ -47,15 +80,17 @@ class UserSerializer(serializers.ModelSerializer):
             mode = 'DARKHOUSE' if target_site.site_type == 'DS' else 'WAREHOUSE'
             role_name = role_at_site or ('STORE_MANAGER' if user.role == 'OPS_MANAGER' else 'OPERATOR')
             emp_code = user.email.split('@')[0].upper()[:20]
-            EmployeeSiteAssignment.objects.create(
-                user=user,
-                site=target_site,
-                employee=emp_code,
-                mode=mode,
-                role_at_site=role_name,
-                is_primary=True,
-                is_active=True
-            )
+            has_primary = EmployeeSiteAssignment.objects.filter(
+                user=user, is_primary=True, is_active=True).exists()
+            assignment, _ = EmployeeSiteAssignment.objects.get_or_create(
+                user=user, site=target_site,
+                defaults={'employee': emp_code, 'mode': mode,
+                          'role_at_site': role_name,
+                          'is_primary': not has_primary, 'is_active': True})
+            if assignment.pk and not assignment.is_active:
+                assignment.is_active = True
+                assignment.role_at_site = role_name
+                assignment.save(update_fields=['is_active', 'role_at_site'])
         return user
 
     def update(self, instance, validated_data):

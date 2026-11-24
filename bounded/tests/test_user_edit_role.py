@@ -44,3 +44,61 @@ class UserEditRoleTests(TestCase):
         self.emp.refresh_from_db()
         from django.contrib.auth.hashers import check_password
         self.assertTrue(check_password('NewPass456!', self.emp.password_hash))
+
+
+class EmployeeLifecycleTests(TestCase):
+    """Registering staff with an existing shopper email, and removing staff."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = User.objects.create(
+            email='lifecycle-admin@zippzo.in', password_hash=make_password('Admin123!'),
+            role='SUPER_ADMIN', status='ACTIVE')
+        cls.manager = User.objects.create(
+            email='lifecycle-manager@zippzo.in', password_hash=make_password('Manager123!'),
+            role='OPS_MANAGER', status='ACTIVE')
+        cls.site = Site.objects.create(
+            code='DS-LIFE', site_type='DARK_STORE', name='Lifecycle DS', address='1 Test Road')
+        cls.shopper = User.objects.create(
+            email='shared@gmail.com', password_hash=make_password('Shopper123!'),
+            role='CUSTOMER', status='ACTIVE')
+
+    def setUp(self):
+        self.api = APIClient()
+        self.api.force_authenticate(self.admin)
+
+    def _staff_payload(self, email):
+        return {
+            'email': email, 'full_name': 'Store Picker', 'phone': '9876543210',
+            'role': 'PICKER', 'password': 'StrongPass123!',
+            'site_id': str(self.site.site_id), 'role_at_site': 'PICKER',
+        }
+
+    def test_register_existing_shopper_promotes_the_account(self):
+        r = self.api.post('/api/iam/users/', self._staff_payload('shared@gmail.com'),
+                          format='json')
+        self.assertEqual(r.status_code, 201, r.data)
+        self.shopper.refresh_from_db()
+        self.assertEqual('PICKER', self.shopper.role)
+        self.assertEqual('ACTIVE', self.shopper.status)
+        asgn = EmployeeSiteAssignment.objects.get(user=self.shopper)
+        self.assertEqual('PICKER', asgn.role_at_site)
+        self.assertTrue(asgn.is_active)
+
+    def test_super_admin_can_remove_employee_without_deleting_history(self):
+        created = self.api.post('/api/iam/users/',
+                                self._staff_payload(' removable@zippzo.in '), format='json')
+        self.assertEqual(created.status_code, 201, created.data)
+        target = User.objects.get(user_id=created.data['user_id'])
+        r = self.api.post(f'/api/iam/users/{target.user_id}/remove/', {}, format='json')
+        self.assertEqual(r.status_code, 200, r.data)
+        target.refresh_from_db()
+        self.assertEqual('BLOCKED', target.status)
+        self.assertFalse(EmployeeSiteAssignment.objects.filter(
+            user=target, is_active=True).exists())
+        self.assertTrue(User.objects.filter(pk=target.pk).exists())
+
+    def test_only_super_admin_can_remove(self):
+        self.api.force_authenticate(self.manager)
+        r = self.api.post(f'/api/iam/users/{self.shopper.user_id}/remove/', {}, format='json')
+        self.assertEqual(r.status_code, 403, r.data)

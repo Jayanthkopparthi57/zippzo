@@ -3,9 +3,11 @@ import { AlertTriangle, Check, RefreshCw, UserPlus, Users2, X } from 'lucide-rea
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useDarkStore, useAsyncData, asList } from './useDarkStore';
+import { useAuth } from '../../context/AuthContext';
 import { fetchApi, postApi, patchApi } from '../../api/client';
 
 function Register({ site, siteId, storeCode }) {
+  const { user: currentUser } = useAuth();
   const [form, setForm] = useState({
     full_name: '', email: '', phone: '', role: 'WAREHOUSE_STAFF', role_at_site: 'PICKER',
     password: '', vehicle_number: '', vehicle_type: 'BIKE',
@@ -115,6 +117,22 @@ function Register({ site, siteId, storeCode }) {
       setCompError(err?.message || 'Could not save pay.');
     } finally {
       setCompBusy(false);
+    }
+  };
+
+  const removeEmployee = async (row) => {
+    const label = row.name || row.email || 'this employee';
+    if (!window.confirm(`Remove ${label} from ${storeCode}? Their order history is kept.`)) return;
+    setBusy('remove');
+    setNotice(null);
+    try {
+      await postApi(`/iam/users/${row.user}/remove/`, {});
+      await Promise.all([reload({ quiet: true }), reloadUsers({ quiet: true })]);
+      setNotice({ type: 'ok', message: `${label} removed from ${storeCode}.` });
+    } catch (error) {
+      setNotice({ type: 'error', message: error?.message || 'Could not remove employee.' });
+    } finally {
+      setBusy('');
     }
   };
 
@@ -379,6 +397,17 @@ function Register({ site, siteId, storeCode }) {
                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                       {needsWarehouseOtp ? 'Use shared daily OTP' : accountRole === 'RIDER' ? 'Activates by scanning the store QR' : 'No OTP (admin)'}
                     </span>
+                    {currentUser?.is_super_admin && row.user && row.user !== currentUser?.user_id && (
+                      <button
+                        type="button"
+                        className="btn-ui neutral"
+                        disabled={busy === 'remove'}
+                        onClick={() => removeEmployee(row)}
+                        style={{ display: 'block', marginTop: 5, padding: '3px 7px', fontSize: 10, height: 24 }}
+                      >
+                        {busy === 'remove' ? 'Removing…' : 'Remove'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               );

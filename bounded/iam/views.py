@@ -1440,6 +1440,51 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = UserSerializer(user)
         return Response(serializer.data)
 
+    def _deactivate_employee(self, request, target):
+        """Remove a person from the store without erasing their order history.
+
+        Hard-deleting a User cascades into Customer, orders, shifts and payouts,
+        so removal is a revocation: block sign-in, close sessions and end store
+        assignments. Only a Super Admin may do it, and never to themselves or
+        another estate administrator.
+        """
+        from django.utils import timezone
+        from bounded.network.models import EmployeeSiteAssignment
+        from .models import Session
+
+        if getattr(request.user, 'role', '') != 'SUPER_ADMIN':
+            return Response({'error': 'Only a Super Admin can remove employees.'},
+                            status=403)
+        if target.user_id == request.user.user_id:
+            return Response({'error': 'You cannot remove your own account.'}, status=400)
+        if target.role in ('SUPER_ADMIN', 'ADMIN'):
+            return Response({'error': 'Administrator accounts cannot be removed here.'},
+                            status=400)
+        now = timezone.now()
+        target.status = 'BLOCKED'
+        target.save(update_fields=['status'])
+        EmployeeSiteAssignment.objects.filter(user=target).update(is_active=False)
+        Session.objects.filter(user=target).update(
+            is_active=False, revoked_at=now)
+        staff_auth.audit('IAM_EMPLOYEE_REMOVED', actor_id=request.user.user_id,
+                         entity_type='User', entity_id=target.user_id,
+                         request=request, result='ALLOWED')
+        return Response({'success': True, 'user_id': str(target.user_id),
+                         'status': 'BLOCKED'})
+
+    @action(detail=True, methods=['post'], url_path='remove')
+    def remove_employee(self, request, pk=None):
+        if getattr(request.user, 'role', '') != 'SUPER_ADMIN':
+            return Response({'error': 'Only a Super Admin can remove employees.'},
+                            status=403)
+        return self._deactivate_employee(request, self.get_object())
+
+    def destroy(self, request, pk=None):
+        if getattr(request.user, 'role', '') != 'SUPER_ADMIN':
+            return Response({'error': 'Only a Super Admin can remove employees.'},
+                            status=403)
+        return self._deactivate_employee(request, self.get_object())
+
     @action(detail=True, methods=['post'], url_path='login-otp')
     def issue_login_otp(self, request, pk=None):
         """Admin-only: issue this employee's sign-in OTP (field staff).
