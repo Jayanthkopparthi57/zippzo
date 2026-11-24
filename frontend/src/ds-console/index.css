@@ -238,6 +238,16 @@ html, body {
   margin-top: 2px;
 }
 
+.accordion-locked {
+  margin: 2px 0 4px;
+  padding: 7px 10px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .subnav-item {
   display: flex;
   align-items: center;

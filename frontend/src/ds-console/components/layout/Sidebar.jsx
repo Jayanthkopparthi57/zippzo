@@ -237,6 +237,13 @@ export default function Sidebar({ collapsed }) {
                       </div>
                     );
                   })}
+                  {visibleItems.length === 0 && !filterQuery && (
+                    <div className="accordion-locked" role="note">
+                      {['storage', 'admin'].includes(group.id)
+                        ? 'Requires Ops Manager or Super Admin access.'
+                        : 'No modules available for this role.'}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
