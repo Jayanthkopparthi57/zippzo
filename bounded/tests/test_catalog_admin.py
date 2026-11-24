@@ -57,6 +57,17 @@ class CatalogPermissionTests(TestCase):
         self.api.force_authenticate(user=user)
         return self.api
 
+    def test_default_categories_exclude_food_and_beverages(self):
+        # The seeded set is the dropdown source for product registration in
+        # both consoles and the shopper app. A fresh test DB has run the seed
+        # migration and 0009, so the removed row must not come back.
+        r = self._as(self.staff).get(f'{API}/catalog/categories/')
+        self.assertEqual(200, r.status_code, r.data)
+        rows = r.data['results'] if isinstance(r.data, dict) else r.data
+        names = {row['name'] for row in rows}
+        self.assertIn('Groceries', names)
+        self.assertNotIn('Food & Beverages', names)
+
     def test_admin_can_create_vendor_with_pan(self):
         r = self._as(self.admin).post(f'{API}/supply/vendors/', {
             'code': 'V-PAN1', 'name': 'Pan Supplier', 'gstin': '27AABCU9603R1ZM',
