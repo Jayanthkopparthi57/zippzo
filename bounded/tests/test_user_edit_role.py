@@ -46,6 +46,34 @@ class UserEditRoleTests(TestCase):
         self.assertTrue(check_password('NewPass456!', self.emp.password_hash))
 
 
+class CleanupTestAccountsTests(TestCase):
+    def test_only_obvious_test_accounts_are_disabled(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        test_user = User.objects.create(
+            email='shopper-test-123@example.com',
+            password_hash=make_password('Pass123!'), role='CUSTOMER', status='ACTIVE')
+        admin = User.objects.create(
+            email='verify-admin@zippzo.in',
+            password_hash=make_password('Pass123!'), role='SUPER_ADMIN', status='ACTIVE')
+        real = User.objects.create(
+            email='real.worker@zippzo.in',
+            password_hash=make_password('Pass123!'), role='WAREHOUSE_STAFF', status='ACTIVE')
+
+        out = StringIO()
+        call_command('cleanup_test_accounts', stdout=out)
+        test_user.refresh_from_db()
+        self.assertEqual('ACTIVE', test_user.status)
+
+        call_command('cleanup_test_accounts', '--apply', stdout=out)
+        test_user.refresh_from_db(); admin.refresh_from_db(); real.refresh_from_db()
+        self.assertEqual('BLOCKED', test_user.status)
+        self.assertEqual('ACTIVE', admin.status)
+        self.assertEqual('ACTIVE', real.status)
+        self.assertTrue(User.objects.filter(pk=test_user.pk).exists())
+
+
 class DedupeEmailCommandTests(TestCase):
     def test_dry_run_then_apply_keeps_one_lowercase_email(self):
         from io import StringIO
