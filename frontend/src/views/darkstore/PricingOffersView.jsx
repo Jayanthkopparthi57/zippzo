@@ -311,6 +311,12 @@ export default function PricingOffersView({ site }) {
     return <div className="alert alert-error">Select a dark store to manage its pricing and offers.</div>;
   }
 
+  const sectionHint = {
+    pricing: 'Set the customer price and category for every product sold at this store. Save a row and it is live immediately.',
+    coupons: 'Create a coupon code, choose where it applies, then set its value and validity window.',
+    combos: 'Group products into one bundled price to increase basket size at this store.',
+  }[section];
+
   return (
     <section className="pricing-offers">
       <header className="pricing-offers__header">
@@ -324,15 +330,16 @@ export default function PricingOffersView({ site }) {
       </header>
       <nav className="pricing-offers__tabs" aria-label="Pricing and offer sections">
         <button type="button" className={section === 'pricing' ? 'active' : ''} onClick={() => setSection('pricing')}>
-          Store prices
+          Store prices <span className="pricing-offers__count">{listings.length}</span>
         </button>
         <button type="button" className={section === 'coupons' ? 'active' : ''} onClick={() => setSection('coupons')}>
-          Coupons
+          Coupons <span className="pricing-offers__count">{coupons.length}</span>
         </button>
         <button type="button" className={section === 'combos' ? 'active' : ''} onClick={() => setSection('combos')}>
-          Combo offers
+          Combo offers <span className="pricing-offers__count">{combos.length}</span>
         </button>
       </nav>
+      <p className="pricing-offers__hint" aria-live="polite">{sectionHint}</p>
       {error && <div className="alert alert-error" role="alert">{error}</div>}
       {loading && <div className="pricing-offers__loading">Loading store pricing and offers...</div>}
 

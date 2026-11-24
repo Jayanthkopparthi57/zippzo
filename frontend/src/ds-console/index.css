@@ -605,11 +605,23 @@ html, body {
   font-size: 12px;
 }
 
+.workflow-workspace__store {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .workflow-workspace__steps {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   overflow-x: auto;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   padding-bottom: 3px;
 }
 
@@ -626,12 +638,24 @@ html, body {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+
+.workflow-workspace__step:hover {
+  border-color: var(--c-teal);
+  color: var(--text-primary);
 }
 
 .workflow-workspace__step.active {
   border-color: var(--c-teal);
   background: var(--c-teal);
   color: var(--c-parchment);
+  font-weight: 700;
+}
+
+.workflow-workspace__step.done {
+  border-color: var(--c-teal);
+  color: var(--c-teal);
 }
 
 .workflow-workspace__step-number {
@@ -645,8 +669,124 @@ html, body {
   font-size: 10px;
 }
 
+.workflow-workspace__connector {
+  flex: 0 0 16px;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.workflow-workspace__context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--c-teal);
+  border-radius: var(--radius-xs);
+  background: var(--bg-card);
+}
+
+.workflow-workspace__context-step {
+  flex: 0 0 auto;
+  color: var(--c-teal);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+}
+
+.workflow-workspace__context-title {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.workflow-workspace__context-detail {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .workflow-workspace__content {
   min-width: 0;
+}
+
+.bin-flow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--bg-card);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.bin-flow__label {
+  margin-right: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+}
+
+.bin-flow__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bin-flow__step b {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.bin-flow__step.active {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.bin-flow__step.active b {
+  border-color: var(--c-teal);
+  background: var(--c-teal);
+  color: var(--c-parchment);
+}
+
+.bin-flow__arrow {
+  color: var(--border-subtle);
+}
+
+.ledger-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-left: 3px solid var(--c-teal);
+  background: var(--bg-card);
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.ledger-flow b {
+  color: var(--c-teal);
+  font-family: var(--font-mono);
 }
 
 @media (max-width: 640px) {
@@ -689,6 +829,33 @@ html, body {
 .pricing-offers__hint {
   color: var(--text-muted);
   margin-top: 4px;
+}
+
+.pricing-offers__hint {
+  margin: 10px 0 14px;
+  padding: 9px 12px;
+  border-left: 3px solid var(--c-teal);
+  background: var(--bg-card);
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+}
+
+.pricing-offers__count {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.pricing-offers__tabs button.active .pricing-offers__count {
+  background: var(--c-teal);
+  color: var(--c-parchment);
 }
 
 .pricing-offers__tabs {

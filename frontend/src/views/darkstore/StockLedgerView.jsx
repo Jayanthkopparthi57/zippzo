@@ -135,6 +135,12 @@ function Ledger({ siteId, storeCode }) {
           </div>
         </div>
 
+        <div className="ledger-flow" aria-label="How to read the stock ledger">
+          <span><b>1.</b> Filter by movement type or search a SKU / reference.</span>
+          <span><b>2.</b> Check the direction and units to see what changed.</span>
+          <span><b>3.</b> Review staged bags below — anything over an hour needs attention.</span>
+        </div>
+
         <div className="tally-grid" data-testid="ds-ledger-summary">
           <div className="tally-tile">
             <div className="tally-tile__label">Movements</div>

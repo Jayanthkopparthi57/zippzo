@@ -97,6 +97,15 @@ function Locations({ siteId, storeCode }) {
         <button className="btn-ui primary" onClick={() => setShowNewBin(true)}><Plus size={13} /> <span>New bin</span></button>
       </div>
 
+      <div className="bin-flow" aria-label="Bin setup workflow">
+        <span className="bin-flow__label">Bin setup</span>
+        <span className={`bin-flow__step${showNewBin ? ' active' : ''}`}><b>1</b> Register bin</span>
+        <span className="bin-flow__arrow" aria-hidden="true">→</span>
+        <span className={`bin-flow__step${created ? ' active' : ''}`}><b>2</b> Print QR slip</span>
+        <span className="bin-flow__arrow" aria-hidden="true">→</span>
+        <span className="bin-flow__step"><b>3</b> Scan &amp; inspect contents</span>
+      </div>
+
       {binError && <div className="scan-feedback scan-feedback--error" style={{ marginBottom: 8 }}><AlertTriangle size={13} /> {binError}</div>}
       {created && (
         <div className="wf-panel" style={{ padding: 14, marginBottom: 12 }}>
