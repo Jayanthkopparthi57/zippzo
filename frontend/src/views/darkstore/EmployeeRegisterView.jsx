@@ -19,11 +19,14 @@ function Register({ site, siteId, storeCode }) {
     [storeCode],
     { pollMs: 30000 },
   );
-  const { data: userRows } = useAsyncData(
+  const { data: userRows, reload: reloadUsers } = useAsyncData(
     () => fetchApi('/iam/users/?page_size=500').then((r) => asList(r, '/iam/users')),
     [],
     { pollMs: 0 },
   );
+  // Store-level role is edited inline. Keep a local override so the select
+  // reflects the choice immediately, before both lists finish refreshing.
+  const [roleEdits, setRoleEdits] = useState({});
   const userRoleById = useMemo(() => {
     const map = new Map();
     (userRows || []).forEach((u) => { if (u.user_id) map.set(String(u.user_id), u.role); });
@@ -298,25 +301,37 @@ function Register({ site, siteId, storeCode }) {
                     <div className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{row.employee || ''}</div>
                   </td>
                   <td>
-                     <select className="form-input" value={accountRole || row.role_at_site || 'PICKER'}
-                       onChange={(e) => {
-                         const newRole = e.target.value;
-                         const userRole = newRole === 'RIDER' ? 'RIDER' : 'WAREHOUSE_STAFF';
-                         patchApi(`/iam/users/${row.user}/`, { role: userRole, role_at_site: newRole })
-                           .then(() => reload({ quiet: true }))
-                           .catch((err) => setNotice({ type: 'error', message: err?.message || 'Could not update role.' }));
-                       }}
-                       style={{ padding: '3px 5px', fontSize: 11, height: 28, minWidth: 120 }}>
-                       <option value="PICKER">Picker</option>
-                       <option value="PACKER">Packer</option>
-                       <option value="INVENTORY_ASSOCIATE">Inventory</option>
-                       <option value="INBOUND_ASSOCIATE">Inbound</option>
-                       <option value="PUTAWAY_ASSOCIATE">Putaway</option>
-                       <option value="OPERATOR">Operator</option>
-                       <option value="RIDER">Rider</option>
-                       <option value="WAREHOUSE_STAFF">Floor staff</option>
-                       <option value="OPS_MANAGER">Ops manager</option>
-                     </select>
+                     <select className="form-input" value={roleEdits[String(row.user)] || row.role_at_site || accountRole || 'PICKER'}
+                        onChange={(e) => {
+                          const newRole = e.target.value;
+                          const userRole = newRole === 'RIDER' ? 'RIDER' : 'WAREHOUSE_STAFF';
+                          const key = String(row.user);
+                          setRoleEdits((old) => ({ ...old, [key]: newRole }));
+                          patchApi(`/iam/users/${row.user}/`, { role: userRole, role_at_site: newRole })
+                            .then(() => Promise.all([
+                              reload({ quiet: true }),
+                              reloadUsers({ quiet: true }),
+                            ]))
+                            .catch((err) => {
+                              setRoleEdits((old) => {
+                                const next = { ...old };
+                                delete next[key];
+                                return next;
+                              });
+                              setNotice({ type: 'error', message: err?.message || 'Could not update role.' });
+                            });
+                        }}
+                        style={{ padding: '3px 5px', fontSize: 11, height: 28, minWidth: 120 }}>
+                        <option value="PICKER">Picker</option>
+                        <option value="PACKER">Packer</option>
+                        <option value="INVENTORY_ASSOCIATE">Inventory</option>
+                        <option value="INBOUND_ASSOCIATE">Inbound</option>
+                        <option value="PUTAWAY_ASSOCIATE">Putaway</option>
+                        <option value="OPERATOR">Operator</option>
+                        <option value="RIDER">Rider</option>
+                        <option value="WAREHOUSE_STAFF">Floor staff</option>
+                        <option value="OPS_MANAGER">Ops manager</option>
+                      </select>
                    </td>
                   <td>
                     <StatusBadge status={active ? 'ACTIVE' : 'OFFLINE'} />
