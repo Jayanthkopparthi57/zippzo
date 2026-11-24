@@ -46,6 +46,28 @@ class UserEditRoleTests(TestCase):
         self.assertTrue(check_password('NewPass456!', self.emp.password_hash))
 
 
+class DedupeEmailCommandTests(TestCase):
+    def test_dry_run_then_apply_keeps_one_lowercase_email(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        User.objects.create(email='dup@gmail.com', password_hash=make_password('Pass123!'),
+                            role='CUSTOMER', status='ACTIVE')
+        staff = User.objects.create(email='DUP@gmail.com', password_hash=make_password('Pass123!'),
+                                    role='WAREHOUSE_STAFF', status='ACTIVE')
+
+        out = StringIO()
+        call_command('dedupe_user_emails', stdout=out)
+        self.assertEqual(2, User.objects.count())
+
+        call_command('dedupe_user_emails', '--apply', stdout=out)
+        keeper = User.objects.get(email='dup@gmail.com')
+        self.assertEqual(staff.user_id, keeper.user_id)
+        other = User.objects.exclude(pk=keeper.pk).first()
+        self.assertEqual('BLOCKED', other.status)
+        self.assertIn('+dup', other.email)
+
+
 class DuplicateEmailLoginTests(TestCase):
     """Case-different duplicate emails must not 500 the sign-in endpoint."""
 
