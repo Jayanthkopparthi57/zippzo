@@ -134,6 +134,30 @@ export default function WorkflowWorkspace({ workflow, site }) {
         <span className="workflow-workspace__context-detail">{current.detail}</span>
       </div>
 
+      {workflow === 'inventory' && (
+        <details className="workflow-workspace__explainer">
+          <summary>Why are physical stock, availability and pricing different screens?</summary>
+          <div className="workflow-workspace__explainer-grid">
+            <div>
+              <b>Physical stock</b>
+              <span>Goods actually sitting in bins, with batch and expiry. This is what the store owns.</span>
+            </div>
+            <div>
+              <b>Customer availability</b>
+              <span>Products listed at this store with sellable quantity, filtered by the shopper’s serviceable pincode.</span>
+            </div>
+            <div>
+              <b>Pricing &amp; offers</b>
+              <span>The commercial layer on top of those listings: selling price, coupons and multi-item combos.</span>
+            </div>
+          </div>
+          <p className="workflow-workspace__explainer-note">
+            Stock can exist without being listed; a listing can be visible but priced with zero availability.
+            Each step answers a different question, so they are intentionally separate.
+          </p>
+        </details>
+      )}
+
       <div className="workflow-workspace__content">
         <WorkflowContent workflow={workflow} step={activeStep} site={site} />
       </div>

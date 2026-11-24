@@ -771,7 +771,7 @@ export default function LotsView({
                activeTab === 'replenishment' ? 'FORWARD PICK REPLENISHMENT TASKS' :
                darkStoreMode ? 'DARKSTORE PRODUCTS, PRICES & STOCK' : 'INVENTORY LOTS & PHYSICAL LOCATIONS'}
             </span>
-            <span className="screen-count-tag">{currentCount} Records</span>
+            <span className="screen-count-tag">{loading ? 'Loading…' : `${currentCount} Records`}</span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
             {activeTab === 'customer-availability'
@@ -812,14 +812,14 @@ export default function LotsView({
           columns={inventoryProductColumns}
           data={filteredInventoryProducts}
           idField="sku_id"
-          emptyMessage="No products with inventory records were found for this store."
+          emptyMessage={loading ? 'Loading stock balances…' : 'No products with inventory records were found for this store.'}
         />
       ) : activeTab === 'customer-availability' ? (
         <DataTable
           columns={customerAvailabilityColumns}
           data={filteredCustomerAvailability}
           idField="sku_id"
-          emptyMessage="No listed products currently have customer-available stock at this store."
+          emptyMessage={loading ? 'Loading customer availability…' : 'No listed products currently have customer-available stock at this store.'}
         />
       ) : activeTab === 'transactions' ? (
         <DataTable

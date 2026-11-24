@@ -789,6 +789,51 @@ html, body {
   font-family: var(--font-mono);
 }
 
+.workflow-workspace__explainer {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-workspace__explainer summary {
+  cursor: pointer;
+  color: var(--c-teal);
+  font-weight: 700;
+}
+
+.workflow-workspace__explainer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.workflow-workspace__explainer-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workflow-workspace__explainer-grid b {
+  color: var(--text-primary);
+}
+
+.workflow-workspace__explainer-grid span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.workflow-workspace__explainer-note {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 @media (max-width: 640px) {
   .workflow-workspace__header h1 {
     font-size: 17px;
