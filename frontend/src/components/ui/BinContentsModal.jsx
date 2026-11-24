@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { QRCodeSVG } from 'qrcode.react';
 import { X, Box, Search, Package, MapPin, AlertCircle, Loader2, RotateCcw, Camera, QrCode } from 'lucide-react';
 import BarcodeGenerator from './BarcodeGenerator';
 import BarcodeScannerModal from './BarcodeScannerModal';
@@ -12,6 +14,33 @@ export default function BinContentsModal({ onClose, initialBinCode = '' }) {
   const [showScanner, setShowScanner] = useState(false);
   const [scannedBinCode, setScannedBinCode] = useState(null);
   const [errorDetail, setErrorDetail] = useState('');
+
+  // The console-wide print rule hides everything except the bundle label, so
+  // window.print() here produced a blank sheet. Print a self-contained slip.
+  const printBinLabel = (code) => {
+    const w = window.open('', '_blank', 'width=460,height=560');
+    if (!w) return;
+    const qr = renderToStaticMarkup(<QRCodeSVG value={code} size={240} />);
+    w.document.write(`<!doctype html><html><head><title>BIN ${code}</title>
+<style>
+  @page { size: 100mm 150mm; margin: 8mm; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; text-align: center; color: #111; }
+  .store { font-size: 4mm; letter-spacing: .4mm; color: #555; margin-top: 2mm; }
+  h2 { margin: 3mm 0 6mm; font-size: 8mm; word-break: break-word; }
+  .qr { width: 55mm; height: 55mm; margin: 0 auto; }
+  .qr svg { width: 100%; height: 100%; }
+  p { font-size: 3.6mm; color: #555; margin: 5mm 0 0; }
+</style>
+</head><body>
+<div class="store">ZIPPZO DARK STORE</div>
+<h2>${code}</h2>
+<div class="qr">${qr}</div>
+<p>Scan for location details and contents</p>
+</body></html>`);
+    w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 150);
+  };
 
   const loadBinContents = async (code) => {
     if (!code || !code.trim()) return;
@@ -318,10 +347,7 @@ export default function BinContentsModal({ onClose, initialBinCode = '' }) {
                 <X size={14} style={{ marginRight: 6 }} /> Close
               </button>
               {binContents.length > 0 && (
-                <button className="btn-primary" onClick={() => {
-                  // Print/bin label functionality
-                  window.print();
-                }}>
+                <button className="btn-primary" onClick={() => printBinLabel(binCode.trim())}>
                   <QrCode size={14} style={{ marginRight: 6 }} /> Print Bin Label
                 </button>
               )}

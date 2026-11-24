@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { AlertTriangle, Check, RefreshCw, MapPin, ArrowRightLeft, ClipboardCheck, Boxes, ScanLine, Plus, Printer } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import StoreGate from './StoreGate';
@@ -25,19 +26,38 @@ function Locations({ siteId, storeCode }) {
     const w = window.open('', '_blank', 'width=460,height=560');
     if (!w) return;
     const payload = created.qr_payload || created.barcode || created.location_id;
-    w.document.write(`<!doctype html><html><head><title>BIN ${created.barcode}</title>
-<style>@page{size:100mm 150mm;margin:10mm}body{font-family:system-ui;-apple-system,"Segoe UI",sans-serif;text-align:center}h2{margin:6mm 0 1mm;font-size:13mm}p{font-size:5mm;margin:0 0 5mm}img{width:60mm;height:60mm}small{font-size:4mm;color:#555}</style>
+    // Render the QR locally instead of fetching a CDN script: store devices are
+    // often offline, and the old toCanvas callback could fire after print()
+    // had already opened, leaving a blank or half-drawn code on the slip.
+    const qr = renderToStaticMarkup(<QRCodeSVG value={payload} size={240} />);
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+    const route = [created.container,
+      created.aisle ? `Aisle ${created.aisle}` : '',
+      created.rack ? `Rack ${created.rack}` : '',
+      created.level ? `Level ${created.level}` : ''].filter(Boolean).join(' · ');
+    w.document.write(`<!doctype html><html><head><title>BIN ${esc(created.barcode)}</title>
+<style>
+  @page { size: 100mm 150mm; margin: 8mm; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; text-align: center; color: #111; }
+  .store { font-size: 4mm; letter-spacing: .4mm; color: #555; margin-top: 2mm; }
+  h2 { margin: 3mm 0 4mm; font-size: 8mm; word-break: break-word; }
+  .route { font-size: 4mm; margin: 0 0 4mm; color: #333; }
+  .qr { width: 55mm; height: 55mm; margin: 0 auto; }
+  .qr svg { width: 100%; height: 100%; }
+  p { font-size: 3.6mm; color: #555; margin: 5mm 0 0; }
+</style>
 </head><body>
-<small>ZIPPZO · ${storeCode || ''}</small>
-<h2>${created.barcode}</h2>
-<p>${created.container}${created.aisle ? ` · Aisle ${created.aisle}` : ''}${created.rack ? ` · Rack ${created.rack}` : ''}${created.level ? ` · Level ${created.level}` : ''}</p>
-<div id="qr"></div>
+<div class="store">ZIPPZO DARK STORE · ${esc(storeCode)}</div>
+<h2>${esc(created.barcode)}</h2>
+<div class="route">${esc(route)}</div>
+<div class="qr">${qr}</div>
 <p>Scan for location details and contents</p>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></scr' + 'ipt>
-<script>QRCode.toCanvas(document.getElementById('qr'), ${JSON.stringify(payload)}, { width: 240, margin: 1 }, function(){})</scr' + 'ipt>
 </body></html>`);
     w.document.close();
-    setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 400);
+    setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 150);
   };
   const createBin = async (event) => {
     event.preventDefault();

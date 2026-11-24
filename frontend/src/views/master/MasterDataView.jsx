@@ -1480,6 +1480,20 @@ export default function MasterDataView({ initialTab = 'organizations' }) {
           </div>
         </div>
       )}
+      {/* The console-wide print rule hides everything except .bundle-label-print-area.
+          This bin label has its own target, so restore it here as well. */}
+      <style>{`@media print {
+        #bin-print-area, #bin-print-area * { visibility: visible !important; }
+        #bin-print-area {
+          position: fixed !important;
+          inset: 0 auto auto 0 !important;
+          width: 100% !important;
+          padding: 0 !important;
+          background: #fff !important;
+        }
+        #bin-print-area svg { width: 42mm !important; height: 42mm !important; }
+        @page { size: 100mm 150mm; margin: 8mm; }
+      }`}</style>
     </div>
   );
 }
