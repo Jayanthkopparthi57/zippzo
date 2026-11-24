@@ -17,6 +17,7 @@ services:
       python manage.py migrate &&
       python manage.py dedupe_user_emails --apply &&
       python manage.py cleanup_test_accounts --apply &&
+      python manage.py delete_empty_duplicate_users --apply &&
       if [ -n "$DJANGO_SUPERADMIN_EMAIL" ] && [ -n "$DJANGO_SUPERADMIN_PASSWORD" ]; then \
         python manage.py bootstrap_admin \
           --email "$DJANGO_SUPERADMIN_EMAIL" \

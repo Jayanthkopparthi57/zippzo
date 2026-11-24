@@ -46,6 +46,30 @@ class UserEditRoleTests(TestCase):
         self.assertTrue(check_password('NewPass456!', self.emp.password_hash))
 
 
+class DeleteEmptyDuplicateTests(TestCase):
+    def test_deletes_only_duplicates_without_business_data(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from bounded.network.models import EmployeeCompensation
+
+        empty = User.objects.create(
+            email='person+dup1.abc123@gmail.com',
+            password_hash=make_password('Pass123!'), role='CUSTOMER', status='BLOCKED')
+        with_data = User.objects.create(
+            email='worker+dup1.def456@zippzo.in',
+            password_hash=make_password('Pass123!'), role='WAREHOUSE_STAFF', status='BLOCKED')
+        site = Site.objects.create(code='DS-DEL', site_type='DARK_STORE', name='Del DS',
+                                   address='1 Test Road')
+        EmployeeCompensation.objects.create(
+            user=with_data, site=site, employee='W', basis='MONTHLY', amount='1000.00',
+            effective_from='2026-01-01', is_active=True)
+
+        out = StringIO()
+        call_command('delete_empty_duplicate_users', '--apply', stdout=out)
+        self.assertFalse(User.objects.filter(pk=empty.pk).exists())
+        self.assertTrue(User.objects.filter(pk=with_data.pk).exists())
+
+
 class CleanupTestAccountsTests(TestCase):
     def test_only_obvious_test_accounts_are_disabled(self):
         from io import StringIO
