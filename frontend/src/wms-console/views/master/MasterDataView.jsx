@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { apiClient } from '../../api/client';
 import DataTable from '../../components/ui/DataTable';
 import { RefreshCw, Plus, Trash2, X, Save, Printer } from 'lucide-react';
@@ -352,6 +353,43 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [printBin, setPrintBin] = useState(null);
+
+  // Print from a self-contained window. Printing the console page itself left
+  // the hidden app content in the page flow, which produced a second sheet.
+  const printBinSlip = (bin) => {
+    const w = window.open('', '_blank', 'width=460,height=560');
+    if (!w) return;
+    const payload = bin.qr_payload || bin.barcode || bin.location_id || '';
+    const qr = renderToStaticMarkup(<QRCodeSVG value={payload} size={240} />);
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+    const route = [bin.location_type || 'BIN', bin.category,
+      bin.aisle ? `Aisle ${bin.aisle}` : '',
+      bin.rack ? `Rack ${bin.rack}` : '',
+      bin.level ? `Level ${bin.level}` : ''].filter(Boolean).join(' · ');
+    w.document.write(`<!doctype html><html><head><title>BIN ${esc(bin.barcode)}</title>
+<style>
+  @page { size: 100mm 150mm; margin: 8mm; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; text-align: center; color: #111; }
+  .store { font-size: 4mm; letter-spacing: .4mm; color: #555; margin-top: 2mm; }
+  h2 { margin: 3mm 0 4mm; font-size: 8mm; word-break: break-word; }
+  .route { font-size: 4mm; margin: 0 0 4mm; color: #333; }
+  .qr { width: 55mm; height: 55mm; margin: 0 auto; }
+  .qr svg { width: 100%; height: 100%; }
+  p { font-size: 3.6mm; color: #555; margin: 5mm 0 0; }
+</style>
+</head><body>
+<div class="store">ZIPPZO DARK STORE</div>
+<h2>${esc(bin.barcode || bin.location_id)}</h2>
+<div class="route">${esc(route)}</div>
+<div class="qr">${qr}</div>
+<p>Scan to see this bin's contents in the app.</p>
+</body></html>`);
+    w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 150);
+  };
 
   const visibleGroup = allowed
     ? null
@@ -797,7 +835,7 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
             </div>
             <div className="modal-footer" style={{ justifyContent: 'center', gap: 10 }}>
               <button type="button" className="btn-ui neutral" onClick={() => setPrintBin(null)}>Close</button>
-              <button type="button" className="btn-ui primary" onClick={() => window.print()}>
+              <button type="button" className="btn-ui primary" onClick={() => printBinSlip(printBin)}>
                 <Printer size={13} />
                 <span>Print slip</span>
               </button>
@@ -806,40 +844,8 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
         </div>
       )}
 
-      <style>{`@media print {
-        body * { visibility: hidden !important; }
-        .print-slip-modal, .print-slip-modal * { visibility: visible !important; }
-        html, body { margin: 0 !important; padding: 0 !important; height: auto !important; }
-        .print-slip-modal .modal-footer, .print-slip-modal .icon-btn { display: none !important; }
-        /* The backdrop is a flex-centred fixed overlay on screen. Keep it
-           fixed in print (so hidden app content cannot push it down), but drop
-           the centring: centring in the viewport lands the slip at the bottom
-           edge of a 100x150mm page and clips the QR. Start at the top-left. */
-        .print-slip-modal {
-          position: fixed !important;
-          inset: 0 !important;
-          display: block !important;
-          align-items: initial !important;
-          justify-content: initial !important;
-          padding: 0 !important;
-          margin: 0 !important;
-          background: #fff !important;
-        }
-        .print-slip-modal .modal-box {
-          position: static !important;
-          display: block !important;
-          width: auto !important;
-          max-width: none !important;
-          max-height: none !important;
-          overflow: visible !important;
-          border: none !important;
-          box-shadow: none !important;
-          background: #fff !important;
-        }
-        .print-slip-modal .print-slip { padding: 0 !important; }
-        .print-slip-modal svg { width: 42mm !important; height: 42mm !important; }
-        @page { size: 100mm 150mm; margin: 8mm; }
-      }`}</style>
+      {/* Printing is handled by printBinSlip() in a self-contained window so
+          the slip always fits one 100x150mm page. */}
     </div>
   );
 }

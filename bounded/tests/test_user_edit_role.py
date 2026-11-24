@@ -165,6 +165,17 @@ class EmployeeLifecycleTests(TestCase):
             'site_id': str(self.site.site_id), 'role_at_site': 'PICKER',
         }
 
+    def test_register_store_manager_sets_account_and_store_role(self):
+        payload = self._staff_payload('manager.02a599@zippzo.in')
+        payload['role'] = 'OPS_MANAGER'
+        payload['role_at_site'] = 'STORE_MANAGER'
+        r = self.api.post('/api/iam/users/', payload, format='json')
+        self.assertEqual(r.status_code, 201, r.data)
+        manager = User.objects.get(user_id=r.data['user_id'])
+        self.assertEqual('OPS_MANAGER', manager.role)
+        asgn = EmployeeSiteAssignment.objects.get(user=manager)
+        self.assertEqual('STORE_MANAGER', asgn.role_at_site)
+
     def test_register_existing_shopper_promotes_the_account(self):
         r = self.api.post('/api/iam/users/', self._staff_payload('shared@gmail.com'),
                           format='json')

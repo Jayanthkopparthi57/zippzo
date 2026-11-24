@@ -148,6 +148,7 @@ function Register({ site, siteId, storeCode }) {
       PUTAWAY_ASSOCIATE: 'PUTAWAY_ASSOCIATE',
       RIDER: 'RIDER',
       WAREHOUSE_STAFF: 'PICKER',
+      OPS_MANAGER: 'STORE_MANAGER',
     }[value] || 'PICKER';
     return { ...current, role: value, role_at_site: department };
   });
@@ -248,6 +249,7 @@ function Register({ site, siteId, storeCode }) {
               <option value="INBOUND_ASSOCIATE">Inbound Associate</option>
               <option value="PUTAWAY_ASSOCIATE">Putaway Associate</option>
               <option value="WAREHOUSE_STAFF">Floor staff (legacy)</option>
+              <option value="OPS_MANAGER">Store manager</option>
               <option value="RIDER">Rider</option>
             </select>
           </div>
@@ -319,13 +321,20 @@ function Register({ site, siteId, storeCode }) {
                     <div className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{row.employee || ''}</div>
                   </td>
                   <td>
-                     <select className="form-input" value={roleEdits[String(row.user)] || row.role_at_site || accountRole || 'PICKER'}
+                     <select className="form-input" value={roleEdits[String(row.user)]
+                          || (row.role_at_site === 'STORE_MANAGER' ? 'OPS_MANAGER' : row.role_at_site)
+                          || accountRole || 'PICKER'}
                         onChange={(e) => {
                           const newRole = e.target.value;
-                          const userRole = newRole === 'RIDER' ? 'RIDER' : 'WAREHOUSE_STAFF';
+                          const isManager = newRole === 'OPS_MANAGER';
+                          const userRole = newRole === 'RIDER' || isManager
+                            ? newRole : 'WAREHOUSE_STAFF';
+                          const siteRole = isManager ? 'STORE_MANAGER' : newRole;
                           const key = String(row.user);
                           setRoleEdits((old) => ({ ...old, [key]: newRole }));
-                          patchApi(`/iam/users/${row.user}/`, { role: userRole, role_at_site: newRole })
+                          patchApi(`/iam/users/${row.user}/`, {
+                            role: userRole, role_at_site: siteRole,
+                          })
                             .then(() => Promise.all([
                               reload({ quiet: true }),
                               reloadUsers({ quiet: true }),
@@ -348,7 +357,7 @@ function Register({ site, siteId, storeCode }) {
                         <option value="OPERATOR">Operator</option>
                         <option value="RIDER">Rider</option>
                         <option value="WAREHOUSE_STAFF">Floor staff</option>
-                        <option value="OPS_MANAGER">Ops manager</option>
+                        <option value="OPS_MANAGER">Store manager</option>
                       </select>
                    </td>
                   <td>
