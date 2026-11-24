@@ -208,6 +208,34 @@ def _pick_default_site(sites, requested_app):
     return sites[0] if sites else None
 
 
+def _resolve_login_user(email, password):
+    """Find the account for a case-insensitive email without a 500.
+
+    The User.email column is case-sensitive, so production can hold two rows
+    like ``Foo@gmail.com`` and ``foo@gmail.com``. ``get(email__iexact=...)``
+    raised MultipleObjectsReturned and turned sign-in into a 500. Check every
+    candidate's password and use the best account: active first, then the most
+    privileged role so a staff login wins over an old shopper duplicate.
+    """
+    candidates = list(User.objects.filter(email__iexact=email).order_by('created_at'))
+    if not candidates:
+        return None
+    matches = [u for u in candidates if check_password(password, u.password_hash)]
+    if not matches:
+        return None
+    priority = {
+        'SUPER_ADMIN': 0, 'ADMIN': 0, 'OPS_MANAGER': 1,
+        'WAREHOUSE_STAFF': 2, 'PICKER': 3, 'INVENTORY_ASSOCIATE': 3,
+        'INBOUND_ASSOCIATE': 3, 'PUTAWAY_ASSOCIATE': 3, 'RIDER': 4,
+        'CUSTOMER': 5, 'SENDER': 5,
+    }
+    return sorted(matches, key=lambda u: (
+        0 if u.status == 'ACTIVE' else 1,
+        priority.get(u.role, 9),
+        str(u.created_at),
+    ))[0]
+
+
 class LoginAPIView(APIView):
     """One staff sign-in for web and mobile.
 
@@ -362,15 +390,10 @@ class LoginAPIView(APIView):
         if not email or not password:
             return Response({'error': 'Email and password required'}, status=400)
 
-        try:
-            user = User.objects.get(email__iexact=email)
-        except User.DoesNotExist:
+        user = _resolve_login_user(email, password)
+        if user is None:
             staff_auth.audit('IAM_LOGIN_FAILED', request=request, result='DENIED',
-                             reason='unknown account')
-            return Response({'error': 'Invalid credentials'}, status=401)
-        if not check_password(password, user.password_hash):
-            staff_auth.audit('IAM_LOGIN_FAILED', actor_id=user.user_id, request=request,
-                             result='DENIED', reason='bad password')
+                             reason='unknown account or bad password')
             return Response({'error': 'Invalid credentials'}, status=401)
         if user.status == 'BLOCKED':
             return Response({'error': 'User blocked'}, status=403)
@@ -957,11 +980,8 @@ class DailyOtpView(APIView):
         otp = str(request.data.get('otp') or '').strip()
         if not email or not password or not otp:
             return Response({'error': 'Email, password and OTP are required.'}, status=400)
-        try:
-            user = User.objects.get(email__iexact=email)
-        except User.DoesNotExist:
-            return Response({'error': 'Invalid credentials.'}, status=401)
-        if not check_password(password, user.password_hash) or user.status != 'ACTIVE':
+        user = _resolve_login_user(email, password)
+        if user is None or user.status != 'ACTIVE':
             return Response({'error': 'Invalid credentials.'}, status=401)
         allowed = staff_auth.authorized_facilities(user)
         if allowed and site.code not in {s.code for s in allowed}:

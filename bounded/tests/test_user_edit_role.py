@@ -46,6 +46,23 @@ class UserEditRoleTests(TestCase):
         self.assertTrue(check_password('NewPass456!', self.emp.password_hash))
 
 
+class DuplicateEmailLoginTests(TestCase):
+    """Case-different duplicate emails must not 500 the sign-in endpoint."""
+
+    def test_login_with_duplicate_case_emails(self):
+        password = 'StrongPass123!'
+        User.objects.create(email='dup@gmail.com', password_hash=make_password(password),
+                            role='CUSTOMER', status='ACTIVE')
+        User.objects.create(email='DUP@gmail.com', password_hash=make_password(password),
+                            role='WAREHOUSE_STAFF', status='ACTIVE')
+        r = APIClient().post('/api/iam/auth/login', {
+            'email': 'dup@gmail.com', 'password': password,
+            'app': 'DARK_STORE', 'surface': 'web',
+        }, format='json')
+        self.assertNotEqual(500, r.status_code, r.data)
+        self.assertIn(r.status_code, (200, 403), r.data)
+
+
 class EmployeeLifecycleTests(TestCase):
     """Registering staff with an existing shopper email, and removing staff."""
 
