@@ -809,9 +809,35 @@ export default function MasterDataView({ initialTab = 'sites', allowedTabs = nul
       <style>{`@media print {
         body * { visibility: hidden !important; }
         .print-slip-modal, .print-slip-modal * { visibility: visible !important; }
+        html, body { margin: 0 !important; padding: 0 !important; height: auto !important; }
         .print-slip-modal .modal-footer, .print-slip-modal .icon-btn { display: none !important; }
-        .print-slip-modal { position: fixed; inset: 0; background: #fff; }
-        .print-slip-modal .modal-box { box-shadow: none; border: none; width: auto; }
+        /* The backdrop is a flex-centred fixed overlay on screen. Keep it
+           fixed in print (so hidden app content cannot push it down), but drop
+           the centring: centring in the viewport lands the slip at the bottom
+           edge of a 100x150mm page and clips the QR. Start at the top-left. */
+        .print-slip-modal {
+          position: fixed !important;
+          inset: 0 !important;
+          display: block !important;
+          align-items: initial !important;
+          justify-content: initial !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          background: #fff !important;
+        }
+        .print-slip-modal .modal-box {
+          position: static !important;
+          display: block !important;
+          width: auto !important;
+          max-width: none !important;
+          max-height: none !important;
+          overflow: visible !important;
+          border: none !important;
+          box-shadow: none !important;
+          background: #fff !important;
+        }
+        .print-slip-modal .print-slip { padding: 0 !important; }
+        .print-slip-modal svg { width: 42mm !important; height: 42mm !important; }
         @page { size: 100mm 150mm; margin: 8mm; }
       }`}</style>
     </div>

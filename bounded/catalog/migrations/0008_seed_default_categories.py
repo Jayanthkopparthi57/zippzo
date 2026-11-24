@@ -3,7 +3,6 @@ from django.db import migrations
 
 CATEGORIES = [
     'Groceries',
-    'Food & Beverages',
     'Personal Care',
     'Home Care',
     'Health, Baby & Pet Care',
