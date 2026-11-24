@@ -36,6 +36,9 @@ class UserSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
+        import uuid
+        from django.db import IntegrityError, transaction
+
         password = validated_data.pop('password', None)
         site_id = validated_data.pop('site_id', None)
         site_code = validated_data.pop('site_code', None)
@@ -45,53 +48,68 @@ class UserSerializer(serializers.ModelSerializer):
             raise ValidationError({'password': "This field is required."})
         validated_data['password_hash'] = make_password(password)
 
-        # A shopper can sign up with the same address an administrator later
-        # wants to register as staff. User.email is unique across every role,
-        # so a plain create used to 400 here. Promote the existing non-admin
-        # account instead: the Customer row and its order history stay intact.
-        existing = None
-        email = str(validated_data.get('email') or '').strip().lower()
-        if email:
-            existing = User.objects.filter(email__iexact=email).first()
-        if existing is not None:
-            if existing.role in ('SUPER_ADMIN', 'ADMIN', 'OPS_MANAGER'):
-                raise ValidationError({
-                    'email': 'This address belongs to an administrator account.'
-                })
-            for attr in ('full_name', 'phone', 'role', 'status', 'password_hash'):
-                if attr in validated_data:
-                    setattr(existing, attr, validated_data[attr])
-            existing.status = 'ACTIVE'
-            existing.save(update_fields=[
-                'full_name', 'phone', 'role', 'status', 'password_hash'])
-            user = existing
-        else:
-            user = super().create(validated_data)
+        try:
+            with transaction.atomic():
+                # A shopper can sign up with the same address an administrator
+                # later wants to register as staff. User.email is unique across
+                # every role, so a plain create used to 400 here. Promote the
+                # existing non-admin account instead: the Customer row and its
+                # order history stay intact.
+                email = str(validated_data.get('email') or '').strip().lower()
+                existing = User.objects.filter(email__iexact=email).first() if email else None
+                if existing is not None:
+                    if existing.role in ('SUPER_ADMIN', 'ADMIN', 'OPS_MANAGER'):
+                        raise ValidationError({
+                            'email': 'This address belongs to an administrator account.'
+                        })
+                    for attr in ('full_name', 'phone', 'role', 'status', 'password_hash'):
+                        if attr in validated_data:
+                            setattr(existing, attr, validated_data[attr])
+                    existing.status = 'ACTIVE'
+                    existing.save(update_fields=[
+                        'full_name', 'phone', 'role', 'status', 'password_hash'])
+                    user = existing
+                else:
+                    user = super().create(validated_data)
 
-        # Create or update site assignment
-        from bounded.network.models import Site, EmployeeSiteAssignment
-        target_site = None
-        if site_code:
-            target_site = Site.objects.filter(code=site_code).first()
-        elif site_id:
-            target_site = Site.objects.filter(site_id=site_id).first()
+                from bounded.network.models import Site, EmployeeSiteAssignment
+                target_site = None
+                if site_code:
+                    target_site = Site.objects.filter(code=site_code).first()
+                elif site_id:
+                    target_site = Site.objects.filter(site_id=site_id).first()
 
-        if target_site:
-            mode = 'DARKHOUSE' if target_site.site_type == 'DS' else 'WAREHOUSE'
-            role_name = role_at_site or ('STORE_MANAGER' if user.role == 'OPS_MANAGER' else 'OPERATOR')
-            emp_code = user.email.split('@')[0].upper()[:20]
-            has_primary = EmployeeSiteAssignment.objects.filter(
-                user=user, is_primary=True, is_active=True).exists()
-            assignment, _ = EmployeeSiteAssignment.objects.get_or_create(
-                user=user, site=target_site,
-                defaults={'employee': emp_code, 'mode': mode,
-                          'role_at_site': role_name,
-                          'is_primary': not has_primary, 'is_active': True})
-            if assignment.pk and not assignment.is_active:
-                assignment.is_active = True
-                assignment.role_at_site = role_name
-                assignment.save(update_fields=['is_active', 'role_at_site'])
-        return user
+                if target_site:
+                    mode = 'DARKHOUSE' if target_site.site_type == 'DS' else 'WAREHOUSE'
+                    role_name = role_at_site or (
+                        'STORE_MANAGER' if user.role == 'OPS_MANAGER' else 'OPERATOR')
+                    emp_code = user.email.split('@')[0].upper()[:20]
+                    has_primary = EmployeeSiteAssignment.objects.filter(
+                        user=user, is_primary=True, is_active=True).exists()
+                    defaults = {
+                        'employee': emp_code, 'mode': mode,
+                        'role_at_site': role_name,
+                        'is_primary': not has_primary, 'is_active': True,
+                    }
+                    try:
+                        assignment, _ = EmployeeSiteAssignment.objects.get_or_create(
+                            user=user, site=target_site, defaults=defaults)
+                    except IntegrityError:
+                        # employee + site + mode is unique; a different person
+                        # may already own that code. Give this account its own.
+                        defaults['employee'] = f'{emp_code[:14]}{uuid.uuid4().hex[:5]}'
+                        assignment, _ = EmployeeSiteAssignment.objects.get_or_create(
+                            user=user, site=target_site, defaults=defaults)
+                    if not assignment.is_active:
+                        assignment.is_active = True
+                        assignment.role_at_site = role_name
+                        assignment.save(update_fields=['is_active', 'role_at_site'])
+                return user
+        except IntegrityError as exc:
+            raise ValidationError({
+                'email': 'This employee could not be registered. '
+                         'Check the email and store assignment and retry.'
+            }) from exc
 
     def update(self, instance, validated_data):
         password = validated_data.pop('password', None)

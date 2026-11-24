@@ -98,6 +98,19 @@ class EmployeeLifecycleTests(TestCase):
             user=target, is_active=True).exists())
         self.assertTrue(User.objects.filter(pk=target.pk).exists())
 
+    def test_register_survives_an_employee_code_collision(self):
+        owner = User.objects.create(
+            email='other.person@zippzo.in', password_hash=make_password('Other123!'),
+            role='WAREHOUSE_STAFF', status='ACTIVE')
+        EmployeeSiteAssignment.objects.create(
+            user=owner, site=self.site, employee='COLLIDE', mode='DARKHOUSE',
+            role_at_site='PICKER', is_primary=True, is_active=True)
+        payload = self._staff_payload('collide@zippzo.in')
+        r = self.api.post('/api/iam/users/', payload, format='json')
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertTrue(EmployeeSiteAssignment.objects.filter(
+            user_id=r.data['user_id'], site=self.site, is_active=True).exists())
+
     def test_only_super_admin_can_remove(self):
         self.api.force_authenticate(self.manager)
         r = self.api.post(f'/api/iam/users/{self.shopper.user_id}/remove/', {}, format='json')
