@@ -954,12 +954,12 @@ class StorefrontView(APIView):
         }
         listings = Listing.objects.filter(
             site=site, price__gt=0, is_listed=True,
-            is_available=True).select_related('sku', 'sku__category')
+            is_available=True).select_related('sku', 'sku__category', 'sku__category__parent')
         listing_rows = list(listings)
         profiles = {
             str(row.sku_id): row
             for row in StoreProductProfile.objects.filter(site=site, sku_id__in=[row.sku_id for row in listing_rows])
-            .select_related('sku', 'category')
+            .select_related('sku', 'category', 'category__parent')
         }
         combo_prices = {
             str(listing.sku_id): listing.price
@@ -986,6 +986,20 @@ class StorefrontView(APIView):
             ])).lower()
             return query in hay
 
+        def shelf_category(sku_id, sku):
+            profile = profiles.get(str(sku_id))
+            cat = profile.category if profile and profile.category_id else sku.category
+            if not cat:
+                return ''
+            return cat.parent.name if cat.parent_id else cat.name
+
+        def shelf_sub_category(sku_id, sku):
+            profile = profiles.get(str(sku_id))
+            if profile:
+                return profile.sub_category or (profile.category.name
+                                                 if profile.category_id else '')
+            return sku.sub_category or ''
+
         items = [
             {
                 'sku_id': str(l.sku_id),
@@ -1003,17 +1017,11 @@ class StorefrontView(APIView):
                 'sort_order': int(profiles.get(str(l.sku_id)).sort_order) if profiles.get(str(l.sku_id)) else 0,
                 'images': ([url for url in (profiles.get(str(l.sku_id)).images if profiles.get(str(l.sku_id)) else []) if url][:3] or ([l.sku.image_url] if l.sku.image_url else [])),
                 'image': ([url for url in (profiles.get(str(l.sku_id)).images if profiles.get(str(l.sku_id)) else []) if url][:3] or [l.sku.image_url])[0] if ([url for url in (profiles.get(str(l.sku_id)).images if profiles.get(str(l.sku_id)) else []) if url][:3] or [l.sku.image_url]) else '',
-                # The store shelf groups itself by this. A store profile wins
-                # over the catalog SKU so a dark store can present its own
-                # taxonomy; otherwise the SKU sub-category is the fallback.
-                'category': (
-                    profiles.get(str(l.sku_id)).sub_category
-                    if profiles.get(str(l.sku_id)) and profiles.get(str(l.sku_id)).sub_category
-                    else profiles.get(str(l.sku_id)).category.name
-                    if profiles.get(str(l.sku_id)) and profiles.get(str(l.sku_id)).category_id
-                    else l.sku.sub_category
-                    or (l.sku.category.name if l.sku.category else '')
-                ),
+                # The shopper shelf groups itself by the top-level department
+                # only. Free-text sub_category values used to create dozens of
+                # one-off chips; the detailed label is carried separately.
+                'category': shelf_category(l.sku_id, l.sku),
+                'sub_category': shelf_sub_category(l.sku_id, l.sku),
                 'price': str(l.price),
                 'mrp': str(l.mrp),
                 'on_offer': l.mrp > l.price,
