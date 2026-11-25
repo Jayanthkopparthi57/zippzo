@@ -57,6 +57,18 @@ class CatalogPermissionTests(TestCase):
         self.api.force_authenticate(user=user)
         return self.api
 
+    def test_retail_taxonomy_is_seeded_with_subcategories(self):
+        fruits = SkuCategory.objects.filter(name='Fruits & Vegetables',
+                                            parent__isnull=True).first()
+        self.assertIsNotNone(fruits)
+        self.assertEqual('Fresh fruits, vegetables, leafy greens and herbs',
+                         fruits.description)
+        self.assertEqual(4, fruits.children.count())
+        sweets = SkuCategory.objects.get(name='Sweets', parent__isnull=True)
+        self.assertEqual(4, sweets.children.count())
+        self.assertTrue(SkuCategory.objects.filter(
+            name='Ghee', parent__name='Oil, Ghee & Masala').exists())
+
     def test_default_categories_exclude_food_and_beverages(self):
         # The seeded set is the dropdown source for product registration in
         # both consoles and the shopper app. A fresh test DB has run the seed
