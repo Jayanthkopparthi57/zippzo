@@ -12,6 +12,16 @@ import { api, API_BASE, errMsg } from '../api';
 // web consoles; it is used wherever the storefront/opening screens show the
 // wordmark, so the brand stays identical across apps.
 const zippzoLogo = require('../assets/zippzo-logo.png');
+// Operator-supplied category artwork for departments with no product photos.
+const categoryArt: Record<string, any> = {
+  'Fruits & Vegetables': require('../assets/categories/fruits-vegetables.jpg'),
+  'Atta, Rice & Dal': require('../assets/categories/atta-rice-dal.png'),
+  'Oil, Ghee & Masala': require('../assets/categories/oil-ghee-masala.png'),
+  'Dairy & Eggs': require('../assets/categories/dairy-eggs.webp'),
+  'Bakery': require('../assets/categories/bakery.jpg'),
+  'Snacks & Munchies': require('../assets/categories/snacks-munchies.jpg'),
+  'Cold Drinks & Beverages': require('../assets/categories/cold-drinks-beverages.webp'),
+};
 import { useAuth } from '../auth';
 import { CFEnvironment, CFSession } from 'cashfree-pg-api-contract';
 import { CFPaymentGatewayService } from 'react-native-cashfree-pg-sdk';
@@ -387,10 +397,15 @@ export default function ShopperApp() {
   const categoryCards = useMemo(
     () => categories.map((name) => {
       const rows = products.filter((item) => (item.category || 'Others') === name);
+      const productImages = rows.slice(0, 4)
+        .map((item) => mediaUrl(item.image))
+        .filter((value): value is string => !!value);
+      const art = categoryArt[name];
+      const artUri = art ? Image.resolveAssetSource(art)?.uri : undefined;
       return {
         name,
         count: rows.length,
-        images: rows.slice(0, 4).map((item) => mediaUrl(item.image)).filter(Boolean),
+        images: productImages.length ? productImages : (artUri ? [artUri] : []),
       };
     }),
     [categories, products],

@@ -15,6 +15,17 @@ import {
   deliveryCoverage, cashfreePaymentStatus, abandonPayment, asList,
 } from '../darkstore/useDarkStore';
 
+// Operator-supplied category artwork (used when a department has no product photos).
+const CATEGORY_IMAGES = {
+  'Fruits & Vegetables': '/categories/fruits-vegetables.jpg',
+  'Atta, Rice & Dal': '/categories/atta-rice-dal.png',
+  'Oil, Ghee & Masala': '/categories/oil-ghee-masala.png',
+  'Dairy & Eggs': '/categories/dairy-eggs.webp',
+  'Bakery': '/categories/bakery.jpg',
+  'Snacks & Munchies': '/categories/snacks-munchies.jpg',
+  'Cold Drinks & Beverages': '/categories/cold-drinks-beverages.webp',
+};
+
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 const rupees = (n) => `₹${Number(n || 0).toFixed(2)}`;
@@ -749,6 +760,10 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
   // Up to four real product photos per department for the bestseller cards.
   const catCollages = useMemo(() => {
     const map = {};
+    categories.forEach(([name]) => {
+      const supplied = CATEGORY_IMAGES[name];
+      if (supplied) map[name] = [supplied];
+    });
     items.forEach((i) => {
       const c = i.category || 'Others';
       const img = i.image || (Array.isArray(i.images) && i.images[0]);
@@ -757,7 +772,7 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
       if (map[c].length < 4 && !map[c].includes(img)) map[c].push(img);
     });
     return map;
-  }, [items]);
+  }, [items, categories]);
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
