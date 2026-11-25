@@ -62,7 +62,10 @@ export default function PricingOffersView({ site }) {
     setLoading(true);
     setError('');
     const requests = [
-      ['active products', fetchApi('/catalog/skus/?status=ACTIVE&page_size=1000'), setSkus],
+      // Stock & Bin Operations shows every SKU with a balance, including
+      // draft/approved ones. Pricing must offer those same products, so do
+      // not filter by status here.
+      ['products', fetchApi('/catalog/skus/?page_size=1000'), setSkus],
       ['categories', fetchApi('/catalog/categories/?page_size=500'), setCategories],
       ['store prices', fetchApi(`/catalog/listings/?site=${encodeURIComponent(siteId)}&page_size=1000`), setListings],
       ['coupons', fetchApi(`/catalog/coupons/?management=true&site=${encodeURIComponent(siteId)}&page_size=500`), setCoupons],
@@ -366,7 +369,7 @@ export default function PricingOffersView({ site }) {
                       <td>
                         <div className="pricing-offers__sku">
                           <ProductThumbnail sku={sku} />
-                          <span><strong>{sku.name}</strong><small>{sku.sku_code} · {sku.pack_size || sku.brand || 'Product'}</small></span>
+                          <span><strong>{sku.name}</strong><small>{sku.sku_code}{sku.status && sku.status !== 'ACTIVE' ? ` · ${sku.status}` : ''} · {sku.pack_size || sku.brand || 'Product'}</small></span>
                         </div>
                       </td>
                       <td>
