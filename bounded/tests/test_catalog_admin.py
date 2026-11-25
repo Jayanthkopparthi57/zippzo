@@ -69,16 +69,26 @@ class CatalogPermissionTests(TestCase):
         self.assertTrue(SkuCategory.objects.filter(
             name='Ghee', parent__name='Oil, Ghee & Masala').exists())
 
-    def test_default_categories_exclude_food_and_beverages(self):
-        # The seeded set is the dropdown source for product registration in
-        # both consoles and the shopper app. A fresh test DB has run the seed
-        # migration and 0009, so the removed row must not come back.
+    def test_category_picker_shows_only_the_retail_top_level_categories(self):
         r = self._as(self.staff).get(f'{API}/catalog/categories/')
         self.assertEqual(200, r.status_code, r.data)
         rows = r.data['results'] if isinstance(r.data, dict) else r.data
         names = {row['name'] for row in rows}
-        self.assertIn('Groceries', names)
-        self.assertNotIn('Food & Beverages', names)
+        self.assertIn('Fruits & Vegetables', names)
+        self.assertIn('Sweets', names)
+        for legacy in ('Food & Beverages', 'Groceries', 'Staples', 'Beverages'):
+            self.assertNotIn(legacy, names)
+        self.assertTrue(all(row['parent'] is None for row in rows))
+
+    def test_subcategories_available_by_parent(self):
+        sweets = SkuCategory.objects.get(name='Sweets', parent__isnull=True)
+        r = self._as(self.staff).get(f'{API}/catalog/categories/',
+                                    {'parent': str(sweets.category_id)})
+        self.assertEqual(200, r.status_code, r.data)
+        rows = r.data['results'] if isinstance(r.data, dict) else r.data
+        self.assertEqual({'Milk-based sweets', 'Nut and dry fruit sweets',
+                          'Fruit and vegetable-based sweets', 'Frozen desserts'},
+                         {row['name'] for row in rows})
 
     def test_admin_can_create_vendor_with_pan(self):
         r = self._as(self.admin).post(f'{API}/supply/vendors/', {

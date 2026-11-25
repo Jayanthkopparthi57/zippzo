@@ -7,10 +7,19 @@ from .models import (
 )
 
 class SkuCategorySerializer(serializers.ModelSerializer):
+    children = serializers.SerializerMethodField()
+
     class Meta:
         model = SkuCategory
-        fields = ['category_id', 'name', 'parent', 'description']
+        fields = ['category_id', 'name', 'parent', 'description', 'children']
         read_only_fields = ['category_id']
+
+    def get_children(self, obj):
+        return [
+            {'category_id': str(child.category_id), 'name': child.name,
+             'description': child.description}
+            for child in obj.children.all()
+        ]
 
 class SkuSerializer(serializers.ModelSerializer):
     category_name = serializers.SerializerMethodField()

@@ -70,10 +70,24 @@ class SkuCategoryViewSet(viewsets.ModelViewSet):
     queryset = SkuCategory.objects.all()
     serializer_class = SkuCategorySerializer
     permission_classes = [IsAdminUserOrReadOnly]
-    # Category and subcategory pickers need the whole tree in one call.
-    # Default DRF pagination hid everything past the first page once the
-    # retail taxonomy was seeded, so those dropdowns looked incomplete.
+    # Category pickers need the whole list in one call; default DRF pagination
+    # hid everything past the first page once the taxonomy was seeded.
     pagination_class = None
+
+    def get_queryset(self):
+        qs = SkuCategory.objects.select_related('parent').prefetch_related('children')
+        params = self.request.query_params
+        if str(params.get('include_children') or '').lower() == 'true':
+            return qs
+        parent = params.get('parent')
+        if parent:
+            try:
+                return qs.filter(parent_id=parent)
+            except (ValueError, TypeError):
+                return qs.none()
+        # Pickers show the 26 departments; subcategories ride along in the
+        # `children` field or can be fetched with ?parent=<category_id>.
+        return qs.filter(parent__isnull=True)
 
 class SkuViewSet(viewsets.ModelViewSet):
     queryset = Sku.objects.select_related('category').all()
