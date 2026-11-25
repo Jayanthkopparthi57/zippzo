@@ -4,7 +4,7 @@ import {
   ShoppingBasket, Package, Truck, Smartphone, Banknote,
   Check, Star, AlertTriangle, Tag, ArrowRight,
   Apple, Milk, Cookie, CupSoda, Soup, SprayCan, Baby, Croissant, Pill, Wheat,
-  LocateFixed,
+  LocateFixed, Sparkles, Gift, Shirt, Smile, ShoppingBag,
 } from 'lucide-react';
 import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../context/AuthContext';
@@ -742,6 +742,19 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
       const c = i.category || 'Others';
       const img = i.image || (Array.isArray(i.images) && i.images[0]);
       if (img && !map[c]) map[c] = img;
+    });
+    return map;
+  }, [items]);
+
+  // Up to four real product photos per department for the bestseller cards.
+  const catCollages = useMemo(() => {
+    const map = {};
+    items.forEach((i) => {
+      const c = i.category || 'Others';
+      const img = i.image || (Array.isArray(i.images) && i.images[0]);
+      if (!img) return;
+      if (!map[c]) map[c] = [];
+      if (map[c].length < 4 && !map[c].includes(img)) map[c].push(img);
     });
     return map;
   }, [items]);
@@ -1633,32 +1646,50 @@ function StorefrontScreen({ siteCode: requestedSiteCode }) {
 
       {/* search lives in the top bar now (zippzo:search) */}
 
-      {/* category rail — above the offers so the shelf is one tap away */}
-      {categories.length > 1 && (
-        <div className="shop-cats">
-          <button className="shop-cat" aria-pressed={cat === ''} onClick={() => setCat('')}>
-            <span className="shop-cat__disc shop-cat__disc--img">
-              <img src="/zippzo-logo-192.png" alt="" className="shop-cat__img" />
-            </span>
-            <span className="shop-cat__label">All</span>
+      <div className="shop-quick" aria-label="Quick collections">
+        {[
+          { label: 'Beauty', Icon: Sparkles },
+          { label: 'Gifting', Icon: Gift },
+          { label: 'Decor', Icon: Shirt },
+          { label: 'Kids', Icon: Smile },
+          { label: 'Imported', Icon: ShoppingBag },
+        ].map(({ label, Icon }) => (
+          <button key={label} type="button" className="shop-quick__chip"
+            onClick={() => setCat('')}>
+            <Icon size={17} />{label}
           </button>
-          {categories.map(([name]) => {
-            const m = catMeta(name);
-            const Icon = m.Icon;
-            const img = catImages[name];
-            return (
-              <button key={name} className="shop-cat" aria-pressed={cat === name}
-                onClick={() => setCat(cat === name ? '' : name)}>
-                <span className="shop-cat__disc shop-cat__disc--img">
-                  {img
-                    ? <img src={img} alt="" className="shop-cat__img" loading="lazy" />
-                    : <Icon size={24} />}
-                </span>
-                <span className="shop-cat__label">{name}</span>
-              </button>
-            );
-          })}
-        </div>
+        ))}
+      </div>
+
+      {/* Bestsellers — four real product photos per department, neutral cards */}
+      {categories.length > 1 && (
+        <section className="shop-bestsellers">
+          <div className="shop-bestsellers__head">
+            <h2>Bestsellers</h2>
+            <button type="button" onClick={() => setCat('')}>See all →</button>
+          </div>
+          <div className="shop-bestsellers__grid">
+            {categories.slice(0, 12).map(([name, count]) => {
+              const images = catCollages[name] || [];
+              const Icon = catMeta(name).Icon;
+              return (
+                <button key={name} type="button" className="shop-bc"
+                  aria-pressed={cat === name}
+                  onClick={() => setCat(cat === name ? '' : name)}>
+                  <span className="shop-bc__collage">
+                    {images.length ? images.map((src, i) => (
+                      <img key={src + i} src={src} alt="" loading="lazy" />
+                    )) : (
+                      <span className="shop-bc__placeholder"><Icon size={22} />{name}</span>
+                    )}
+                    {count > 4 && <span className="shop-bc__more">+{count - 4} more</span>}
+                  </span>
+                  <span className="shop-bc__label">{name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       {/* offers */}

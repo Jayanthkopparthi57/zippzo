@@ -384,6 +384,17 @@ export default function ShopperApp() {
     () => Array.from(new Set(products.map((item) => item.category || 'Others'))),
     [products],
   );
+  const categoryCards = useMemo(
+    () => categories.map((name) => {
+      const rows = products.filter((item) => (item.category || 'Others') === name);
+      return {
+        name,
+        count: rows.length,
+        images: rows.slice(0, 4).map((item) => mediaUrl(item.image)).filter(Boolean),
+      };
+    }),
+    [categories, products],
+  );
   const productsFor = useCallback(
     (name: string) => products.filter((item) => (item.category || 'Others') === name),
     [products],
@@ -1409,6 +1420,22 @@ export default function ShopperApp() {
           </View>
         )}
 
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.quickRail}>
+          {([
+            ['Beauty', 'sparkles'], ['Gifting', 'gift'], ['Decor', 'cube'],
+            ['Kids', 'happy'], ['Imported', 'cart-outline'],
+          ] as Array<[string, string]>).map(([label, icon]) => (
+            <TouchableOpacity
+              key={label}
+              style={s.quickChip}
+              onPress={() => { setCategory('All'); setListingTitle(label); go('listing'); }}
+            >
+              <Ionicons name={icon as any} size={16} color={C.ink2} />
+              <Text style={s.quickChipText}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
         <View style={s.promo}>
           <View style={s.promoBody}>
             <View style={s.promoPill}>
@@ -1449,34 +1476,32 @@ export default function ShopperApp() {
           </TouchableOpacity>
         )}
 
-        {categories.length > 0 && (
+        {categoryCards.length > 0 && (
           <View style={s.section}>
-            {sectionHead('Shop by Category', () => { setCategory('All'); setListingTitle('All Products'); go('listing'); })}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.catRail}>
-              <TouchableOpacity
-                style={s.catItem}
-                onPress={() => { setCategory('All'); setListingTitle('All Products'); go('listing'); }}
-              >
-                <View style={[s.catDisc, { backgroundColor: C.goldSoft }]}>
-                  <Ionicons name="grid" size={23} color={C.goldDeep} />
-                </View>
-                <Text style={s.catLabel}>All</Text>
-              </TouchableOpacity>
-              {categories.map((name) => {
-                const info = catStyle(name);
-                return (
-                  <TouchableOpacity
-                    key={name}
-                    style={s.catItem}
-                    onPress={() => { setCategory(name); setListingTitle(name); go('listing'); }}
-                  >
-                    <View style={[s.catDisc, { backgroundColor: info.bg }]}>
-                      <Ionicons name={info.icon} size={23} color={info.fg} />
-                    </View>
-                    <Text style={s.catLabel} numberOfLines={2}>{name}</Text>
-                  </TouchableOpacity>
-                );
-              })}
+            {sectionHead('Bestsellers', () => { setCategory('All'); setListingTitle('All Products'); go('listing'); })}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.bestRail}>
+              {categoryCards.slice(0, 12).map((card) => (
+                <TouchableOpacity
+                  key={card.name}
+                  style={s.bestCard}
+                  onPress={() => { setCategory(card.name); setListingTitle(card.name); go('listing'); }}
+                >
+                  <View style={s.bestCollage}>
+                    {card.images.length ? card.images.map((uri, i) => (
+                      <Image key={uri + i} source={{ uri }} style={s.bestImg} resizeMode="cover" />
+                    )) : (
+                      <View style={s.bestPlaceholder}>
+                        <Ionicons name="grid-outline" size={22} color={C.ink3} />
+                        <Text style={s.bestPlaceholderText} numberOfLines={2}>{card.name}</Text>
+                      </View>
+                    )}
+                    {card.count > 4 && (
+                      <View style={s.bestMore}><Text style={s.bestMoreText}>+{card.count - 4} more</Text></View>
+                    )}
+                  </View>
+                  <Text style={s.bestLabel} numberOfLines={2}>{card.name}</Text>
+                </TouchableOpacity>
+              ))}
             </ScrollView>
           </View>
         )}
@@ -2670,13 +2695,16 @@ const s = StyleSheet.create({
   viewAllText: { color: C.purple, fontSize: 11, fontWeight: '800' },
 
   homePage: { paddingBottom: 96 },
-  promo: { backgroundColor: C.purple, borderRadius: 20, marginHorizontal: 14, marginTop: 14, overflow: 'hidden', flexDirection: 'row', minHeight: 160 },
-  promoBody: { flex: 1, padding: 18 },
-  promoPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(109,74,255,0.2)', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, alignSelf: 'flex-start', marginBottom: 9 },
-  promoPillText: { color: C.gold, fontSize: 10, fontWeight: '900', letterSpacing: 0.3 },
-  promoTitle: { color: '#ffffff', fontSize: 21, fontWeight: '900', lineHeight: 26, letterSpacing: -0.4 },
-  promoBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 12, backgroundColor: C.gold, borderRadius: 999, paddingHorizontal: 13, paddingVertical: 7, alignSelf: 'flex-start' },
-  promoBtnText: { color: C.ink, fontSize: 12, fontWeight: '900' },
+  quickRail: { paddingRight: 6, paddingVertical: 2, marginTop: 14 },
+  quickChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: '#ffffff', marginRight: 8 },
+  quickChipText: { color: C.ink2, fontSize: 11, fontWeight: '800' },
+  promo: { backgroundColor: '#f7f8f6', borderWidth: 1, borderColor: C.line, borderRadius: 16, marginHorizontal: 14, marginTop: 14, overflow: 'hidden', flexDirection: 'row', minHeight: 148 },
+  promoBody: { flex: 1, padding: 16 },
+  promoPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#e9ede9', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, alignSelf: 'flex-start', marginBottom: 9 },
+  promoPillText: { color: '#4b5a50', fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  promoTitle: { color: C.ink, fontSize: 20, fontWeight: '900', lineHeight: 25, letterSpacing: -0.4 },
+  promoBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 12, backgroundColor: C.ink, borderRadius: 999, paddingHorizontal: 13, paddingVertical: 7, alignSelf: 'flex-start' },
+  promoBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
   promoArt: { width: 122, padding: 10, justifyContent: 'center', alignItems: 'center' },
   promoImg: { width: 104, height: 104 },
   promoImg2: { width: 78, height: 78 },
@@ -2690,6 +2718,15 @@ const s = StyleSheet.create({
   catItem: { alignItems: 'center', marginRight: 16, width: 62 },
   catDisc: { width: 60, height: 60, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
   catLabel: { color: C.ink2, fontSize: 10.5, fontWeight: '700', textAlign: 'center', width: 62, lineHeight: 14 },
+  bestRail: { paddingRight: 6, paddingVertical: 2 },
+  bestCard: { width: 140, marginRight: 12 },
+  bestCollage: { width: 140, height: 140, borderRadius: 12, overflow: 'hidden', flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#f3f5f2', borderWidth: 1, borderColor: C.line, position: 'relative' },
+  bestImg: { width: 68, height: 68 },
+  bestPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10 },
+  bestPlaceholderText: { color: C.ink3, fontSize: 11, fontWeight: '700', textAlign: 'center' },
+  bestMore: { position: 'absolute', left: 6, bottom: 6, backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 999, paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: C.line },
+  bestMoreText: { color: C.ink2, fontSize: 9, fontWeight: '800' },
+  bestLabel: { color: C.ink, fontSize: 12, fontWeight: '800', marginTop: 7, lineHeight: 16 },
 
   dealGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -6 },
   dealCard: { width: '33.33%', padding: 6, alignItems: 'center' },
