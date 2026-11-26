@@ -7,10 +7,10 @@ from rest_framework.test import APIClient
 
 from bounded.audit.models import AuditLog
 from bounded.iam import staff_auth
-from bounded.iam.models import LoginChallenge, User
+from bounded.iam.models import LoginChallenge, Session, User
 from bounded.inventory.models import StockBalance, StockMovement
 from bounded.inventory.stock import apply_stock
-from bounded.network.models import EmployeeSiteAssignment, Site
+from bounded.network.models import EmployeeSiteAssignment, Site, StaffShift
 
 
 def _site(code, site_type='MH'):
@@ -33,6 +33,40 @@ def _login(client, email, password='Pass123!', surface='web', app='WMS'):
                     {'email': email, 'password': password, 'app': app, 'surface': surface},
                     format='json')
     return r
+
+
+@override_settings(DEBUG=True, OTP_DEV_ECHO=True, IAM_OTP_SENDER=None)
+class AttendanceAndForceLogoutTests(TestCase):
+    def setUp(self):
+        self.site = _site('DS-ATTEND', 'DARK_STORE')
+        self.staff = _user('attend-staff@zippzo.in', 'WAREHOUSE_STAFF')
+        _assign(self.staff, self.site, 'PICKER')
+        self.admin = _user('attend-admin@zippzo.in', 'OPS_MANAGER')
+
+    def test_login_opens_shift_and_logout_closes_it(self):
+        session, _access, _refresh = staff_auth.create_session(
+            self.staff, self.site, 'web', None)
+        shift = StaffShift.objects.get(user=self.staff, site=self.site, status='OPEN')
+        self.assertEqual('PICKER', shift.role_at_site)
+        staff_auth.revoke_session(session)
+        shift.refresh_from_db()
+        self.assertEqual('CLOSED', shift.status)
+        self.assertEqual('MANUAL', shift.end_reason)
+
+    def test_admin_can_force_logout_employee(self):
+        staff_auth.create_session(self.staff, self.site, 'web', None)
+        admin_session, _access, _refresh = staff_auth.create_session(
+            self.admin, self.site, 'web', None)
+        self.admin.session = admin_session
+        client = APIClient()
+        client.force_authenticate(self.admin)
+        r = client.post(f'/api/iam/users/{self.staff.user_id}/force-logout/',
+                        {}, format='json')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertFalse(Session.objects.filter(user=self.staff, is_active=True).exists())
+        shift = StaffShift.objects.get(user=self.staff, site=self.site)
+        self.assertEqual('CLOSED', shift.status)
+        self.assertEqual('FORCED', shift.end_reason)
 
 
 @override_settings(DEBUG=True, OTP_DEV_ECHO=True, IAM_OTP_SENDER=None)

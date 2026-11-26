@@ -1492,6 +1492,37 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response({'success': True, 'user_id': str(target.user_id),
                          'status': 'BLOCKED'})
 
+    @action(detail=True, methods=['post'], url_path='force-logout')
+    def force_logout_employee(self, request, pk=None):
+        """End an employee's sessions and clock them out. Admin only."""
+        from django.utils import timezone
+        from bounded.ds_ops.access import require_site_access
+        from bounded.network.models import StaffShift
+
+        if getattr(request.user, 'role', '') not in ('SUPER_ADMIN', 'OPS_MANAGER'):
+            return Response({'error': 'Only an administrator can log out employees.'},
+                            status=403)
+        target = self.get_object()
+        if target.user_id == request.user.user_id:
+            return Response({'error': 'Use the normal sign-out for your own account.'},
+                            status=400)
+        site = getattr(request.user, 'session', None)
+        site = site.facility if site else None
+        if site is None:
+            return Response({'error': 'Choose a facility first.'}, status=400)
+        require_site_access(request.user, site.code)
+        now = timezone.now()
+        sessions = Session.objects.filter(user=target, is_active=True)
+        count = sessions.count()
+        sessions.update(is_active=False, revoked_at=now)
+        shifts = StaffShift.objects.filter(user=target, site=site, status='OPEN')
+        shifts.update(status='CLOSED', ended_at=now, end_reason='FORCED')
+        staff_auth.audit('IAM_EMPLOYEE_FORCE_LOGOUT', actor_id=request.user.user_id,
+                         entity_type='User', entity_id=target.user_id,
+                         request=request, result='ALLOWED')
+        return Response({'success': True, 'sessions_revoked': count,
+                         'shifts_closed': shifts.count()})
+
     @action(detail=True, methods=['post'], url_path='remove')
     def remove_employee(self, request, pk=None):
         if getattr(request.user, 'role', '') != 'SUPER_ADMIN':

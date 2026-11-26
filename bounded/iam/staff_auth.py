@@ -416,6 +416,41 @@ def verify_otp(challenge, submitted):
     return True, 'ok'
 
 
+ATTENDANCE_ROLES = (
+    'WAREHOUSE_STAFF', 'PICKER', 'INVENTORY_ASSOCIATE',
+    'INBOUND_ASSOCIATE', 'PUTAWAY_ASSOCIATE', 'PACKER', 'OPERATOR',
+)
+
+
+def open_staff_shift(user, facility):
+    """Clock in a floor employee at the selected facility (idempotent)."""
+    if facility is None or user.role not in ATTENDANCE_ROLES:
+        return None
+    from bounded.network.models import StaffShift
+    shift = StaffShift.objects.filter(user=user, site=facility, status='OPEN').first()
+    if shift is None:
+        shift = StaffShift.objects.create(
+            user=user, site=facility,
+            role_at_site=facility_role(user, facility) or user.role,
+        )
+    return shift
+
+
+def close_staff_shift(user, facility, reason='MANUAL'):
+    """Clock out the employee's open shift at this facility."""
+    if facility is None or user.role not in ATTENDANCE_ROLES:
+        return None
+    from bounded.network.models import StaffShift
+    shift = StaffShift.objects.filter(user=user, site=facility, status='OPEN').first()
+    if shift is None:
+        return None
+    shift.status = 'CLOSED'
+    shift.ended_at = timezone.now()
+    shift.end_reason = reason
+    shift.save(update_fields=['status', 'ended_at', 'end_reason'])
+    return shift
+
+
 def create_session(user, facility, surface, request):
     """Create a revocable session and return (session, access, refresh)."""
     from .authentication.jwt import generate_jwt_token
@@ -438,6 +473,7 @@ def create_session(user, facility, surface, request):
         user.user_id, user.role, session_id=session.session_id,
         surface=session.surface, jti=jti,
     )
+    open_staff_shift(user, facility)
     audit(
         'IAM_LOGIN_SUCCESS', actor_id=user.user_id, entity_type='Session',
         entity_id=session.session_id, request=request,
@@ -491,6 +527,16 @@ def revoke_session(session, *, reason='logout', request=None):
     session.is_active = False
     session.revoked_at = timezone.now()
     session.save(update_fields=['is_active', 'revoked_at'])
+    # Only clock out when no other active session keeps this person online at
+    # the same site (web + mobile is one shift, not two).
+    from .models import Session
+    still_online = Session.objects.filter(
+        user_id=session.user_id, facility_id=session.facility_id,
+        is_active=True, revoked_at__isnull=True,
+    ).exists()
+    if not still_online:
+        close_staff_shift(session.user, session.facility,
+                          reason='FORCED' if reason == 'forced' else 'MANUAL')
     audit('IAM_LOGOUT', actor_id=session.user_id, entity_type='Session',
           entity_id=session.session_id, request=request, reason=reason)
 

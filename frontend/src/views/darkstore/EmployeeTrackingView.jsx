@@ -1,9 +1,10 @@
-import React, { useMemo } from 'react';
-import { RefreshCw, AlertTriangle, Users2 } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { RefreshCw, AlertTriangle, Users2, LogOut } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useDarkStore, useAsyncData, asList } from './useDarkStore';
-import { fetchApi } from '../../api/client';
+import { useAuth } from '../../context/AuthContext';
+import { fetchApi, postApi } from '../../api/client';
 
 const dateOf = (value) => (value ? new Date(value) : null);
 const within = (value, start) => {
@@ -45,6 +46,9 @@ const taskOwner = (task) => String(task.completed_by || task.assigned_to || task
 const distinct = (rows, key) => new Set(rows.map((row) => String(row[key])).filter(Boolean)).size;
 
 function Tracking({ storeCode, siteId }) {
+  const { user: currentUser } = useAuth();
+  const [busyLogout, setBusyLogout] = useState(null);
+  const [notice, setNotice] = useState('');
   const { data: assignments, error, loading, reload } = useAsyncData(
     () => fetchApi(`/network/manpower?site=${encodeURIComponent(storeCode)}`).then((r) => asList(r, '/network/manpower')),
     [storeCode],
@@ -95,11 +99,27 @@ function Tracking({ storeCode, siteId }) {
     [siteId],
     { pollMs: 0 },
   );
-  const { data: staffShifts } = useAsyncData(
+  const { data: staffShifts, reload: reloadShifts } = useAsyncData(
     () => fetchApi(`/network/staff-shifts/?site=${encodeURIComponent(siteId)}&page_size=500`).then((r) => asList(r, '/network/staff-shifts')),
     [siteId],
     { pollMs: 0 },
   );
+
+  const forceLogout = async (row) => {
+    const label = row.name || row.email || 'this employee';
+    if (!window.confirm(`Log out ${label}? Their open shift will be closed.`)) return;
+    setBusyLogout(String(row.user));
+    setNotice('');
+    try {
+      const result = await postApi(`/iam/users/${row.user}/force-logout/`, {});
+      await Promise.all([reload({ quiet: true }), reloadShifts({ quiet: true })]);
+      setNotice(`${label} logged out. ${result?.shifts_closed || 0} shift(s) closed.`);
+    } catch (err) {
+      setNotice(err?.message || 'Could not log out this employee.');
+    } finally {
+      setBusyLogout(null);
+    }
+  };
 
   const now = new Date();
   const weekStart = startOfWeek(now);
@@ -231,6 +251,11 @@ function Tracking({ storeCode, siteId }) {
           <span>{error}</span>
         </div>
       )}
+      {notice && (
+        <div className="scan-feedback scan-feedback--hint" style={{ marginBottom: 12 }}>
+          <span>{notice}</span>
+        </div>
+      )}
 
       <div className="table-container">
         <table className="data-table">
@@ -249,6 +274,7 @@ function Tracking({ storeCode, siteId }) {
               <th>Rate</th>
               <th>This week</th>
               <th>This month / salary</th>
+              <th>Attendance</th>
             </tr>
           </thead>
           <tbody>
@@ -256,6 +282,10 @@ function Tracking({ storeCode, siteId }) {
               const rollup = row.user ? latestRollup.get(row.user) : null;
               const task = row.user ? latestWork.get(row.user) : null;
               const metric = metrics[row.user || row.employee] || {};
+              const closed = (staffShifts || [])
+                .filter((s) => String(s.user) === String(row.user) && s.status === 'CLOSED' && s.ended_at)
+                .sort((a, b) => String(b.ended_at).localeCompare(String(a.ended_at)));
+              const lastOut = closed[0]?.ended_at;
               return (
                 <tr key={row.assignment_id || row.employee}>
                   <td>
@@ -270,7 +300,12 @@ function Tracking({ storeCode, siteId }) {
                     <StatusBadge status={row.on_shift ? 'ON SHIFT' : 'OFF SHIFT'} />
                     {row.shift_started_at && (
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                        {new Date(row.shift_started_at).toLocaleString()}
+                        In: {new Date(row.shift_started_at).toLocaleString()}
+                      </div>
+                    )}
+                    {lastOut && (
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                        Out: {new Date(lastOut).toLocaleString()}
                       </div>
                     )}
                   </td>
@@ -285,12 +320,29 @@ function Tracking({ storeCode, siteId }) {
                     {money(metric.month)}
                     {metric.salary != null && <span style={{ color: 'var(--text-muted)' }}> · salary {money(metric.salary)}/mo</span>}
                   </td>
+                  <td>
+                    {currentUser?.is_admin && row.user ? (
+                      <button
+                        type="button"
+                        className="btn-ui neutral"
+                        disabled={busyLogout === String(row.user)}
+                        onClick={() => forceLogout(row)}
+                        title="Revoke sessions and close this employee's open shift"
+                        style={{ padding: '3px 8px', fontSize: 11, height: 26 }}
+                      >
+                        <LogOut size={12} />
+                        {busyLogout === String(row.user) ? '…' : 'Log out'}
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={13} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                <td colSpan={14} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
                   <Users2 size={18} style={{ marginBottom: 4 }} />
                   <div>No employees assigned to this store.</div>
                 </td>
