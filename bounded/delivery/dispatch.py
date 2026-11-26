@@ -26,7 +26,8 @@ from bounded.delivery.models import DeliveryTask, RiderProfile
 # Task states where the rider is still holding the order. Once they hit
 # DELIVERED / FAILED / RETURNED the rider has free capacity again.
 ACTIVE_RIDER_STATES = {
-    'ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED', 'POD_PENDING',
+    'OFFERED', 'ACCEPTED', 'AT_DS', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED',
+    'POD_PENDING',
 }
 
 

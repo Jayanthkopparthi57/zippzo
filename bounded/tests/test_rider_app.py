@@ -208,6 +208,24 @@ class RiderJobTests(RiderAppBase):
             to_status='RIDER_ASSIGNED').exists(),
             'the shopper cannot see the assignment in their timeline')
 
+    def test_rider_already_on_a_delivery_cannot_take_another(self):
+        first = self.make_order(order_no='RA-BUSY-1')
+        self.make_task(first, status='PICKED_UP', rider=self.profile)
+        second = self.make_order(order_no='RA-BUSY-2')
+        second_task = self.make_task(second)
+        response = self.api_for(self.rider).post(
+            f'{TASKS}{second_task.task_id}/accept/', {}, format='json')
+        self.assertEqual(409, response.status_code, response.data)
+        self.assertEqual('one_delivery_at_a_time', response.data.get('code'))
+        second_task.refresh_from_db()
+        self.assertIsNone(second_task.rider_id)
+
+    def test_offered_job_counts_as_busy_for_dispatch(self):
+        from bounded.delivery.dispatch import rider_active_count
+        order = self.make_order(order_no='RA-OFFERED')
+        self.make_task(order, status='OFFERED', rider=self.profile)
+        self.assertEqual(1, rider_active_count(self.profile))
+
     def test_an_offline_rider_cannot_take_a_job(self):
         self.profile.is_online = False
         self.profile.save(update_fields=['is_online'])

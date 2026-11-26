@@ -711,6 +711,17 @@ class DeliveryTaskViewSet(viewsets.ModelViewSet):
             return Response({
                 'error': 'You are offline. Go online before taking a job.'
             }, status=409)
+        # One delivery at a time. A rider who is already carrying (or has been
+        # offered) another job must finish it before taking this one.
+        from .dispatch import ACTIVE_RIDER_STATES
+        busy = DeliveryTask.objects.filter(
+            rider=profile, status__in=ACTIVE_RIDER_STATES,
+        ).exclude(pk=task.pk).exists()
+        if busy:
+            return Response({
+                'error': 'Finish your current delivery before taking another job.',
+                'code': 'one_delivery_at_a_time',
+            }, status=409)
 
         now = timezone.now()
         task.rider = profile
