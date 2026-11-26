@@ -1516,12 +1516,13 @@ class UserViewSet(viewsets.ModelViewSet):
         count = sessions.count()
         sessions.update(is_active=False, revoked_at=now)
         shifts = StaffShift.objects.filter(user=target, site=site, status='OPEN')
+        shifts_closed = shifts.count()
         shifts.update(status='CLOSED', ended_at=now, end_reason='FORCED')
         staff_auth.audit('IAM_EMPLOYEE_FORCE_LOGOUT', actor_id=request.user.user_id,
                          entity_type='User', entity_id=target.user_id,
                          request=request, result='ALLOWED')
         return Response({'success': True, 'sessions_revoked': count,
-                         'shifts_closed': shifts.count()})
+                         'shifts_closed': shifts_closed})
 
     @action(detail=True, methods=['post'], url_path='remove')
     def remove_employee(self, request, pk=None):
