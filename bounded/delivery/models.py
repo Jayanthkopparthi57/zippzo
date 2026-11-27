@@ -78,6 +78,11 @@ class DeliveryTask(models.Model):
     # order.packed event; set to NULL rather than cascading if that pack row is
     # removed, since the order itself is the durable record.
     staging_bin = models.CharField(max_length=50, null=True, blank=True)
+    # Packer drops the staged bag in a collection bin; the rider scans this
+    # code before the handoff can complete.
+    bin_code = models.CharField(max_length=50, blank=True, default='')
+    bin_dropped_at = models.DateTimeField(null=True, blank=True)
+    bin_dropped_by = models.CharField(max_length=100, blank=True, default='')
     packed_at = models.DateTimeField(null=True, blank=True)
     cash_collected_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

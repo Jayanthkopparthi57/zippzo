@@ -1023,6 +1023,27 @@ class DeliveryPickupView(APIView):
         except ValidationError as e:
             return Response({'error': 'Not your task.', **e.detail}, status=403)
 
+        # The packer confirms the bag is in a collection bin before the rider
+        # may collect it. The rider scans that bin code at the counter.
+        if task.bin_dropped_at:
+            supplied = str(
+                request.data.get('bin_code')
+                or request.data.get('lpn_barcode')
+                or ''
+            ).strip().upper()
+            expected = str(task.bin_code or task.staging_bin or '').strip().upper()
+            if not supplied:
+                return Response({
+                    'error': 'Scan the collection bin code before taking this bag.',
+                    'code': 'bin_code_required',
+                }, status=409)
+            if supplied != expected:
+                return Response({
+                    'error': f'This bag is in bin {expected}, not {supplied}.',
+                    'code': 'wrong_bin',
+                    'expected_bin': expected,
+                }, status=409)
+
         try:
             result = rider_pickup(
                 task=task, actor=request.user)

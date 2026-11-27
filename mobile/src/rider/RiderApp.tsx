@@ -170,6 +170,12 @@ const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
     };
   }, [active]);
 
+  const collectBin = (task: Task, binCode: string) => withBusy(async () => {
+    await api.pickupDelivery(task.task_id, binCode.trim());
+    flash('Bag collected. You can start the delivery.');
+    await load();
+  }, 'Could not collect the bag. Check the bin code.');
+
   const flash = (message: string) => {
     setNotice(message);
     setError('');
@@ -450,6 +456,7 @@ const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
                   myPos={myPos}
                   onAdvance={advance}
                   onPod={setPodTask}
+                  onPickup={collectBin}
                 />
               ))
             )}
@@ -538,6 +545,7 @@ const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
                 myPos={myPos}
                 onAdvance={advance}
                 onPod={setPodTask}
+                onPickup={collectBin}
               />
             ))}
           </>
@@ -878,7 +886,7 @@ function SetupView({ onDone }: { onDone: () => Promise<void> }) {
 }
 
 function JobCard({
-  task, busy, compact, onAdvance, onPod, myPos,
+  task, busy, compact, onAdvance, onPod, onPickup, myPos,
 }: {
   task: Task;
   busy: boolean;
@@ -886,7 +894,9 @@ function JobCard({
   myPos?: { lat: number; lng: number } | null;
   onAdvance: (task: Task, to: string) => void;
   onPod: (task: Task) => void;
+  onPickup: (task: Task, binCode: string) => void;
 }) {
+  const [binCode, setBinCode] = useState(String(task.bin_code || task.staging_bin || ''));
   const map = () => {
     const url = task.geo_lat && task.geo_lng
       ? `https://www.google.com/maps/dir/?api=1&destination=${task.geo_lat},${task.geo_lng}`
@@ -903,9 +913,11 @@ function JobCard({
       case 'ACCEPTED':
         return { label: "I'm at the store", run: () => onAdvance(task, 'AT_DS') };
       case 'AT_DS':
-        // The picker confirms the handoff at the store; the rider only taps
-        // through once the order is physically in hand.
-        return { label: 'Waiting for the store to hand it over…', run: () => null, disabled: true };
+        return {
+          label: binCode.trim() ? 'Collect bag from bin' : 'Scan the bin code to collect',
+          run: () => onPickup(task, binCode || String(task.staging_bin || '')),
+          disabled: !binCode.trim() && !task.staging_bin,
+        };
       case 'PICKED_UP':
         return { label: 'Start delivery', run: () => onAdvance(task, 'EN_ROUTE') };
       case 'EN_ROUTE':
@@ -995,6 +1007,20 @@ function JobCard({
           <Text style={s.ghostBtnText}>Navigate</Text>
         </TouchableOpacity>
       </View>
+
+      {task.status === 'AT_DS' ? (
+        <View style={{ marginTop: 8 }}>
+          <Text style={s.label}>Collection bin code</Text>
+          <TextInput
+            style={s.input}
+            value={binCode}
+            onChangeText={setBinCode}
+            placeholder="Scan or type the bin code"
+            placeholderTextColor="#8b95a1"
+            autoCapitalize="characters"
+          />
+        </View>
+      ) : null}
 
       {step ? (
         <TouchableOpacity

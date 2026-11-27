@@ -5,6 +5,7 @@ from .views import PickTaskViewSet, PackTaskViewSet, SortingWaveViewSet, StagedA
 from .pick_scan import (DSPickLinesView, DSPickLineView, DSPickAbandonView,
                        DSResolveBinView, DSAllocateOrderView)
 from .pack_scan import DSPackOrderView
+from .bin_drop import DSBinDropView
 from .rack_drop import (DSRackDropView, DSAssignOrderView, DSPendingPicksView,
                         DSDeliveryQueueView, DSDepartmentStatusView,
                         DSOrderTrackView, DSMyPicksView)
@@ -31,6 +32,7 @@ urlpatterns = [
     path('pick-abandon', DSPickAbandonView.as_view(), name='ds-pick-abandon'),
     path('resolve-bin', DSResolveBinView.as_view(), name='ds-resolve-bin'),
     path('pack-order', DSPackOrderView.as_view(), name='ds-pack-order'),
+    path('bin-drop', DSBinDropView.as_view(), name='ds-bin-drop'),
     path('rack-drop', DSRackDropView.as_view(), name='ds-rack-drop'),
     path('assign-order', DSAssignOrderView.as_view(), name='ds-assign-order'),
     path('pending-picks', DSPendingPicksView.as_view(), name='ds-pending-picks'),

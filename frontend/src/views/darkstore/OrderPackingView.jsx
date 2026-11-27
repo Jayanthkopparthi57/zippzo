@@ -8,6 +8,7 @@ import { useToast } from '../../components/ui/Toast';
 import {
   useDarkStore, useAsyncData, loadOrderQueue, packOrder,
 } from './useDarkStore';
+import { postApi } from '../../api/client';
 
 /**
  * Dark-store packing worklist.
@@ -33,6 +34,8 @@ function PackStation({ siteId }) {
   const [filterQuery, setFilterQuery] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [stagingBin, setStagingBin] = useState('');
+  const [packResult, setPackResult] = useState(null);
+  const [dropBin, setDropBin] = useState('');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
 
@@ -41,6 +44,8 @@ function PackStation({ siteId }) {
   const openPackForm = (order) => {
     setSelectedOrder(order);
     setStagingBin('');
+    setPackResult(null);
+    setDropBin('');
     setFeedback(null);
   };
 
@@ -53,18 +58,40 @@ function PackStation({ siteId }) {
     setBusy(true);
     setFeedback(null);
     try {
-      await packOrder(selectedOrder.order_id, {
+      const result = await packOrder(selectedOrder.order_id, {
         stagingBin: stagingBin.trim(),
       });
-      toast.success(`${selectedOrder.order_no} signed for staging at ${stagingBin.trim()}`);
+      setPackResult(result?.delivery_task || null);
+      setDropBin(result?.staging_bin || stagingBin.trim());
       setFeedback({
         type: 'success',
-        message: `Staged at ${stagingBin.trim()}; the rider job is live.`,
+        message: `Packed at ${stagingBin.trim()}. Now drop the bag in the collection bin so the rider can collect it.`,
       });
+      toast.success(`${selectedOrder.order_no} packed`);
+      await reload({ quiet: true });
+    } catch (err) {
+      setFeedback({ type: 'error', message: err.message || 'Staging failed.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleBinDrop = async () => {
+    if (!packResult || !dropBin.trim()) {
+      setFeedback({ type: 'error', message: 'Enter the collection bin code.' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await postApi('/ds-ops/bin-drop', {
+        task_id: packResult.task_id,
+        bin_code: dropBin.trim(),
+      });
+      toast.success(`Bag dropped in ${dropBin.trim()}`);
       setSelectedOrder(null);
       await reload();
     } catch (err) {
-      setFeedback({ type: 'error', message: err.message || 'Staging failed.' });
+      setFeedback({ type: 'error', message: err?.message || 'Could not record the bin drop.' });
     } finally {
       setBusy(false);
     }
@@ -212,25 +239,50 @@ function PackStation({ siteId }) {
                   <span>{feedback.message}</span>
                 </div>
               )}
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Staging slot</label>
-                <input
-                  type="text"
-                  className="table-filter-input"
-                  value={stagingBin}
-                  onChange={(e) => setStagingBin(e.target.value)}
-                  placeholder="e.g. STAGE-01"
-                />
-              </div>
+              {packResult ? (
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                    Step 2 — collection bin code (the rider scans this)
+                  </label>
+                  <input
+                    type="text"
+                    className="table-filter-input"
+                    value={dropBin}
+                    onChange={(e) => setDropBin(e.target.value)}
+                    placeholder="e.g. BIN-07"
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                    Put the packed bag in this bin, then confirm. The rider job only opens for collection after this step.
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Staging slot</label>
+                  <input
+                    type="text"
+                    className="table-filter-input"
+                    value={stagingBin}
+                    onChange={(e) => setStagingBin(e.target.value)}
+                    placeholder="e.g. STAGE-01"
+                  />
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button type="button" className="btn-ui neutral" onClick={() => setSelectedOrder(null)} disabled={busy}>
                 Cancel
               </button>
-              <button type="button" className="btn-ui primary" onClick={handlePackOrder} disabled={busy}>
-                <PackageCheck size={13} />
-                <span>{busy ? 'Staging...' : 'Pack & Stage'}</span>
-              </button>
+              {packResult ? (
+                <button type="button" className="btn-ui primary" onClick={handleBinDrop} disabled={busy}>
+                  <PackageCheck size={13} />
+                  <span>{busy ? 'Dropping…' : 'Drop to bin'}</span>
+                </button>
+              ) : (
+                <button type="button" className="btn-ui primary" onClick={handlePackOrder} disabled={busy}>
+                  <PackageCheck size={13} />
+                  <span>{busy ? 'Packing…' : 'Pack bag'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -70,7 +70,7 @@ class DeliveryTaskSerializer(serializers.ModelSerializer):
         # is written only through the `toggle-cash-collected` action — PATCH on
         # this field is left out on purpose because it is the counter's own
         # memo, not something a rider should be able to set on the order.
-        fields = ['task_id','order','order_no','shipped_qty','site','rider','rider_name','staging_bin','status','offer_count','offer_surge','order_weight_kg','order_volume_cbm','requires_cold_chain','offered_at','accepted_at','pickup_at','packed_at','delivered_at','distance_m','eta_at','attempt_no','route_plan_id','route_seq','customer_name','customer_phone','delivery_address','geo_lat','geo_lng','grand_total','delivery_fee','payment_method','payment_status','cash_collected_at','created_at']
+        fields = ['task_id','order','order_no','shipped_qty','site','rider','rider_name','staging_bin','bin_code','bin_dropped_at','bin_dropped_by','status','offer_count','offer_surge','order_weight_kg','order_volume_cbm','requires_cold_chain','offered_at','accepted_at','pickup_at','packed_at','delivered_at','distance_m','eta_at','attempt_no','route_plan_id','route_seq','customer_name','customer_phone','delivery_address','geo_lat','geo_lng','grand_total','delivery_fee','payment_method','payment_status','cash_collected_at','created_at']
         read_only_fields = ['task_id','created_at']
 
     def get_rider_name(self, obj):
