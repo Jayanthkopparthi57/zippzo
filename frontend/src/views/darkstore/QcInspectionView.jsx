@@ -155,10 +155,10 @@ export default function QcInspectionView() {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.qc_id}>
-                    <td className="mono-num">{r.grn_no || 'â€”'}</td>
-                    <td className="mono-num">{r.asn_no || 'â€”'}</td>
+                    <td className="mono-num">{r.grn_no || '—'}</td>
+                    <td className="mono-num">{r.asn_no || '—'}</td>
                     <td>
-                      <div className="entity-card__title">{r.sku_name || 'â€”'}</div>
+                      <div className="entity-card__title">{r.sku_name || '—'}</div>
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{r.sku_code || ''}</div>
                     </td>
                     <td className="mono-num">{r.received_qty ?? 0}</td>

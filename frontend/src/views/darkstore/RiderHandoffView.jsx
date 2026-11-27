@@ -261,7 +261,7 @@ function Handoff({ siteId }) {
                     <td>
                       <div>
                         <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
-                          {t.order_no || t.order || 'â€”'}
+                          {t.order_no || t.order || '—'}
                         </strong>
                         <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                           TASK: {String(t.task_id).slice(0, 10)}
@@ -270,12 +270,12 @@ function Handoff({ siteId }) {
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)' }}>
-                        {t.staging_bin || 'â€”'}
+                        {t.staging_bin || '—'}
                       </span>
                     </td>
                     <td>{t.rider_name || <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>}</td>
                     <td style={{ fontFamily: 'var(--font-mono)' }}>
-                      {t.order_weight_kg ? `${parseFloat(t.order_weight_kg).toFixed(2)} kg` : 'â€”'}
+                      {t.order_weight_kg ? `${parseFloat(t.order_weight_kg).toFixed(2)} kg` : '—'}
                     </td>
                     <td>
                       <StatusBadge status={t.status} />
@@ -313,7 +313,7 @@ function Handoff({ siteId }) {
                           </button>
                         )}
                         {!canPickup && !canPod && (
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>â€”</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
                         )}
                       </div>
                     </td>

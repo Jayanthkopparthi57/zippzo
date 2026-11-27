@@ -206,17 +206,17 @@ function Receipt({ storeCode, storeName }) {
                     <td>{row.source_name || row.source || 'Central Hub HYD080M'}</td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                        {row.seal_code || row.seal || 'â€”'}
+                        {row.seal_code || row.seal || '—'}
                       </span>
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                        {row.item_count ?? row.qty ?? 'â€”'} units
+                        {row.item_count ?? row.qty ?? '—'} units
                       </span>
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                        {row.dispatched_at ? new Date(row.dispatched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'â€”'}
+                        {row.dispatched_at ? new Date(row.dispatched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
                       </span>
                     </td>
                     <td>
