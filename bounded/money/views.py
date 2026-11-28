@@ -3,18 +3,22 @@ from decimal import Decimal, InvalidOperation
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
-from rest_framework import viewsets
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
+from bounded.iam.permissions import IsAdminUserOrReadOnly
+from . import payouts
+from .cashfree_payouts import CashfreePayoutError
 from .models import (Payment, CancelIntent, Refund, RefundDecision, CashMovement,
                      RiderCustodyState, RiderEarnings, RiderPayout,
-                     DeliveryPricingRule)
+                     EmployeeBankDetail, SalaryPayment, DeliveryPricingRule)
 from .serializers import (PaymentSerializer, CancelIntentSerializer,
                           RefundSerializer, RefundDecisionSerializer,
                           CashMovementSerializer, RiderCustodyStateSerializer,
                           RiderEarningsSerializer, RiderPayoutSerializer,
+                          EmployeeBankDetailSerializer, SalaryPaymentSerializer,
                           DeliveryPricingRuleSerializer)
 
 
@@ -660,3 +664,70 @@ class DeliveryPricingRuleViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 'Delivery pricing is set by an administrator or ops.')
         instance.delete()
+
+class EmployeeBankDetailViewSet(viewsets.ModelViewSet):
+    """Staff beneficiary bank details, readable by operators and edited by admins."""
+    queryset = EmployeeBankDetail.objects.select_related('user').all()
+    serializer_class = EmployeeBankDetailSerializer
+    permission_classes = [IsAdminUserOrReadOnly]
+    search_fields = ['user__email', 'user__full_name', 'account_holder_name']
+
+
+class SalaryPaymentViewSet(viewsets.ModelViewSet):
+    """Salary disbursements, optionally settled through Cashfree Payouts."""
+    queryset = SalaryPayment.objects.select_related('user', 'site').all()
+    serializer_class = SalaryPaymentSerializer
+    permission_classes = [IsAdminUserOrReadOnly]
+    filterset_fields = ['user', 'site', 'status', 'payout_status']
+    search_fields = ['user__email', 'user__full_name', 'reference']
+    ordering_fields = ['created_at', 'amount', 'period_end']
+
+    def perform_create(self, serializer):
+        uid = getattr(self.request.user, 'user_id', None)
+        serializer.save(created_by=uid if uid else None)
+
+    @action(detail=True, methods=['post'], url_path='pay')
+    def pay(self, request, pk=None):
+        record = self.get_object()
+        if record.payout_channel == 'CASHFREE' and record.payout_status in ('PENDING', 'SUCCESS'):
+            return Response({'error': 'This salary has already been sent to Cashfree.'},
+                            status=status.HTTP_409_CONFLICT)
+        detail = EmployeeBankDetail.objects.filter(user=record.user).first()
+        if not detail or not (detail.bank_account_number and detail.ifsc):
+            return Response({'error': 'Add this employee bank account and IFSC before paying.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        beneficiary = f'EMP_{str(record.user_id).replace("-", "")[:20]}'
+        reference = f'SP{str(record.payment_id).replace("-", "")[:20]}'
+        name = detail.account_holder_name or record.user.full_name or record.user.email
+        try:
+            values = payouts.start_payout(
+                record, beneficiary_id=beneficiary, amount=record.amount,
+                reference_id=reference, purpose='SALARY',
+                name=name, email=record.user.email, phone=record.user.phone,
+                account=detail.bank_account_number, ifsc=detail.ifsc,
+                address='')
+        except CashfreePayoutError as exc:
+            record.payout_channel = 'CASHFREE'
+            record.payout_status = 'FAILED'
+            record.payout_error = str(exc)[:240]
+            record.save(update_fields=['payout_channel', 'payout_status', 'payout_error'])
+            return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        for key, value in values.items():
+            setattr(record, key, value)
+        record.save(update_fields=list(values))
+        return Response(self.get_serializer(record).data)
+
+    @action(detail=True, methods=['post'], url_path='sync-payout')
+    def sync_payout(self, request, pk=None):
+        record = self.get_object()
+        if record.payout_channel != 'CASHFREE' or not record.transfer_id:
+            return Response({'error': 'This salary was not sent through Cashfree.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            values = payouts.sync_payout(record)
+        except CashfreePayoutError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        for key, value in values.items():
+            setattr(record, key, value)
+        record.save(update_fields=list(values))
+        return Response(self.get_serializer(record).data)

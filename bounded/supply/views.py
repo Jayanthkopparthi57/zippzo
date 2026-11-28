@@ -9,6 +9,8 @@ from django.db.models import Sum
 from django.utils import timezone
 from bounded.iam.names import AttributionContextMixin, acting_user_id
 from bounded.iam.permissions import IsAdminUserOrReadOnly, IsFieldSurface
+from bounded.money import payouts
+from bounded.money.cashfree_payouts import CashfreePayoutError
 from .models import Vendor, VendorPayment, Seller, Asn, AsnLine, Grn, GrnLine, DockDiscrepancy, QcInspection, PutawayTask, PutawayStrategy, VendorLicense, SellerCategoryApproval
 from .serializers import VendorSerializer, VendorPaymentSerializer, SellerSerializer, AsnSerializer, AsnLineSerializer, GrnSerializer, GrnLineSerializer, DockDiscrepancySerializer, QcInspectionSerializer, PutawayTaskSerializer, PutawayStrategySerializer, VendorLicenseSerializer, SellerCategoryApprovalSerializer
 
@@ -180,6 +182,52 @@ class VendorPaymentViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         uid = getattr(self.request.user, 'user_id', None)
         serializer.save(created_by=uid if uid else None)
+
+    @action(detail=True, methods=['post'], url_path='pay')
+    def pay(self, request, pk=None):
+        """Send this vendor payment through Cashfree Payouts."""
+        record = self.get_object()
+        if record.payout_channel == 'CASHFREE' and record.payout_status in ('PENDING', 'SUCCESS'):
+            return Response({'error': 'This payment has already been sent to Cashfree.'},
+                            status=status.HTTP_409_CONFLICT)
+        vendor = record.vendor
+        if not (vendor.bank_account_number and vendor.ifsc):
+            return Response({'error': 'Add the vendor bank account and IFSC before paying.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        beneficiary = f'VEN_{str(vendor.vendor_id).replace("-", "")[:20]}'
+        reference = f'VP{str(record.payment_id).replace("-", "")[:20]}'
+        try:
+            values = payouts.start_payout(
+                record, beneficiary_id=beneficiary, amount=record.amount,
+                reference_id=reference, purpose='VENDOR_PAYMENT',
+                name=vendor.name, email=vendor.email, phone=vendor.contact_phone,
+                account=vendor.bank_account_number, ifsc=vendor.ifsc,
+                address=vendor.address)
+        except CashfreePayoutError as exc:
+            record.payout_channel = 'CASHFREE'
+            record.payout_status = 'FAILED'
+            record.payout_error = str(exc)[:240]
+            record.save(update_fields=['payout_channel', 'payout_status', 'payout_error'])
+            return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        for key, value in values.items():
+            setattr(record, key, value)
+        record.save(update_fields=list(values))
+        return Response(self.get_serializer(record).data)
+
+    @action(detail=True, methods=['post'], url_path='sync-payout')
+    def sync_payout(self, request, pk=None):
+        record = self.get_object()
+        if record.payout_channel != 'CASHFREE' or not record.transfer_id:
+            return Response({'error': 'This payment was not sent through Cashfree.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            values = payouts.sync_payout(record)
+        except CashfreePayoutError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        for key, value in values.items():
+            setattr(record, key, value)
+        record.save(update_fields=list(values))
+        return Response(self.get_serializer(record).data)
 
 
 class SellerViewSet(viewsets.ModelViewSet):

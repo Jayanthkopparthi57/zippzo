@@ -150,6 +150,57 @@ class RiderPayout(models.Model):
         return f'Payout {self.payout_id} · {self.rider_id} · {self.amount}'
 
 
+class EmployeeBankDetail(models.Model):
+    """Payout beneficiary details for a staff member, maintained by an admin."""
+    detail_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        'iam.User', on_delete=models.CASCADE, related_name='bank_detail')
+    bank_name = models.CharField(max_length=80, blank=True)
+    bank_account_number = models.CharField(max_length=40, blank=True)
+    ifsc = models.CharField(max_length=20, blank=True)
+    account_holder_name = models.CharField(max_length=120, blank=True)
+    upi_id = models.CharField(max_length=80, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_bank_details'
+
+    def __str__(self):
+        return f'{self.user.email} bank details'
+
+
+class SalaryPayment(models.Model):
+    """One salary disbursement (manual or Cashfree) to one employee."""
+    STATUS_CHOICES = [('PENDING', 'Pending'), ('PAID', 'Paid'), ('FAILED', 'Failed')]
+    payment_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey('iam.User', on_delete=models.CASCADE, related_name='salary_payments')
+    site = models.ForeignKey('network.Site', on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name='salary_payments')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    period_start = models.DateField(null=True, blank=True)
+    period_end = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    reference = models.CharField(max_length=80, blank=True)
+    notes = models.TextField(blank=True)
+    payout_channel = models.CharField(max_length=20, default='MANUAL')  # MANUAL | CASHFREE
+    payout_status = models.CharField(max_length=20, default='NOT_STARTED')
+    beneficiary_id = models.CharField(max_length=60, blank=True)
+    transfer_id = models.CharField(max_length=60, blank=True)
+    payout_reference = models.CharField(max_length=80, blank=True)
+    payout_error = models.CharField(max_length=240, blank=True)
+    payout_initiated_at = models.DateTimeField(null=True, blank=True)
+    payout_completed_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.UUIDField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'salary_payments'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.user.email} · {self.amount}'
+
+
 
 # What checkout charges for delivery when the store has no rule of its own.
 # Keeping the flat number here rather than in checkout means the fallback and

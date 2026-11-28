@@ -1,7 +1,39 @@
 from rest_framework import serializers
 from .models import (Payment, CancelIntent, Refund, RefundDecision, CashMovement,
                      RiderCustodyState, RiderEarnings, RiderPayout,
-                     DeliveryPricingRule)
+                     EmployeeBankDetail, SalaryPayment, DeliveryPricingRule)
+
+class EmployeeBankDetailSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='user.full_name', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+
+    class Meta:
+        model = EmployeeBankDetail
+        fields = ['detail_id', 'user', 'employee_name', 'email', 'bank_name',
+                  'bank_account_number', 'ifsc', 'account_holder_name', 'upi_id', 'updated_at']
+        read_only_fields = ['detail_id', 'employee_name', 'email', 'updated_at']
+
+
+class SalaryPaymentSerializer(serializers.ModelSerializer):
+    employee_name = serializers.SerializerMethodField()
+    employee_email = serializers.CharField(source='user.email', read_only=True)
+    site_code = serializers.CharField(source='site.code', read_only=True, allow_null=True)
+
+    class Meta:
+        model = SalaryPayment
+        fields = ['payment_id', 'user', 'employee_name', 'employee_email', 'site', 'site_code',
+                  'amount', 'period_start', 'period_end', 'status', 'reference', 'notes',
+                  'payout_channel', 'payout_status', 'beneficiary_id', 'transfer_id',
+                  'payout_reference', 'payout_error', 'payout_initiated_at', 'payout_completed_at',
+                  'created_by', 'created_at']
+        read_only_fields = ['payment_id', 'employee_name', 'employee_email', 'site_code',
+                            'payout_channel', 'payout_status', 'beneficiary_id', 'transfer_id',
+                            'payout_reference', 'payout_error', 'payout_initiated_at',
+                            'payout_completed_at', 'created_by', 'created_at']
+
+    def get_employee_name(self, obj):
+        return obj.user.full_name or obj.user.email
+
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:

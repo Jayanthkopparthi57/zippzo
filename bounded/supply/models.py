@@ -48,6 +48,14 @@ class VendorPayment(models.Model):
     account_holder_name = models.CharField(max_length=120, blank=True)
     reference = models.CharField(max_length=80, blank=True)
     notes = models.TextField(blank=True)
+    payout_channel = models.CharField(max_length=20, default='MANUAL')  # MANUAL | CASHFREE
+    payout_status = models.CharField(max_length=20, default='NOT_STARTED')  # NOT_STARTED | PENDING | SUCCESS | FAILED
+    beneficiary_id = models.CharField(max_length=60, blank=True)
+    transfer_id = models.CharField(max_length=60, blank=True)
+    payout_reference = models.CharField(max_length=80, blank=True)
+    payout_error = models.CharField(max_length=240, blank=True)
+    payout_initiated_at = models.DateTimeField(null=True, blank=True)
+    payout_completed_at = models.DateTimeField(null=True, blank=True)
     created_by = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

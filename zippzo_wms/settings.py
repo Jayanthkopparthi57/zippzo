@@ -406,6 +406,19 @@ CASHFREE_SECRET_KEY = os.environ.get('CASHFREE_SECRET_KEY', '').strip()
 CASHFREE_ENV = os.environ.get('CASHFREE_ENV', 'sandbox').strip().lower()
 CASHFREE_API_VERSION = os.environ.get('CASHFREE_API_VERSION', '2025-01-01').strip()
 
+# Cashfree Payouts (vendor payments and staff salaries). Payouts normally use a
+# separate app/secret pair; when the dedicated values are absent we fall back
+# to the PG credentials so sandbox setup stays simple. Paths are configurable
+# because Cashfree revisions rename them between API versions.
+CASHFREE_PAYOUT_APP_ID = os.environ.get('CASHFREE_PAYOUT_APP_ID', '').strip()
+CASHFREE_PAYOUT_SECRET_KEY = os.environ.get('CASHFREE_PAYOUT_SECRET_KEY', '').strip()
+CASHFREE_PAYOUT_BASE_URL = os.environ.get('CASHFREE_PAYOUT_BASE_URL', '').strip()
+CASHFREE_PAYOUT_API_VERSION = os.environ.get('CASHFREE_PAYOUT_API_VERSION', '2021-05-25').strip()
+CASHFREE_PAYOUT_TOKEN_PATH = os.environ.get('CASHFREE_PAYOUT_TOKEN_PATH', '/payout/v1/authorize').strip()
+CASHFREE_PAYOUT_BENEFICIARY_PATH = os.environ.get('CASHFREE_PAYOUT_BENEFICIARY_PATH', '/payout/v1/addBeneficiary').strip()
+CASHFREE_PAYOUT_TRANSFER_PATH = os.environ.get('CASHFREE_PAYOUT_TRANSFER_PATH', '/payout/v1/requestTransfer').strip()
+CASHFREE_PAYOUT_STATUS_PATH = os.environ.get('CASHFREE_PAYOUT_STATUS_PATH', '/payout/v1/getTransferStatus').strip()
+
 # Out-of-app notification channels. Every provider is optional: when a value is
 # empty the channel reports "skipped" and the in-app inbox still works.
 FCM_SERVER_KEY = os.environ.get('FCM_SERVER_KEY', '').strip()

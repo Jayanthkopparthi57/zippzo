@@ -19,6 +19,15 @@ const emptyPayment = () => ({
   reference: '', notes: '',
 });
 
+const emptySalary = () => ({
+  user: '', amount: '', period_start: '', period_end: '', reference: '', notes: '',
+});
+
+const emptyBank = () => ({
+  user: '', bank_name: '', bank_account_number: '', ifsc: '',
+  account_holder_name: '', upi_id: '',
+});
+
 const money = (value) => `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function Pill({ children, tone = 'neutral' }) {
@@ -33,27 +42,43 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
   const [tab, setTab] = useState('vendors');
   const [vendors, setVendors] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [salaries, setSalaries] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [bankDetails, setBankDetails] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [busyId, setBusyId] = useState('');
+  const [salaryForm, setSalaryForm] = useState(emptySalary());
+  const [bankForm, setBankForm] = useState(emptyBank());
+  const [editingSalary, setEditingSalary] = useState(null);
   const [vendorForm, setVendorForm] = useState(emptyVendor());
   const [editingVendor, setEditingVendor] = useState(null);
   const [paymentForm, setPaymentForm] = useState(emptyPayment());
   const [editingPayment, setEditingPayment] = useState(null);
   const [vendorSearch, setVendorSearch] = useState('');
   const [paymentSearch, setPaymentSearch] = useState('');
+  const [salarySearch, setSalarySearch] = useState('');
 
   const reload = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [vendorRows, paymentRows] = await Promise.all([
+      const [vendorRows, paymentRows, salaryRows, employeeRows, bankRows] = await Promise.all([
         fetchApi('/supply/vendors/?page_size=500'),
         fetchApi('/supply/vendor-payments/?page_size=500'),
+        fetchApi('/money/salary-payments/?page_size=500'),
+        fetchApi('/iam/users/?page_size=500'),
+        fetchApi('/money/employee-bank-details/?page_size=500'),
       ]);
       setVendors(Array.isArray(vendorRows) ? vendorRows : []);
       setPayments(Array.isArray(paymentRows) ? paymentRows : []);
+      setSalaries(Array.isArray(salaryRows) ? salaryRows : []);
+      setEmployees(Array.isArray(employeeRows)
+        ? employeeRows.filter((u) => u.role !== 'CUSTOMER' && u.status !== 'BLOCKED')
+        : []);
+      setBankDetails(Array.isArray(bankRows) ? bankRows : []);
     } catch (err) {
       setError(err?.message || 'Could not load vendor records.');
     } finally {
@@ -70,6 +95,95 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
 
   const updateVendor = (key, value) => setVendorForm((prev) => ({ ...prev, [key]: value }));
   const updatePayment = (key, value) => setPaymentForm((prev) => ({ ...prev, [key]: value }));
+  const updateSalary = (key, value) => setSalaryForm((prev) => ({ ...prev, [key]: value }));
+  const updateBank = (key, value) => setBankForm((prev) => ({ ...prev, [key]: value }));
+
+  const bankByUser = useMemo(() => {
+    const map = new Map();
+    bankDetails.forEach((row) => { if (row.user) map.set(String(row.user), row); });
+    return map;
+  }, [bankDetails]);
+
+  const employeeName = (userId) => {
+    const employee = employees.find((u) => String(u.user_id) === String(userId));
+    return employee ? (employee.full_name || employee.email) : '—';
+  };
+
+  const runPayoutAction = async (kind, row, action) => {
+    const base = kind === 'vendor' ? '/supply/vendor-payments' : '/money/salary-payments';
+    setBusyId(`${kind}-${action}-${row.payment_id}`);
+    setError('');
+    try {
+      const result = await postApi(`${base}/${row.payment_id}/${action}/`, {});
+      await reload();
+      showNotice(action === 'pay'
+        ? `Cashfree payout started · ${result?.payout_status || result?.status || 'sent'}.`
+        : `Payout status refreshed · ${result?.payout_status || result?.status || 'unknown'}.`);
+    } catch (err) {
+      setError(err?.message || `Could not ${action} this payout.`);
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const startEditSalary = (row) => {
+    setEditingSalary(row.payment_id);
+    setSalaryForm({
+      user: row.user, amount: row.amount,
+      period_start: String(row.period_start || '').slice(0, 10),
+      period_end: String(row.period_end || '').slice(0, 10),
+      reference: row.reference || '', notes: row.notes || '',
+    });
+    const detail = bankByUser.get(String(row.user));
+    if (detail) {
+      setBankForm({
+        user: detail.user, bank_name: detail.bank_name || '',
+        bank_account_number: detail.bank_account_number || '', ifsc: detail.ifsc || '',
+        account_holder_name: detail.account_holder_name || '', upi_id: detail.upi_id || '',
+      });
+    }
+  };
+
+  const saveSalary = async (event) => {
+    event.preventDefault();
+    if (!salaryForm.user || !salaryForm.amount) { setError('Employee and amount are required.'); return; }
+    setBusy(true); setError('');
+    try {
+      const payload = { ...salaryForm, amount: Number(salaryForm.amount).toFixed(2) };
+      if (editingSalary) await patchApi(`/money/salary-payments/${editingSalary}/`, payload);
+      else await postApi('/money/salary-payments/', payload);
+      setSalaryForm(emptySalary()); setEditingSalary(null);
+      await reload();
+      showNotice(editingSalary ? 'Salary updated.' : 'Salary recorded.');
+    } catch (err) {
+      setError(err?.message || 'Could not save salary.');
+    } finally { setBusy(false); }
+  };
+
+  const removeSalary = async (row) => {
+    if (!window.confirm(`Delete salary record of ${money(row.amount)}?`)) return;
+    setBusy(true);
+    try {
+      await deleteApi(`/money/salary-payments/${row.payment_id}/`);
+      await reload(); showNotice('Salary record deleted.');
+    } catch (err) {
+      setError(err?.message || 'Could not delete salary record.');
+    } finally { setBusy(false); }
+  };
+
+  const saveBankDetail = async (event) => {
+    event.preventDefault();
+    if (!bankForm.user) { setError('Choose an employee first.'); return; }
+    setBusy(true); setError('');
+    try {
+      const existing = bankByUser.get(String(bankForm.user));
+      if (existing) await patchApi(`/money/employee-bank-details/${existing.detail_id}/`, bankForm);
+      else await postApi('/money/employee-bank-details/', bankForm);
+      await reload(); showNotice('Employee bank details saved.');
+    } catch (err) {
+      setError(err?.message || 'Could not save bank details.');
+    } finally { setBusy(false); }
+  };
 
   const startEditVendor = (row) => {
     setEditingVendor(row.vendor_id);
@@ -175,6 +289,13 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
       .some((value) => String(value || '').toLowerCase().includes(q)));
   }, [payments, paymentSearch]);
 
+  const filteredSalaries = useMemo(() => {
+    const q = salarySearch.trim().toLowerCase();
+    if (!q) return salaries;
+    return salaries.filter((row) => [row.employee_name, row.employee_email, row.status, row.reference]
+      .some((value) => String(value || '').toLowerCase().includes(q)));
+  }, [salaries, salarySearch]);
+
   const totals = useMemo(() => {
     const paid = payments.filter((p) => p.status === 'COMPLETE').reduce((sum, p) => sum + Number(p.amount || 0), 0);
     const pending = payments.filter((p) => p.status === 'PENDING').reduce((sum, p) => sum + Number(p.amount || 0), 0);
@@ -211,6 +332,9 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
         </button>
         <button type="button" role="tab" aria-selected={tab === 'payments'} className={tab === 'payments' ? 'active' : ''} onClick={() => setTab('payments')}>
           <Wallet size={15} /> Vendor Payments
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'salaries'} className={tab === 'salaries' ? 'active' : ''} onClick={() => setTab('salaries')}>
+          <Users2 size={15} /> Salaries
         </button>
       </div>
 
@@ -304,7 +428,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
             <div className="vend-card__foot">Showing {filteredVendors.length} of {vendors.length} vendors</div>
           </section>
         </>
-      ) : (
+      ) : tab === 'payments' ? (
         <>
           <div className="vend-kpis">
             <div className="vend-kpi"><Users2 size={20} /><span>Total Vendors</span><strong>{vendors.length}</strong></div>
@@ -361,7 +485,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
             </div>
             <div className="vend-table-wrap">
               <table className="vend-table">
-                <thead><tr><th>#</th><th>Vendor Name</th><th>Amount (₹)</th><th>Payment Date</th><th>Status</th><th>Reference</th><th>Action</th></tr></thead>
+                <thead><tr><th>#</th><th>Vendor Name</th><th>Amount (₹)</th><th>Payment Date</th><th>Status</th><th>Reference</th><th>Payout</th><th>Action</th></tr></thead>
                 <tbody>
                   {filteredPayments.map((row, index) => (
                     <tr key={row.payment_id}>
@@ -371,17 +495,137 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
                       <td>{row.payment_date || '—'}</td>
                       <td><Pill tone={row.status === 'COMPLETE' ? 'success' : 'warning'}>{row.status === 'COMPLETE' ? 'Complete' : 'Pending'}</Pill></td>
                       <td>{row.reference || '—'}</td>
+                      <td>
+                        <Pill tone={row.payout_status === 'SUCCESS' ? 'success' : row.payout_status === 'FAILED' ? 'danger' : 'warning'}>
+                          {row.payout_channel === 'CASHFREE' ? (row.payout_status || 'PENDING') : 'Manual'}
+                        </Pill>
+                        {row.transfer_id && <div className="vend-mono" style={{ marginTop: 3, fontSize: 10 }}>{row.transfer_id}</div>}
+                      </td>
                       <td className="vend-actions">
+                        <button type="button" title="Pay via Cashfree" disabled={Boolean(busyId)} onClick={() => runPayoutAction('vendor', row, 'pay')}><Wallet size={13} /></button>
+                        {row.payout_channel === 'CASHFREE' && (
+                          <button type="button" title="Refresh payout status" disabled={Boolean(busyId)} onClick={() => runPayoutAction('vendor', row, 'sync-payout')}><CheckCircle2 size={13} /></button>
+                        )}
                         <button type="button" title="Edit" onClick={() => startEditPayment(row)}><Pencil size={13} /></button>
                         <button type="button" title="Delete" onClick={() => removePayment(row)}><Trash2 size={13} /></button>
                       </td>
                     </tr>
                   ))}
-                  {!filteredPayments.length && <tr><td colSpan={7} className="vend-empty">No payments recorded.</td></tr>}
+                  {!filteredPayments.length && <tr><td colSpan={8} className="vend-empty">No payments recorded.</td></tr>}
                 </tbody>
               </table>
             </div>
             <div className="vend-card__foot">Showing {filteredPayments.length} of {payments.length} payments</div>
+          </section>
+        </>
+      ) : (
+        <>
+          <div className="vend-kpis">
+            <div className="vend-kpi"><Users2 size={20} /><span>Employees</span><strong>{employees.length}</strong></div>
+            <div className="vend-kpi vend-kpi--green"><CheckCircle2 size={20} /><span>Salaries Paid</span><strong>{money(salaries.filter((s) => s.status === 'PAID').reduce((sum, s) => sum + Number(s.amount || 0), 0))}</strong></div>
+            <div className="vend-kpi vend-kpi--amber"><Clock3 size={20} /><span>Salary Pending</span><strong>{money(salaries.filter((s) => s.status === 'PENDING').reduce((sum, s) => sum + Number(s.amount || 0), 0))}</strong></div>
+            <div className="vend-kpi"><Wallet size={20} /><span>Bank Profiles</span><strong>{bankDetails.length}</strong></div>
+          </div>
+
+          <section className="vend-card">
+            <div className="vend-card__head vend-card__head--blue">
+              <Users2 size={18} />
+              <div><h2>Employee Bank Details</h2><p>Beneficiary account for Cashfree salary payouts.</p></div>
+            </div>
+            <form className="vend-form" onSubmit={saveBankDetail}>
+              <fieldset disabled={busy}>
+                <div className="vend-grid vend-grid--two">
+                  <label>Employee *
+                    <select value={bankForm.user} onChange={(e) => {
+                      const value = e.target.value;
+                      updateBank('user', value);
+                      const found = bankByUser.get(String(value));
+                      setBankForm(found ? {
+                        user: value, bank_name: found.bank_name || '',
+                        bank_account_number: found.bank_account_number || '',
+                        ifsc: found.ifsc || '', account_holder_name: found.account_holder_name || '',
+                        upi_id: found.upi_id || '',
+                      } : emptyBank());
+                    }}>
+                      <option value="">Select employee</option>
+                      {employees.map((u) => <option key={u.user_id} value={u.user_id}>{u.full_name || u.email}</option>)}
+                    </select>
+                  </label>
+                  <label>Account Holder Name<input value={bankForm.account_holder_name} onChange={(e) => updateBank('account_holder_name', e.target.value)} /></label>
+                  <label>Bank Name<input value={bankForm.bank_name} onChange={(e) => updateBank('bank_name', e.target.value)} /></label>
+                  <label>Bank Account Number<input value={bankForm.bank_account_number} onChange={(e) => updateBank('bank_account_number', e.target.value)} /></label>
+                  <label>IFSC Code<input value={bankForm.ifsc} onChange={(e) => updateBank('ifsc', e.target.value)} /></label>
+                  <label>UPI ID (optional)<input value={bankForm.upi_id} onChange={(e) => updateBank('upi_id', e.target.value)} /></label>
+                </div>
+                <div className="vend-form__actions">
+                  <button type="submit" className="vend-btn vend-btn--primary">Save Bank Details</button>
+                </div>
+              </fieldset>
+            </form>
+          </section>
+
+          <section className="vend-card">
+            <div className="vend-card__head">
+              <Wallet size={18} />
+              <div><h2>Salary Payments</h2><p>Record and disburse salaries through Cashfree.</p></div>
+              <div className="vend-card__tools">
+                <div className="vend-search"><Search size={14} /><input value={salarySearch} onChange={(e) => setSalarySearch(e.target.value)} placeholder="Search salaries…" /></div>
+                <button type="button" className="vend-btn" onClick={() => exportCsv(filteredSalaries.map((s) => [s.employee_name, s.amount, s.period_start, s.period_end, s.status]), ['Employee', 'Amount', 'From', 'To', 'Status'], 'salaries.csv')}><Download size={14} /> Export</button>
+              </div>
+            </div>
+            <form className="vend-form" onSubmit={saveSalary}>
+              <fieldset disabled={busy}>
+                <div className="vend-grid vend-grid--two">
+                  <label>Employee *
+                    <select value={salaryForm.user} onChange={(e) => updateSalary('user', e.target.value)}>
+                      <option value="">Select employee</option>
+                      {employees.map((u) => <option key={u.user_id} value={u.user_id}>{u.full_name || u.email}</option>)}
+                    </select>
+                  </label>
+                  <label>Amount (₹) *<input type="number" min="0" step="0.01" value={salaryForm.amount} onChange={(e) => updateSalary('amount', e.target.value)} /></label>
+                  <label>Period From<input type="date" value={salaryForm.period_start} onChange={(e) => updateSalary('period_start', e.target.value)} /></label>
+                  <label>Period To<input type="date" value={salaryForm.period_end} onChange={(e) => updateSalary('period_end', e.target.value)} /></label>
+                  <label>Reference<input value={salaryForm.reference} onChange={(e) => updateSalary('reference', e.target.value)} /></label>
+                  <label className="vend-span">Notes<input value={salaryForm.notes} onChange={(e) => updateSalary('notes', e.target.value)} /></label>
+                </div>
+                <div className="vend-form__actions">
+                  <button type="submit" className="vend-btn vend-btn--primary">{editingSalary ? 'Update Salary' : 'Record Salary'}</button>
+                  {editingSalary && <button type="button" className="vend-btn" onClick={() => { setEditingSalary(null); setSalaryForm(emptySalary()); }}>Cancel</button>}
+                </div>
+              </fieldset>
+            </form>
+            <div className="vend-table-wrap">
+              <table className="vend-table">
+                <thead><tr><th>#</th><th>Employee</th><th>Amount (₹)</th><th>Period</th><th>Status</th><th>Payout</th><th>Action</th></tr></thead>
+                <tbody>
+                  {filteredSalaries.map((row, index) => (
+                    <tr key={row.payment_id}>
+                      <td>{index + 1}</td>
+                      <td><b>{row.employee_name || employeeName(row.user)}</b></td>
+                      <td className="vend-mono">{money(row.amount)}</td>
+                      <td>{row.period_start || '—'} → {row.period_end || '—'}</td>
+                      <td><Pill tone={row.status === 'PAID' ? 'success' : row.status === 'FAILED' ? 'danger' : 'warning'}>{row.status}</Pill></td>
+                      <td>
+                        <Pill tone={row.payout_status === 'SUCCESS' ? 'success' : row.payout_status === 'FAILED' ? 'danger' : 'warning'}>
+                          {row.payout_channel === 'CASHFREE' ? (row.payout_status || 'PENDING') : 'Manual'}
+                        </Pill>
+                        {row.transfer_id && <div className="vend-mono" style={{ marginTop: 3, fontSize: 10 }}>{row.transfer_id}</div>}
+                      </td>
+                      <td className="vend-actions">
+                        <button type="button" title="Pay via Cashfree" disabled={Boolean(busyId)} onClick={() => runPayoutAction('salary', row, 'pay')}><Wallet size={13} /></button>
+                        {row.payout_channel === 'CASHFREE' && (
+                          <button type="button" title="Refresh payout status" disabled={Boolean(busyId)} onClick={() => runPayoutAction('salary', row, 'sync-payout')}><CheckCircle2 size={13} /></button>
+                        )}
+                        <button type="button" title="Edit" onClick={() => startEditSalary(row)}><Pencil size={13} /></button>
+                        <button type="button" title="Delete" onClick={() => removeSalary(row)}><Trash2 size={13} /></button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!filteredSalaries.length && <tr><td colSpan={7} className="vend-empty">No salary records yet.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <div className="vend-card__foot">Showing {filteredSalaries.length} of {salaries.length} salary records</div>
           </section>
         </>
       )}

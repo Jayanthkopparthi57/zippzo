@@ -20,8 +20,11 @@ class VendorPaymentSerializer(serializers.ModelSerializer):
         model = VendorPayment
         fields = ['payment_id','vendor','vendor_name','vendor_code','amount','status','payment_date',
                   'bank_name','bank_account_number','ifsc','account_holder_name','reference','notes',
-                  'created_by','created_at']
-        read_only_fields = ['payment_id','vendor_name','vendor_code','created_by','created_at']
+                  'payout_channel','payout_status','beneficiary_id','transfer_id','payout_reference',
+                  'payout_error','payout_initiated_at','payout_completed_at','created_by','created_at']
+        read_only_fields = ['payment_id','vendor_name','vendor_code','payout_channel','payout_status',
+                            'beneficiary_id','transfer_id','payout_reference','payout_error',
+                            'payout_initiated_at','payout_completed_at','created_by','created_at']
 
 class SellerSerializer(serializers.ModelSerializer):
     class Meta:
