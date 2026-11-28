@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   History, RefreshCw, AlertTriangle, Search, Package, Timer,
 } from 'lucide-react';
-import StoreGate, { StoreBadge } from './StoreGate';
+import StoreGate from './StoreGate';
 import StatusBadge from '../../components/ui/StatusBadge';
 import {
   useDarkStore, useAsyncData, stockMovements, stagedAging, loadSkuIndex, num,
@@ -116,12 +116,7 @@ function Ledger({ siteId, storeCode }) {
 
       <div className="wf-panel">
         <div className="wf-panel__header">
-          <div>
-            <div className="wf-peek"> Stock Ledger</div>
-            <div className="wf-panel__hint">
-              Every balance change at <StoreBadge />
-            </div>
-          </div>
+          <div className="wf-peek"> Stock Ledger</div>
           <div className="wf-panel__actions">
             {loading && <span className="scan-feedback scan-feedback--hint">Loading…</span>}
             <button
@@ -133,12 +128,6 @@ function Ledger({ siteId, storeCode }) {
               <RefreshCw size={14} /> Refresh
             </button>
           </div>
-        </div>
-
-        <div className="ledger-flow" aria-label="How to read the stock ledger">
-          <span><b>1.</b> Filter by movement type or search a SKU / reference.</span>
-          <span><b>2.</b> Check the direction and units to see what changed.</span>
-          <span><b>3.</b> Review staged bags below — anything over an hour needs attention.</span>
         </div>
 
         <div className="tally-grid" data-testid="ds-ledger-summary">

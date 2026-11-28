@@ -1009,11 +1009,6 @@ export default function InboundView({
             <span>{darkStoreMode ? 'DARKSTORE INBOUND OPERATIONS' : 'INBOUND WAREHOUSE OPERATIONS'}</span>
             <span className="screen-count-tag">{filteredData.length} records</span>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-            {darkStoreMode
-              ? 'Register products by scanning them. Q.C. and putaway steps handle receiving into this store.'
-              : 'Declare vendor bundles, inward them through GRN, put stock away, and scan transfer bundles into custody.'}
-          </div>
         </div>
 
         {loadError && <div className="form-error-banner" role="alert">{loadError}</div>}

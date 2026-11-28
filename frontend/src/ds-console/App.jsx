@@ -38,29 +38,6 @@ import LotsView from '../wms-console/views/inventory/LotsView';
 
 import './index.css';
 
-// One-line workflow intent for every module in the console. This is shown
-// above the view so an operator always knows what the screen is for and what
-// the next action should be — regardless of which tab they open.
-const MODULE_GUIDE = {
-  'ds-command-center': ['Overview', 'Check today’s queues and jump into the work that needs attention.'],
-  'ds-employee-tracking': ['Attendance', 'See who is on shift, their output and pay, and log out a person when needed.'],
-  'ds-inbound-workflow': ['Inbound', 'Consignment → QC → Putaway: receive a tote, inspect it, then shelf the stock.'],
-  'ds-outbound-workflow': ['Outbound', 'Order ledger → Picking → Packing → Handoff: an order moves left to right.'],
-  'ds-product-registration': ['Product registration', 'Scan a barcode, fill the product details and save to list it at this store.'],
-  'ds-inventory-workflow': ['Stock & bins', 'Physical stock → Availability → Bin operations → Ledger, in that order.'],
-  'ds-pricing-offers': ['Pricing & offers', 'Set the selling price first, then coupons and multi-item deals.'],
-  'ds-stock-ledger': ['Stock ledger', 'Trace every balance change; review staged bags that are over an hour old.'],
-  'ds-returns': ['Returns & QC', 'Open → receive at store → inspect → restock, in that sequence.'],
-  'ds-cancellation-putaway': ['Cancellation putaway', 'Return stock from cancelled orders to a sellable bin.'],
-  'ds-rider-fleet': ['Rider fleet', 'Check riders based at this store, their online state and open shifts.'],
-  'ds-bins': ['Storage bins', 'Register a bin → print its QR → scan it to inspect the contents.'],
-  'ds-authentication': ['Authentication', 'Show the store activation QR and the shared daily code to field staff.'],
-  'ds-employee-register': ['Employee register', 'Create staff, set store roles and pay, then remove access when they leave.'],
-  'ds-notifications': ['Notifications', 'Read order, rider and handoff updates for this account.'],
-  'ds-cash-register': ['Cash register', 'Review cash-on-delivery orders and confirm the money collected.'],
-  'ds-service-areas': ['Service areas', 'Publish the pincodes this store delivers to before taking orders.'],
-};
-
 function AppContent({ user, logout }) {
   const { activeTabId } = useTabs();
   const { site, reason } = useDarkStore();
@@ -202,13 +179,6 @@ function AppContent({ user, logout }) {
         />
         <TabBar />
         <main className="workspace-viewport">
-          {MODULE_GUIDE[activeTabId] && (
-            <div className="ds-module-guide" aria-label="Module workflow">
-              <span className="ds-module-guide__tag">WORKFLOW</span>
-              <strong>{MODULE_GUIDE[activeTabId][0]}</strong>
-              <span className="ds-module-guide__text">{MODULE_GUIDE[activeTabId][1]}</span>
-            </div>
-          )}
           {renderActiveView()}
         </main>
       </div>
