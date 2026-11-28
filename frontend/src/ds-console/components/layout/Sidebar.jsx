@@ -11,6 +11,7 @@ import {
   Bike,
   Undo2,
   ShieldCheck,
+  Handshake,
 } from 'lucide-react';
 
 const MENU_GROUPS = [
@@ -83,6 +84,15 @@ const MENU_GROUPS = [
     ],
   },
   {
+    id: 'vendors',
+    title: 'Vendor Management',
+    icon: <Handshake size={15} />,
+    defaultOpen: true,
+    items: [
+      { id: 'ds-vendors', title: 'Vendors & Payments', view: 'VendorsView' },
+    ],
+  },
+  {
     id: 'admin',
     title: 'Operations Admin',
     icon: <ShieldCheck size={15} />,
@@ -109,6 +119,7 @@ export default function Sidebar({ collapsed }) {
     'returns': false,
     'rider': false,
     'storage': false,
+    'vendors': true,
     'admin': false,
   });
   const [filterQuery, setFilterQuery] = useState('');

@@ -17,6 +17,7 @@ import PicklistView from './views/outbound/PicklistView';
 import LotsView from './views/inventory/LotsView';
 import MasterDataView from './views/master/MasterDataView';
 import DashboardView from './views/dashboard/DashboardView';
+import VendorsView from '../views/VendorsView';
 import StoreManagementView from './views/store/StoreManagementView';
 import ManPowerView from './views/metrics/ManPowerView';
 
@@ -112,6 +113,9 @@ function AppContent({ user, logout }) {
       case 'cluster-zones':
       case 'vehicle-types':
         return <MasterDataView initialTab={activeTabId} />;
+
+      case 'mh-vendors':
+        return <VendorsView mode="MH" siteLabel={activeFacility ? `${activeFacility.code || ''} ${activeFacility.name || ''}`.trim() : ''} />;
 
       case 'skus':
       case 'categories':

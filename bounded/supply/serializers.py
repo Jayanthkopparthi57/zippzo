@@ -1,14 +1,27 @@
 # Supply Serializers
 from rest_framework import serializers
 from bounded.iam.names import display_name
-from .models import Vendor, Seller, Asn, AsnLine, Grn, GrnLine, DockDiscrepancy, QcInspection, PutawayTask, PutawayStrategy, VendorLicense, SellerCategoryApproval
+from .models import Vendor, VendorPayment, Seller, Asn, AsnLine, Grn, GrnLine, DockDiscrepancy, QcInspection, PutawayTask, PutawayStrategy, VendorLicense, SellerCategoryApproval
 
 class VendorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vendor
         fields = ['vendor_id','code','name','org_entity','gstin','pan','contact_name','contact_phone','email','address',
+                  'bank_name','bank_account_number','ifsc','account_holder_name','payment_status',
                   'over_delivery_pct','under_delivery_pct','status','created_at']
         read_only_fields = ['vendor_id','created_at']
+
+
+class VendorPaymentSerializer(serializers.ModelSerializer):
+    vendor_name = serializers.CharField(source='vendor.name', read_only=True)
+    vendor_code = serializers.CharField(source='vendor.code', read_only=True)
+
+    class Meta:
+        model = VendorPayment
+        fields = ['payment_id','vendor','vendor_name','vendor_code','amount','status','payment_date',
+                  'bank_name','bank_account_number','ifsc','account_holder_name','reference','notes',
+                  'created_by','created_at']
+        read_only_fields = ['payment_id','vendor_name','vendor_code','created_by','created_at']
 
 class SellerSerializer(serializers.ModelSerializer):
     class Meta:

@@ -9,8 +9,8 @@ from django.db.models import Sum
 from django.utils import timezone
 from bounded.iam.names import AttributionContextMixin, acting_user_id
 from bounded.iam.permissions import IsAdminUserOrReadOnly, IsFieldSurface
-from .models import Vendor, Seller, Asn, AsnLine, Grn, GrnLine, DockDiscrepancy, QcInspection, PutawayTask, PutawayStrategy, VendorLicense, SellerCategoryApproval
-from .serializers import VendorSerializer, SellerSerializer, AsnSerializer, AsnLineSerializer, GrnSerializer, GrnLineSerializer, DockDiscrepancySerializer, QcInspectionSerializer, PutawayTaskSerializer, PutawayStrategySerializer, VendorLicenseSerializer, SellerCategoryApprovalSerializer
+from .models import Vendor, VendorPayment, Seller, Asn, AsnLine, Grn, GrnLine, DockDiscrepancy, QcInspection, PutawayTask, PutawayStrategy, VendorLicense, SellerCategoryApproval
+from .serializers import VendorSerializer, VendorPaymentSerializer, SellerSerializer, AsnSerializer, AsnLineSerializer, GrnSerializer, GrnLineSerializer, DockDiscrepancySerializer, QcInspectionSerializer, PutawayTaskSerializer, PutawayStrategySerializer, VendorLicenseSerializer, SellerCategoryApprovalSerializer
 
 
 def _facility_queryset(queryset, user, relation):
@@ -167,6 +167,20 @@ class VendorViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminUserOrReadOnly]
     filterset_fields = ['status']
     search_fields = ['code', 'name']
+
+class VendorPaymentViewSet(viewsets.ModelViewSet):
+    """Vendor payments are shared master-finance records for MH and DS."""
+    queryset = VendorPayment.objects.select_related('vendor').all()
+    serializer_class = VendorPaymentSerializer
+    permission_classes = [IsAdminUserOrReadOnly]
+    filterset_fields = ['vendor', 'status']
+    search_fields = ['vendor__name', 'vendor__code', 'reference']
+    ordering_fields = ['payment_date', 'amount', 'created_at']
+
+    def perform_create(self, serializer):
+        uid = getattr(self.request.user, 'user_id', None)
+        serializer.save(created_by=uid if uid else None)
+
 
 class SellerViewSet(viewsets.ModelViewSet):
     queryset = Seller.objects.all()

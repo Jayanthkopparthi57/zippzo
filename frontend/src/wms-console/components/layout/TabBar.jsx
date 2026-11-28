@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTabs } from '../../context/TabContext';
-import { X, FileText, ArrowDownToLine, Package, ShoppingCart, Truck, Activity, Warehouse, Settings } from 'lucide-react';
+import { X, FileText, ArrowDownToLine, Package, ShoppingCart, Truck, Activity, Warehouse, Settings, Handshake } from 'lucide-react';
 
 const TAB_ICON_MAP = {
   'ds-command-center': Activity,
@@ -38,6 +38,7 @@ const TAB_ICON_MAP = {
   'active-trips': Truck,
   'inventory-lots': Warehouse,
   'sites': Settings,
+  'mh-vendors': Handshake,
   'skus': FileText,
 };
 

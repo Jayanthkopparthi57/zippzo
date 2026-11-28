@@ -29,6 +29,7 @@ import ServiceAreasView from './views/ServiceAreasView';
 import CashRegisterView from '../views/darkstore/CashRegisterView';
 import NotificationInboxView from '../views/NotificationInboxView';
 import PricingOffersView from '../views/darkstore/PricingOffersView';
+import VendorsView from '../views/VendorsView';
 
 // Only storage bins remain available from the shared master-data surface in
 // the Dark Store console; catalog/configuration administration belongs to the
@@ -148,6 +149,10 @@ function AppContent({ user, logout }) {
       // Rider
       case 'ds-rider-fleet':
         return <RiderFleetView />;
+
+      // Shared vendor master — same data the MH console uses.
+      case 'ds-vendors':
+        return <VendorsView mode="DS" siteLabel={site ? `${site.code || ''}${site.name ? ` · ${site.name}` : ''}` : ''} />;
 
       // Store operations that remain in the Dark Store console
       case 'ds-authentication':

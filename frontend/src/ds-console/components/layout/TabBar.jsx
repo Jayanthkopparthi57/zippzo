@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTabs } from '../../context/TabContext';
-import { X, FileText, ArrowDownToLine, Package, ShoppingCart, Truck, Activity, Warehouse, Users } from 'lucide-react';
+import { X, FileText, ArrowDownToLine, Package, ShoppingCart, Truck, Activity, Warehouse, Users, Handshake } from 'lucide-react';
 
 const TAB_ICON_MAP = {
   'ds-command-center': Activity,
@@ -35,6 +35,7 @@ const TAB_ICON_MAP = {
   'ds-bins': Warehouse,
   'ds-product-registration': Warehouse,
   'ds-employee-register': Users,
+  'ds-vendors': Handshake,
 };
 
 export default function TabBar() {

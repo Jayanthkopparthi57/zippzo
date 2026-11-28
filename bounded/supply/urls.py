@@ -1,11 +1,12 @@
 # Supply URLs
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import (VendorViewSet, SellerViewSet, AsnViewSet, AsnLineViewSet, GrnViewSet,
+from .views import (VendorViewSet, VendorPaymentViewSet, SellerViewSet, AsnViewSet, AsnLineViewSet, GrnViewSet,
                     GrnLineViewSet, DockDiscrepancyViewSet, QcInspectionViewSet, PutawayTaskViewSet,
                     PutawayStrategyViewSet, PutawayBinListView)
 router = DefaultRouter()
 router.register(r'vendors', VendorViewSet)
+router.register(r'vendor-payments', VendorPaymentViewSet)
 router.register(r'sellers', SellerViewSet)
 router.register(r'asns', AsnViewSet)
 router.register(r'asn-lines', AsnLineViewSet)

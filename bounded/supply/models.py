@@ -5,6 +5,7 @@ from django.db import models
 
 class Vendor(models.Model):
     STATUS_CHOICES = [('ACTIVE','Active'),('BLOCKED','Blocked'),('BLACKLISTED','Blacklisted')]
+    PAYMENT_STATUS_CHOICES = [('PENDING','Pending'),('PAID','Paid')]
     vendor_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     code = models.CharField(max_length=20, unique=True)
     name = models.CharField(max_length=120)
@@ -15,6 +16,11 @@ class Vendor(models.Model):
     contact_phone = models.CharField(max_length=15, blank=True)
     email = models.EmailField(blank=True)
     address = models.TextField(blank=True)
+    bank_name = models.CharField(max_length=80, blank=True)
+    bank_account_number = models.CharField(max_length=40, blank=True)
+    ifsc = models.CharField(max_length=20, blank=True)
+    account_holder_name = models.CharField(max_length=120, blank=True)
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='PENDING')
     over_delivery_pct = models.DecimalField(max_digits=5, decimal_places=2, default=5.00)
     under_delivery_pct = models.DecimalField(max_digits=5, decimal_places=2, default=5.00)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='ACTIVE')
@@ -26,6 +32,31 @@ class Vendor(models.Model):
 
     def __str__(self):
         return f"{self.code} - {self.name}"
+
+
+class VendorPayment(models.Model):
+    """Supplier-side payment record. Shared by the MH and DS consoles."""
+    STATUS_CHOICES = [('COMPLETE','Complete'),('PENDING','Pending')]
+    payment_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='payments')
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    payment_date = models.DateField()
+    bank_name = models.CharField(max_length=80, blank=True)
+    bank_account_number = models.CharField(max_length=40, blank=True)
+    ifsc = models.CharField(max_length=20, blank=True)
+    account_holder_name = models.CharField(max_length=120, blank=True)
+    reference = models.CharField(max_length=80, blank=True)
+    notes = models.TextField(blank=True)
+    created_by = models.UUIDField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'vendor_payments'
+        ordering = ['-payment_date', '-created_at']
+
+    def __str__(self):
+        return f"{self.reference or self.payment_id} - {self.vendor.name}"
 
 
 class VendorLicense(models.Model):

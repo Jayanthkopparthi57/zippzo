@@ -15,6 +15,7 @@ import {
   Users2,
   Search,
   ChevronRight,
+  Handshake,
 } from 'lucide-react';
 
 // Live badge counts are read from the list endpoint each module actually
@@ -162,6 +163,15 @@ const MENU_GROUPS = [
     ],
   },
   {
+    id: 'vendor-management',
+    title: 'Vendor Management',
+    icon: <Handshake size={15} />,
+    defaultOpen: true,
+    items: [
+      { id: 'mh-vendors', title: 'Vendors & Payments', view: 'VendorsView' },
+    ],
+  },
+  {
     id: 'user-management',
     title: 'User Management',
     icon: <Users2 size={15} />,
@@ -185,6 +195,7 @@ export default function Sidebar({ collapsed }) {
     inventory: false,
     'mh-configs': false,
     catalog: false,
+    'vendor-management': true,
     'user-management': false,
   });
   const [filterQuery, setFilterQuery] = useState('');
@@ -254,7 +265,7 @@ export default function Sidebar({ collapsed }) {
         {MENU_GROUPS.filter(group => {
           if (user?.is_admin) return true;
           const role = String(user?.role || '').toUpperCase();
-          if (role === 'WAREHOUSE_STAFF') return ['inbound', 'inventory'].includes(group.id);
+          if (role === 'WAREHOUSE_STAFF') return ['inbound', 'inventory', 'vendor-management'].includes(group.id);
           if (role.includes('INBOUND') || role.includes('RECEIV')) return group.id === 'inbound';
           if (role.includes('PICK') || role.includes('FULFIL')) return ['outbound', 'outbound-process'].includes(group.id);
           if (role.includes('TRANSPORT') || role.includes('FLEET')) return group.id === 'linehaul';
