@@ -7,14 +7,19 @@ from . import cashfree_payouts
 
 
 def start_payout(record, *, beneficiary_id, amount, reference_id, purpose,
-                 name, email='', phone='', account='', ifsc='', address=''):
-    """Register the beneficiary and send a transfer; return fields to persist."""
+                 name, email='', phone='', account='', ifsc='', address='',
+                 upi_id='', mode='IMPS'):
+    """Register the beneficiary and send a transfer; return fields to persist.
+
+    A UPI beneficiary needs only a VPA, so staff without a bank account can
+    still be paid through Cashfree.
+    """
     cashfree_payouts.add_beneficiary(
         beneficiary_id=beneficiary_id, name=name, email=email, phone=phone,
-        account=account, ifsc=ifsc, address=address)
+        account=account, ifsc=ifsc, address=address, upi_id=upi_id)
     result = cashfree_payouts.request_transfer(
         beneficiary_id=beneficiary_id, amount=amount, reference_id=reference_id,
-        purpose=purpose)
+        purpose=purpose, mode=mode)
     status = result['status']
     settled = status in ('SUCCESS', 'COMPLETED')
     failed = status in ('FAILED', 'CANCELLED', 'REVERSED')

@@ -95,17 +95,21 @@ def _ok(response):
     return isinstance(response, dict) and str(response.get('status', 'SUCCESS')).upper() in ('SUCCESS', 'OK')
 
 
-def add_beneficiary(*, beneficiary_id, name, email='', phone='', account='', ifsc='', address=''):
-    """Register a bank beneficiary. Idempotent on the local beneficiary id."""
+def add_beneficiary(*, beneficiary_id, name, email='', phone='', account='', ifsc='', address='', upi_id=''):
+    """Register a beneficiary. Bank account or UPI VPA, idempotent by id."""
     payload = {
         'beneficiary_id': beneficiary_id,
         'name': name,
         'email': email or '',
         'phone': phone or '',
-        'bank_account': account,
-        'ifsc': ifsc,
         'address': address or '',
     }
+    if upi_id:
+        # Cashfree UPI beneficiaries are addressed by VPA, not account/IFSC.
+        payload['upi_id'] = upi_id
+    else:
+        payload['bank_account'] = account
+        payload['ifsc'] = ifsc
     response = _request(
         'POST', getattr(settings, 'CASHFREE_PAYOUT_BENEFICIARY_PATH', '/payout/v1/addBeneficiary'),
         payload, token=get_token(), idempotency_key=beneficiary_id)

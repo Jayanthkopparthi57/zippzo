@@ -693,19 +693,22 @@ class SalaryPaymentViewSet(viewsets.ModelViewSet):
             return Response({'error': 'This salary has already been sent to Cashfree.'},
                             status=status.HTTP_409_CONFLICT)
         detail = EmployeeBankDetail.objects.filter(user=record.user).first()
-        if not detail or not (detail.bank_account_number and detail.ifsc):
-            return Response({'error': 'Add this employee bank account and IFSC before paying.'},
+        upi_id = (detail.upi_id or '').strip() if detail else ''
+        bank_ready = bool(detail and detail.bank_account_number and detail.ifsc)
+        if not upi_id and not bank_ready:
+            return Response({'error': 'Add this employee’s UPI ID or bank account and IFSC before paying.'},
                             status=status.HTTP_400_BAD_REQUEST)
         beneficiary = f'EMP_{str(record.user_id).replace("-", "")[:20]}'
         reference = f'SP{str(record.payment_id).replace("-", "")[:20]}'
-        name = detail.account_holder_name or record.user.full_name or record.user.email
+        name = (detail.account_holder_name if detail else '') or record.user.full_name or record.user.email
         try:
             values = payouts.start_payout(
                 record, beneficiary_id=beneficiary, amount=record.amount,
                 reference_id=reference, purpose='SALARY',
                 name=name, email=record.user.email, phone=record.user.phone,
-                account=detail.bank_account_number, ifsc=detail.ifsc,
-                address='')
+                account=detail.bank_account_number if detail else '',
+                ifsc=detail.ifsc if detail else '', address='',
+                upi_id=upi_id, mode='UPI' if upi_id else 'IMPS')
         except CashfreePayoutError as exc:
             record.payout_channel = 'CASHFREE'
             record.payout_status = 'FAILED'
@@ -715,6 +718,24 @@ class SalaryPaymentViewSet(viewsets.ModelViewSet):
         for key, value in values.items():
             setattr(record, key, value)
         record.save(update_fields=list(values))
+        return Response(self.get_serializer(record).data)
+
+    @action(detail=True, methods=['post'], url_path='mark-paid')
+    def mark_paid(self, request, pk=None):
+        """Record a cash/manual settlement — no bank details or Cashfree needed."""
+        record = self.get_object()
+        if record.status == 'PAID' and record.payout_channel == 'CASH':
+            return Response({'error': 'This salary is already marked as paid in cash.'},
+                            status=status.HTTP_409_CONFLICT)
+        reference = str(request.data.get('reference') or '').strip()
+        record.status = 'PAID'
+        record.payout_channel = 'CASH'
+        record.payout_status = 'SETTLED'
+        record.payout_reference = reference[:80]
+        record.payout_error = ''
+        record.payout_completed_at = timezone.now()
+        record.save(update_fields=['status', 'payout_channel', 'payout_status',
+                                   'payout_reference', 'payout_error', 'payout_completed_at'])
         return Response(self.get_serializer(record).data)
 
     @action(detail=True, methods=['post'], url_path='sync-payout')

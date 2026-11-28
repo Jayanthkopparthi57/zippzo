@@ -116,9 +116,12 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
     try {
       const result = await postApi(`${base}/${row.payment_id}/${action}/`, {});
       await reload();
+      const outcome = result?.payout_status || result?.status || 'done';
       showNotice(action === 'pay'
-        ? `Cashfree payout started · ${result?.payout_status || result?.status || 'sent'}.`
-        : `Payout status refreshed · ${result?.payout_status || result?.status || 'unknown'}.`);
+        ? `Cashfree payout started · ${outcome}.`
+        : action === 'mark-paid'
+          ? `Salary marked as paid in cash · ${outcome}.`
+          : `Payout status refreshed · ${outcome}.`);
     } catch (err) {
       setError(describeError(err) || `Could not ${action} this payout.`);
     } finally {
@@ -530,7 +533,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
           <section className="vend-card">
             <div className="vend-card__head vend-card__head--blue">
               <Users2 size={18} />
-              <div><h2>Employee Bank Details</h2><p>Beneficiary account for Cashfree salary payouts.</p></div>
+              <div><h2>Employee Pay Details</h2><p>Use a UPI ID (no bank needed) or bank account + IFSC. Cash payment also available per record.</p></div>
             </div>
             <form className="vend-form" onSubmit={saveBankDetail}>
               <fieldset disabled={busy}>
@@ -606,13 +609,16 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
                       <td>{row.period_start || '—'} → {row.period_end || '—'}</td>
                       <td><Pill tone={row.status === 'PAID' ? 'success' : row.status === 'FAILED' ? 'danger' : 'warning'}>{row.status}</Pill></td>
                       <td>
-                        <Pill tone={row.payout_status === 'SUCCESS' ? 'success' : row.payout_status === 'FAILED' ? 'danger' : 'warning'}>
-                          {row.payout_channel === 'CASHFREE' ? (row.payout_status || 'PENDING') : 'Manual'}
+                        <Pill tone={['SUCCESS', 'SETTLED'].includes(row.payout_status) ? 'success' : row.payout_status === 'FAILED' ? 'danger' : 'warning'}>
+                          {row.payout_channel === 'CASH' ? 'Cash' : row.payout_channel === 'CASHFREE' ? (row.payout_status || 'PENDING') : 'Manual'}
                         </Pill>
                         {row.transfer_id && <div className="vend-mono" style={{ marginTop: 3, fontSize: 10 }}>{row.transfer_id}</div>}
                       </td>
                       <td className="vend-actions">
-                        <button type="button" title="Pay via Cashfree" disabled={Boolean(busyId)} onClick={() => runPayoutAction('salary', row, 'pay')}><Wallet size={13} /></button>
+                        {row.status !== 'PAID' && (
+                          <button type="button" title="Mark paid in cash" disabled={Boolean(busyId)} onClick={() => runPayoutAction('salary', row, 'mark-paid')}><CheckCircle2 size={13} /></button>
+                        )}
+                        <button type="button" title="Pay via Cashfree" disabled={Boolean(busyId) || row.status === 'PAID'} onClick={() => runPayoutAction('salary', row, 'pay')}><Wallet size={13} /></button>
                         {row.payout_channel === 'CASHFREE' && (
                           <button type="button" title="Refresh payout status" disabled={Boolean(busyId)} onClick={() => runPayoutAction('salary', row, 'sync-payout')}><CheckCircle2 size={13} /></button>
                         )}

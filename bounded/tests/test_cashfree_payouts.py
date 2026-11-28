@@ -82,6 +82,30 @@ class CashfreePayoutTests(TestCase):
         self.assertEqual('PAID', salary.status)
         self.assertTrue(salary.beneficiary_id.startswith('EMP_'))
 
+    def test_salary_can_be_paid_to_upi_without_bank_account(self):
+        EmployeeBankDetail.objects.create(user=self.staff, upi_id='payoutstaff@upi')
+        salary = SalaryPayment.objects.create(
+            user=self.staff, site=self.site, amount=Decimal('5000'))
+        with self._provider():
+            response = self.client.post(f'/api/money/salary-payments/{salary.payment_id}/pay/')
+        self.assertEqual(200, response.status_code, response.data)
+        salary.refresh_from_db()
+        self.assertEqual('SUCCESS', salary.payout_status)
+        self.assertEqual('PAID', salary.status)
+
+    def test_salary_can_be_marked_paid_in_cash(self):
+        salary = SalaryPayment.objects.create(
+            user=self.staff, site=self.site, amount=Decimal('3000'))
+        response = self.client.post(
+            f'/api/money/salary-payments/{salary.payment_id}/mark-paid/',
+            {'reference': 'CASH-RECEIPT-1'}, format='json')
+        self.assertEqual(200, response.status_code, response.data)
+        salary.refresh_from_db()
+        self.assertEqual('PAID', salary.status)
+        self.assertEqual('CASH', salary.payout_channel)
+        self.assertEqual('SETTLED', salary.payout_status)
+        self.assertEqual('CASH-RECEIPT-1', salary.payout_reference)
+
     def test_operator_cannot_send_a_payout(self):
         vendor = Vendor.objects.create(
             code='V-PAY-DENY', name='Denied', bank_account_number='1', ifsc='IFSC1')
