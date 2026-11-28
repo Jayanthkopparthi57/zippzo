@@ -9,8 +9,8 @@
  */
 import React, { useState } from 'react';
 import {
-  Activity, Bike, MapPin, RefreshCw, AlertTriangle, Wifi, WifiOff,
-  Users2, Wallet,
+  Activity, BadgeIndianRupee, Bike, MapPin, RefreshCw, AlertTriangle,
+  Wifi, WifiOff, Users2, Wallet,
 } from 'lucide-react';
 import StoreGate, { StoreBadge } from './StoreGate';
 import {
@@ -18,7 +18,7 @@ import {
 } from './useDarkStore';
 import { fetchApi, postApi } from '../../api/client';
 import { useToast } from '../../components/ui/Toast';
-import EmployeeRegisterView from './EmployeeRegisterView';
+import RiderAdminPanel from './RiderAdminPanel';
 import VendorsView from '../VendorsView';
 import '../../styles/vendors.css';
 
@@ -188,32 +188,33 @@ function LiveBoard() {
 }
 
 /**
- * Rider Fleet is the single rider hub: a live board for operators plus the
- * existing registration, rate-card and salary screens embedded as tabs. The
- * embedded views own their data and APIs, so there is no second copy of a form.
+ * Rider Fleet is the rider hub. Each operation gets its own tab so the live
+ * board never competes with forms, and sensitive pay actions stay separate.
  */
 export default function RiderFleetView() {
   const [tab, setTab] = useState('live');
-  const { site } = useDarkStore();
+  const { site, siteId, storeCode } = useDarkStore();
 
   return (
     <div className="vend-page">
       <div className="vend-page__head">
         <div>
           <h1>Rider Fleet</h1>
-          <p>Live board, registration, pay details and rates - one place for riders.</p>
+          <p>Live board, rider registration, pay rates and salary payouts.</p>
         </div>
         <div className="vend-page__context">{site?.code && <span>{site.code}</span>}</div>
       </div>
 
       <div className="vend-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === 'live'} className={tab === 'live' ? 'active' : ''} onClick={() => setTab('live')}><Activity size={15} /> Live board</button>
-        <button type="button" role="tab" aria-selected={tab === 'riders'} className={tab === 'riders' ? 'active' : ''} onClick={() => setTab('riders')}><Users2 size={15} /> Riders &amp; rates</button>
+        <button type="button" role="tab" aria-selected={tab === 'riders'} className={tab === 'riders' ? 'active' : ''} onClick={() => setTab('riders')}><Users2 size={15} /> Riders</button>
+        <button type="button" role="tab" aria-selected={tab === 'rates'} className={tab === 'rates' ? 'active' : ''} onClick={() => setTab('rates')}><BadgeIndianRupee size={15} /> Rate card</button>
         <button type="button" role="tab" aria-selected={tab === 'pay'} className={tab === 'pay' ? 'active' : ''} onClick={() => setTab('pay')}><Wallet size={15} /> Salary &amp; payouts</button>
       </div>
 
       {tab === 'live' && <LiveBoard />}
-      {tab === 'riders' && <EmployeeRegisterView initialTab="riders" embedded />}
+      {tab === 'riders' && <RiderAdminPanel section="roster" siteId={siteId} storeCode={storeCode} />}
+      {tab === 'rates' && <RiderAdminPanel section="rates" siteId={siteId} storeCode={storeCode} />}
       {tab === 'pay' && <VendorsView mode="DS" initialTab="salaries" embedded />}
     </div>
   );
