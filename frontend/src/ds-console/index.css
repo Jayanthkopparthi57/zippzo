@@ -2232,3 +2232,76 @@ html, body { background: var(--bg-canvas); color: var(--text-primary); font-size
   .screen-header { flex-direction: column; }
   .ds-module-guide { gap: 6px; }
 }
+
+/* ── Responsive: tablets and phones ─────────────────────────────────────── */
+.app-container { min-height: 100vh; }
+.app-main { min-width: 0; }
+
+/* Tables scroll sideways instead of squashing text into unreadable columns. */
+.table-container, .datagrid-table-wrap, .data-table-wrap {
+  overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%;
+}
+.data-table, .datagrid-table { min-width: 720px; }
+.data-table th, .data-table td, .datagrid-table th, .datagrid-table td {
+  white-space: nowrap;
+}
+
+/* Modals fit the viewport and scroll internally. */
+.modal-box {
+  width: min(94vw, 520px) !important;
+  max-width: min(94vw, 520px) !important;
+  max-height: 88vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+}
+
+/* Long headings and facility labels wrap or truncate rather than overflow. */
+.screen-title, .workflow-workspace__header h1 { flex-wrap: wrap; }
+.facility-bar, .workflow-workspace__store {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .workflow-workspace__steps { gap: 5px; }
+  .workflow-workspace__step { padding: 8px 9px; font-size: 11px; }
+  .tally-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .app-sidebar { width: 58px; flex: 0 0 58px; }
+  .app-sidebar.collapsed { width: 58px; flex: 0 0 58px; }
+  .app-sidebar:not(.collapsed) {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 250;
+    width: 244px; flex-basis: 244px;
+    box-shadow: 8px 0 28px rgba(20, 28, 22, .18);
+  }
+  .app-sidebar.collapsed .sidebar-search-box,
+  .app-sidebar.collapsed .brand-sub,
+  .app-sidebar.collapsed .brand-name,
+  .app-sidebar.collapsed .accordion-title span:not(.accordion-icon),
+  .app-sidebar.collapsed .accordion-caret,
+  .app-sidebar.collapsed .subnav-item span:not(:first-child) { display: none; }
+  .app-sidebar.collapsed .accordion-header { justify-content: center; padding: 10px 0; }
+  .app-sidebar.collapsed .accordion-children { padding-left: 0; align-items: center; }
+  .app-sidebar.collapsed .subnav-item { justify-content: center; padding: 8px 0; width: 100%; }
+  .workspace-viewport { padding: 18px; }
+}
+
+@media (max-width: 640px) {
+  .workspace-viewport { padding: 14px 12px 24px; }
+  .ds-module-guide { padding: 9px 11px; font-size: 11px; }
+  .ds-module-guide__text { min-width: 100%; }
+  .screen-title { font-size: 16px; gap: 6px; }
+  .screen-actions { width: 100%; }
+  .btn-ui, .btn-secondary, .btn-primary { padding: 7px 10px; font-size: 11px; }
+  .form-group, .datagrid-toolbar { flex-wrap: wrap; }
+  .tally-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .tally-tile__value { font-size: 18px; }
+  .workflow-workspace__step-number { display: none; }
+  .workflow-workspace__step { padding: 7px 9px; font-size: 10.5px; }
+  .modal-box { width: 100% !important; max-width: 100% !important; max-height: 92vh; }
+}
+
+@media (max-width: 420px) {
+  .tally-grid { grid-template-columns: 1fr; }
+  .screen-title { font-size: 15px; }
+  .ds-module-guide__tag { width: 100%; }
+}

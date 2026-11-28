@@ -3482,3 +3482,32 @@
   .shop-bestsellers__head h2 { font-size: 19px; }
   .shop-bc__label { font-size: 12px; min-height: 38px; }
 }
+
+/* ── Responsive sweep: tablet down to small phones ─────────────────────── */
+.shop-bestsellers__grid, .shop-grid { max-width: 100%; }
+.shop-quick, .shop-rail, .shop-cats { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.shop-bc { min-width: 0; }
+
+@media (max-width: 1024px) {
+  .shop-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .shop-section__head { flex-wrap: wrap; gap: 8px; }
+}
+
+@media (max-width: 768px) {
+  .shop-topbar { padding: 10px 14px; }
+  .shop-nav { position: sticky; bottom: 0; width: 100%; z-index: 60; }
+  .shop-hero__slide { min-height: 160px; }
+  .shop-hero__title { font-size: 20px; }
+  .shop-bestsellers__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shop-quick__chip { padding: 7px 10px; font-size: 11px; }
+  .shop-searchbar--mobile { display: flex; }
+}
+
+@media (max-width: 480px) {
+  .shop-bestsellers__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .shop-bc__label { font-size: 11px; min-height: 34px; padding: 8px 9px 10px; }
+  .shop-bc__more { font-size: 9px; left: 5px; bottom: 5px; }
+  .shop-section__title { font-size: 17px; }
+  .shop-hero__title { font-size: 18px; }
+  .shop-nav__item { font-size: 10px; }
+}

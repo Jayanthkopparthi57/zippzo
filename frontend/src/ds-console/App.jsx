@@ -64,7 +64,11 @@ const MODULE_GUIDE = {
 function AppContent({ user, logout }) {
   const { activeTabId } = useTabs();
   const { site, reason } = useDarkStore();
-  const [collapsed, setCollapsed] = useState(false);
+  // On phones the sidebar starts as an icon rail; the header toggle opens it
+  // as an overlay so tables and workflows keep the full screen width.
+  const [collapsed, setCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 900
+  );
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   useEffect(() => {
