@@ -5,6 +5,7 @@ import Header from './components/layout/Header';
 import TabBar from './components/layout/TabBar';
 import Sidebar from './components/layout/Sidebar';
 import ApiDiagnosticsModal from './components/ui/ApiDiagnosticsModal';
+import TableFilterBar from './components/TableFilterBar';
 import WorkflowWorkspace from './views/WorkflowWorkspace';
 
 // Dark Store views
@@ -179,6 +180,7 @@ function AppContent({ user, logout }) {
         />
         <TabBar />
         <main className="workspace-viewport">
+          <TableFilterBar />
           {renderActiveView()}
         </main>
       </div>

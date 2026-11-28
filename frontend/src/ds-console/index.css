@@ -2305,3 +2305,43 @@ html, body { background: var(--bg-canvas); color: var(--text-primary); font-size
   .screen-title { font-size: 15px; }
   .ds-module-guide__tag { width: 100%; }
 }
+
+/* Shared search/filter bar that applies to every table on the screen. */
+.table-filter-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 14px; padding: 8px 10px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: var(--radius-xs, 6px);
+  color: var(--text-muted, #64748b);
+}
+.table-filter-bar input {
+  flex: 1 1 220px; min-width: 140px;
+  padding: 6px 9px; font-size: 12px;
+  color: var(--text-primary, #1b241d);
+  background: var(--bg-input, #fff);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: 5px; outline: none;
+}
+.table-filter-bar input:focus { border-color: #93a39a; }
+.table-filter-bar select {
+  padding: 6px 8px; font-size: 11.5px;
+  color: var(--text-primary, #1b241d);
+  background: var(--bg-input, #fff);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: 5px; outline: none;
+}
+.table-filter-bar__clear {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 5px 8px; font-size: 11px; font-weight: 700;
+  color: #526057; background: transparent;
+  border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 5px; cursor: pointer;
+}
+.table-filter-bar__count {
+  margin-left: auto; font-family: var(--font-mono, monospace);
+  font-size: 11px; color: var(--text-muted, #64748b);
+}
+@media (max-width: 640px) {
+  .table-filter-bar input { flex-basis: 100%; }
+  .table-filter-bar__count { margin-left: 0; width: 100%; }
+}
