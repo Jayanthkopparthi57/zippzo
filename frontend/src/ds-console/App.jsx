@@ -180,7 +180,7 @@ function AppContent({ user, logout }) {
         />
         <TabBar />
         <main className="workspace-viewport">
-          <TableFilterBar />
+          <TableFilterBar screenKey={activeTabId} />
           {renderActiveView()}
         </main>
       </div>

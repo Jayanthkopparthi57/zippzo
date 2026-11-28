@@ -14,10 +14,16 @@ const NEEDS_ACTION = /\b(pending|processing|assigned|offered|queued|waiting|queu
  * hides non-matching rows and lifts pending rows to the top. A MutationObserver
  * re-applies the filter whenever a view refreshes its data.
  */
-export default function TableFilterBar() {
+export default function TableFilterBar({ screenKey }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const countRef = useRef(null);
+
+  // A search on one screen should not silently hide rows on the next one.
+  useEffect(() => {
+    setQuery('');
+    setStatus('all');
+  }, [screenKey]);
 
   useEffect(() => {
     const root = document.querySelector('.workspace-viewport');
