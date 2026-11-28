@@ -2326,6 +2326,7 @@ html, body { background: var(--bg-canvas); color: var(--text-primary); font-size
   border-radius: 4px; outline: none;
   text-transform: none; letter-spacing: 0;
 }
+.col-filter-input[hidden] { display: none; }
 .col-filter-input::placeholder { color: #9aa59c; font-weight: 500; }
 .col-filter-input:focus { border-color: #93a39a; }
 .col-filter-clear {
