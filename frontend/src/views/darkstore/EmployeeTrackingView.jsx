@@ -48,6 +48,7 @@ const distinct = (rows, key) => new Set(rows.map((row) => String(row[key])).filt
 function Tracking({ storeCode, siteId }) {
   const { user: currentUser } = useAuth();
   const [busyLogout, setBusyLogout] = useState(null);
+  const [busyAttendance, setBusyAttendance] = useState(null);
   const [notice, setNotice] = useState('');
   const { data: assignments, error, loading, reload } = useAsyncData(
     () => fetchApi(`/network/manpower?site=${encodeURIComponent(storeCode)}`).then((r) => asList(r, '/network/manpower')),
@@ -104,6 +105,26 @@ function Tracking({ storeCode, siteId }) {
     [siteId],
     { pollMs: 0 },
   );
+
+  const changeAttendance = async (row, action) => {
+    const label = row.name || row.email || 'this employee';
+    setBusyAttendance(`${action}-${row.user}`);
+    setNotice('');
+    try {
+      const result = await postApi(`/network/staff-shifts/${action}/`, {
+        user: row.user,
+        site_code: storeCode,
+      });
+      await Promise.all([reload({ quiet: true }), reloadShifts({ quiet: true })]);
+      setNotice(action === 'admin-check-in'
+        ? `${label} checked in at ${storeCode}.`
+        : `${label} checked out. ${result?.shifts_closed || 0} shift(s) closed.`);
+    } catch (err) {
+      setNotice(err?.message || `Could not ${action === 'admin-check-in' ? 'check in' : 'check out'} this employee.`);
+    } finally {
+      setBusyAttendance(null);
+    }
+  };
 
   const forceLogout = async (row) => {
     const label = row.name || row.email || 'this employee';
@@ -322,17 +343,39 @@ function Tracking({ storeCode, siteId }) {
                   </td>
                   <td>
                     {currentUser?.is_admin && row.user ? (
-                      <button
-                        type="button"
-                        className="btn-ui neutral"
-                        disabled={busyLogout === String(row.user)}
-                        onClick={() => forceLogout(row)}
-                        title="Revoke sessions and close this employee's open shift"
-                        style={{ padding: '3px 8px', fontSize: 11, height: 26 }}
-                      >
-                        <LogOut size={12} />
-                        {busyLogout === String(row.user) ? '…' : 'Log out'}
-                      </button>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn-ui neutral"
+                          disabled={busyAttendance === `admin-check-in-${row.user}`}
+                          onClick={() => changeAttendance(row, 'admin-check-in')}
+                          title="Check this employee in at this store"
+                          style={{ padding: '3px 7px', fontSize: 11, height: 26 }}
+                        >
+                          {busyAttendance === `admin-check-in-${row.user}` ? '…' : 'Check in'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ui neutral"
+                          disabled={busyAttendance === `admin-check-out-${row.user}`}
+                          onClick={() => changeAttendance(row, 'admin-check-out')}
+                          title="Check this employee out at this store"
+                          style={{ padding: '3px 7px', fontSize: 11, height: 26 }}
+                        >
+                          {busyAttendance === `admin-check-out-${row.user}` ? '…' : 'Check out'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ui neutral"
+                          disabled={busyLogout === String(row.user)}
+                          onClick={() => forceLogout(row)}
+                          title="Revoke sessions and close this employee's open shift"
+                          style={{ padding: '3px 8px', fontSize: 11, height: 26 }}
+                        >
+                          <LogOut size={12} />
+                          {busyLogout === String(row.user) ? '…' : 'Log out'}
+                        </button>
+                      </div>
                     ) : (
                       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
                     )}

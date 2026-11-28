@@ -250,6 +250,64 @@ class StaffShiftViewSet(viewsets.ModelViewSet):
             'status': shift.status,
         }, status=201)
 
+    @action(detail=False, methods=['post'], url_path='admin-check-in')
+    def admin_check_in(self, request):
+        """Admin clocks an employee in at this store (idempotent)."""
+        if getattr(request.user, 'role', '') not in ('SUPER_ADMIN', 'ADMIN', 'OPS_MANAGER'):
+            return Response({'error': 'Only an administrator can check in staff.'}, status=403)
+        user_id = request.data.get('user') or request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user is required'}, status=400)
+        session = getattr(request.user, 'session', None)
+        site = session.facility if session and session.facility_id else None
+        site_code = str(request.data.get('site_code') or '').strip().upper()
+        if site_code:
+            site = Site.objects.filter(code=site_code).first()
+        if site is None:
+            return Response({'error': 'Choose a facility first.'}, status=400)
+        from bounded.ds_ops.access import require_site_access
+        require_site_access(request.user, site.code)
+        assignment = EmployeeSiteAssignment.objects.filter(
+            user_id=user_id, site=site, is_active=True).first()
+        if assignment is None:
+            return Response({'error': 'That employee is not assigned to this store.'}, status=403)
+        shift = StaffShift.objects.filter(user_id=user_id, site=site, status='OPEN').first()
+        if shift:
+            return Response({'already_open': True,
+                             'shift_id': str(shift.shift_id),
+                             'started_at': shift.started_at.isoformat()})
+        shift = StaffShift.objects.create(
+            user_id=user_id, site=site,
+            role_at_site=assignment.role_at_site or '',
+            notes=request.data.get('notes', 'Admin check-in')[:200])
+        return Response({'already_open': False, 'shift_id': str(shift.shift_id),
+                         'started_at': shift.started_at.isoformat()}, status=201)
+
+    @action(detail=False, methods=['post'], url_path='admin-check-out')
+    def admin_check_out(self, request):
+        """Admin clocks an employee out at this store (idempotent)."""
+        if getattr(request.user, 'role', '') not in ('SUPER_ADMIN', 'ADMIN', 'OPS_MANAGER'):
+            return Response({'error': 'Only an administrator can check out staff.'}, status=403)
+        user_id = request.data.get('user') or request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user is required'}, status=400)
+        session = getattr(request.user, 'session', None)
+        site = session.facility if session and session.facility_id else None
+        site_code = str(request.data.get('site_code') or '').strip().upper()
+        if site_code:
+            site = Site.objects.filter(code=site_code).first()
+        if site is None:
+            return Response({'error': 'Choose a facility first.'}, status=400)
+        from bounded.ds_ops.access import require_site_access
+        require_site_access(request.user, site.code)
+        now = timezone.now()
+        shifts = StaffShift.objects.filter(user_id=user_id, site=site, status='OPEN')
+        closed = shifts.count()
+        shifts.update(status='CLOSED', ended_at=now, end_reason='MANUAL',
+                      notes='Admin check-out')
+        return Response({'success': True, 'shifts_closed': closed,
+                         'ended_at': now.isoformat()})
+
     @action(detail=True, methods=['post'])
     def close(self, request, pk=None):
         """Clock out. Idempotent: closing a closed shift is a no-op."""

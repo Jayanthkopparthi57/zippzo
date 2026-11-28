@@ -70,6 +70,46 @@ class AttendanceAndForceLogoutTests(TestCase):
 
 
 @override_settings(DEBUG=True, OTP_DEV_ECHO=True, IAM_OTP_SENDER=None)
+class AdminAttendanceControlsTests(TestCase):
+    def setUp(self):
+        self.site = _site('DS-ADMIN-ATT', 'DARK_STORE')
+        self.staff = _user('admin-att-staff@zippzo.in', 'WAREHOUSE_STAFF')
+        _assign(self.staff, self.site, 'PICKER')
+        self.admin = _user('admin-att-manager@zippzo.in', 'OPS_MANAGER')
+        session, _a, _r = staff_auth.create_session(self.admin, self.site, 'web', None)
+        self.admin.session = session
+        self.client_ = APIClient()
+        self.client_.force_authenticate(self.admin)
+
+    def test_admin_can_check_staff_in_and_out(self):
+        check_in = self.client_.post('/api/network/staff-shifts/admin-check-in/', {
+            'user': str(self.staff.user_id), 'site_code': self.site.code}, format='json')
+        self.assertEqual(check_in.status_code, 201, check_in.data)
+        shift = StaffShift.objects.get(user=self.staff, site=self.site)
+        self.assertEqual('OPEN', shift.status)
+        self.assertEqual('PICKER', shift.role_at_site)
+
+        again = self.client_.post('/api/network/staff-shifts/admin-check-in/', {
+            'user': str(self.staff.user_id), 'site_code': self.site.code}, format='json')
+        self.assertEqual(200, again.status_code)
+        self.assertTrue(again.data.get('already_open'))
+
+        check_out = self.client_.post('/api/network/staff-shifts/admin-check-out/', {
+            'user': str(self.staff.user_id), 'site_code': self.site.code}, format='json')
+        self.assertEqual(200, check_out.status_code, check_out.data)
+        shift.refresh_from_db()
+        self.assertEqual('CLOSED', shift.status)
+        self.assertEqual('MANUAL', shift.end_reason)
+
+    def test_non_admin_cannot_use_attendance_controls(self):
+        client = APIClient()
+        client.force_authenticate(self.staff)
+        r = client.post('/api/network/staff-shifts/admin-check-in/', {
+            'user': str(self.staff.user_id), 'site_code': self.site.code}, format='json')
+        self.assertEqual(403, r.status_code, r.data)
+
+
+@override_settings(DEBUG=True, OTP_DEV_ECHO=True, IAM_OTP_SENDER=None)
 class SingleSiteRoutingTests(TestCase):
     @classmethod
     def setUpTestData(cls):
