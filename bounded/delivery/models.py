@@ -2,6 +2,36 @@ import uuid
 from django.db import models
 from django.conf import settings
 
+
+class RiderPaymentRule(models.Model):
+    """Rider pay rate card for a store. Values are admin-editable reference data.
+
+    Bonuses need a weather/peak signal on the job before they can be applied to
+    an automatic settlement; until then this is the published rate card and is
+    used by the estimate endpoint and the console preview.
+    """
+    rule_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    site = models.OneToOneField('network.Site', on_delete=models.CASCADE,
+                                related_name='rider_payment_rule', null=True, blank=True)
+    base_per_km = models.DecimalField(max_digits=6, decimal_places=2, default='7.00')
+    delivery_radius_km = models.DecimalField(max_digits=5, decimal_places=2, default='5.00')
+    busy_bonus = models.DecimalField(max_digits=6, decimal_places=2, default='5.00')
+    rain_bonus = models.DecimalField(max_digits=6, decimal_places=2, default='5.00')
+    busy_rain_bonus = models.DecimalField(max_digits=6, decimal_places=2, default='10.00')
+    incentive_orders = models.PositiveIntegerField(default=15)
+    incentive_amount = models.DecimalField(max_digits=7, decimal_places=2, default='100.00')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'rider_payment_rules'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Rider pay · {self.site.code if self.site else "default"}'
+
+
 class RiderProfile(models.Model):
     VEHICLE_CHOICES = [('BIKE','Bike'),('SCOOTER','Scooter'),('CYCLE','Cycle'),('MINI_VAN','Mini Van')]
     KYC_CHOICES = [('PENDING','Pending'),('VERIFIED','Verified'),('REJECTED','Rejected')]

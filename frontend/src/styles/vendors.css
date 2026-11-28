@@ -91,3 +91,30 @@
   .vend-kpis { grid-template-columns: 1fr; }
   .vend-page__head h1 { font-size: 20px; }
 }
+
+/* Rider payment option rate card. */
+.vend-rate__body { padding: 0; }
+.vend-rate__row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 18px; font-size: 13px; color: #334155;
+  border-bottom: 1px solid #e8edf3;
+}
+.vend-rate__row:nth-child(even) { background: #f8fafc; }
+.vend-rate__row b { font-size: 14px; font-weight: 800; color: #0f172a; }
+.vend-rate__row--head { background: #fff; font-weight: 800; color: #0f172a; text-transform: none; letter-spacing: 0; }
+.vend-rate__preview { margin: 12px 18px 0; padding: 10px 12px; border-radius: 6px; background: #eff6ff; border: 1px solid #bfdbfe; font-size: 12.5px; color: #1e3a8a; }
+.vend-rate__edit { padding: 16px 18px 4px; }
+.vend-rate__edit fieldset { border: 0; margin: 0; padding: 0; }
+.vend-rate__edit .vend-form__actions { margin-top: 12px; }
+.vend-rate__edit label { flex: 1; min-width: 110px; }
+.vend-rate__edit input { width: 100%; }
+.vend-rate__note { padding: 0 18px 16px; font-size: 11.5px; color: #64748b; }
+.vend-rate__note b { color: #1d4ed8; }
+
+@media (max-width: 900px) {
+  .vend-rate__edit { display: block; }
+  .vend-rate__edit .vend-grid, .vend-rate__edit fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .vend-rate__edit .vend-form__actions { grid-column: 1 / -1; }
+}
+.vend-rate__edit fieldset { display: flex; flex-wrap: wrap; gap: 10px; }
+.vend-rate__edit fieldset .vend-form__actions { width: 100%; }

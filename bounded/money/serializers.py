@@ -10,7 +10,8 @@ class EmployeeBankDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmployeeBankDetail
         fields = ['detail_id', 'user', 'employee_name', 'email', 'bank_name',
-                  'bank_account_number', 'ifsc', 'account_holder_name', 'upi_id', 'updated_at']
+                  'bank_account_number', 'ifsc', 'account_holder_name', 'pan',
+                  'upi_id', 'updated_at']
         read_only_fields = ['detail_id', 'employee_name', 'email', 'updated_at']
 
 

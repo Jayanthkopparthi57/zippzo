@@ -1,9 +1,10 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import (RiderProfileViewSet, RiderShiftViewSet, DeliveryTaskViewSet,
-                    RoutePlanViewSet, RouteStopViewSet, DeliveryPickupView,
-                    DeliveryPodView, RiderAdminRosterView)
+from .views import (RiderPaymentRuleViewSet, RiderProfileViewSet, RiderShiftViewSet,
+                    DeliveryTaskViewSet, RoutePlanViewSet, RouteStopViewSet,
+                    DeliveryPickupView, DeliveryPodView, RiderAdminRosterView)
 router = DefaultRouter()
+router.register(r'rider-payment-rules', RiderPaymentRuleViewSet)
 router.register(r'rider-profiles', RiderProfileViewSet)
 router.register(r'rider-shifts', RiderShiftViewSet)
 router.register(r'delivery-tasks', DeliveryTaskViewSet)

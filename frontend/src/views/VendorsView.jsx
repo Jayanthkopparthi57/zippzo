@@ -25,7 +25,7 @@ const emptySalary = () => ({
 
 const emptyBank = () => ({
   user: '', bank_name: '', bank_account_number: '', ifsc: '',
-  account_holder_name: '', upi_id: '',
+  account_holder_name: '', pan: '', upi_id: '',
 });
 
 const money = (value) => `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -533,7 +533,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
           <section className="vend-card">
             <div className="vend-card__head vend-card__head--blue">
               <Users2 size={18} />
-              <div><h2>Employee Pay Details</h2><p>Use a UPI ID (no bank needed) or bank account + IFSC. Cash payment also available per record.</p></div>
+              <div><h2>Employee Pay Details</h2><p>PAN, bank account + IFSC, or UPI ID — required details for salary payouts. Cash payment also available per record.</p></div>
             </div>
             <form className="vend-form" onSubmit={saveBankDetail}>
               <fieldset disabled={busy}>
@@ -547,7 +547,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
                         user: value, bank_name: found.bank_name || '',
                         bank_account_number: found.bank_account_number || '',
                         ifsc: found.ifsc || '', account_holder_name: found.account_holder_name || '',
-                        upi_id: found.upi_id || '',
+                        pan: found.pan || '', upi_id: found.upi_id || '',
                       } : emptyBank());
                     }}>
                       <option value="">Select employee</option>
@@ -558,10 +558,11 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
                   <label>Bank Name<input value={bankForm.bank_name} onChange={(e) => updateBank('bank_name', e.target.value)} /></label>
                   <label>Bank Account Number<input value={bankForm.bank_account_number} onChange={(e) => updateBank('bank_account_number', e.target.value)} /></label>
                   <label>IFSC Code<input value={bankForm.ifsc} onChange={(e) => updateBank('ifsc', e.target.value)} /></label>
+                  <label>PAN Number<input value={bankForm.pan} onChange={(e) => updateBank('pan', e.target.value)} maxLength={10} /></label>
                   <label>UPI ID (optional)<input value={bankForm.upi_id} onChange={(e) => updateBank('upi_id', e.target.value)} /></label>
                 </div>
                 <div className="vend-form__actions">
-                  <button type="submit" className="vend-btn vend-btn--primary">Save Bank Details</button>
+                  <button type="submit" className="vend-btn vend-btn--primary">Save Pay Details</button>
                 </div>
               </fieldset>
             </form>

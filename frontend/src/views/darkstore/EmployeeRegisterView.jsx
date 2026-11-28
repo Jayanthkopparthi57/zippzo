@@ -47,6 +47,12 @@ function Register({ site, siteId, storeCode }) {
   const [payroll, setPayroll] = useState([]);
   const [riders, setRiders] = useState([]);
   const [shifts, setShifts] = useState([]);
+  const [rateRule, setRateRule] = useState(null);
+  const [rateForm, setRateForm] = useState({
+    base_per_km: '7.00', delivery_radius_km: '5.00', busy_bonus: '5.00',
+    rain_bonus: '5.00', busy_rain_bonus: '10.00', incentive_orders: 15, incentive_amount: '100.00',
+  });
+  const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -61,18 +67,27 @@ function Register({ site, siteId, storeCode }) {
   const reload = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      const [people, userRows, payRows, riderRows, shiftRows] = await Promise.all([
+      const [people, userRows, payRows, riderRows, shiftRows, rateRows] = await Promise.all([
         fetchApi(`/network/manpower?site=${encodeURIComponent(storeCode)}`),
         fetchApi('/iam/users/'),
         fetchApi(`/network/payroll/?site=${encodeURIComponent(siteId)}&page_size=500`),
         fetchApi('/delivery/rider-profiles/?page_size=500'),
         fetchApi('/delivery/rider-shifts/?page_size=500'),
+        fetchApi(`/delivery/rider-payment-rules/?site=${encodeURIComponent(siteId)}`),
       ]);
       setEmployees(Array.isArray(people) ? people : (people?.results || []));
       setUsers(Array.isArray(userRows) ? userRows : (userRows?.results || []));
       setPayroll(Array.isArray(payRows) ? payRows : []);
       setRiders(Array.isArray(riderRows) ? riderRows : []);
       setShifts(Array.isArray(shiftRows) ? shiftRows : []);
+      const rule = Array.isArray(rateRows) ? rateRows[0] : null;
+      setRateRule(rule || null);
+      if (rule) setRateForm({
+        base_per_km: rule.base_per_km, delivery_radius_km: rule.delivery_radius_km,
+        busy_bonus: rule.busy_bonus, rain_bonus: rule.rain_bonus,
+        busy_rain_bonus: rule.busy_rain_bonus,
+        incentive_orders: rule.incentive_orders, incentive_amount: rule.incentive_amount,
+      });
     } catch (err) {
       setError(describeError(err) || 'Could not load staff records.');
     } finally { setLoading(false); }
@@ -116,6 +131,37 @@ function Register({ site, siteId, storeCode }) {
 
   const setEmployee = (key, value) => setEmployeeForm((prev) => ({ ...prev, [key]: value }));
   const setRider = (key, value) => setRiderForm((prev) => ({ ...prev, [key]: value }));
+  const setRate = (key, value) => setRateForm((prev) => ({ ...prev, [key]: value }));
+
+  const saveRate = async (event) => {
+    event.preventDefault();
+    setBusy(true); setError('');
+    try {
+      const payload = {
+        ...rateForm,
+        incentive_orders: Number(rateForm.incentive_orders) || 0,
+        site: siteId,
+      };
+      if (rateRule) await patchApi(`/delivery/rider-payment-rules/${rateRule.rule_id}/`, payload);
+      else await postApi('/delivery/rider-payment-rules/', payload);
+      await reload(); showNotice('Rider payment rate card saved.');
+    } catch (err) { setError(describeError(err) || 'Could not save the rate card.'); }
+    finally { setBusy(false); }
+  };
+
+  const previewRate = async () => {
+    if (!rateRule) { setError('Save the rate card first.'); return; }
+    setBusy(true);
+    try {
+      const result = await postApi(`/delivery/rider-payment-rules/${rateRule.rule_id}/preview/`, {
+        distance_km: Number(rateForm.delivery_radius_km) || 5,
+        busy: true, rain: true,
+        completed_orders: Number(rateForm.incentive_orders) || 0,
+      });
+      setPreview(result);
+    } catch (err) { setError(describeError(err) || 'Could not preview pay.'); }
+    finally { setBusy(false); }
+  };
 
   const saveEmployee = async (event) => {
     event.preventDefault();
@@ -358,6 +404,47 @@ function Register({ site, siteId, storeCode }) {
         </>
       ) : (
         <>
+          <section className="vend-card vend-rate">
+            <div className="vend-card__head vend-card__head--blue">
+              <BadgeIndianRupee size={18} />
+              <div><h2>Rider payment option</h2><p>Rate card for {storeCode}. Edit values or preview a sample delivery.</p></div>
+            </div>
+            <div className="vend-rate__body">
+              <div className="vend-rate__row vend-rate__row--head"><span>Rider payment option</span><span>Amount</span></div>
+              <div className="vend-rate__row"><span>Base payment</span><b>₹{rateForm.base_per_km || '0'} per km</b></div>
+              <div className="vend-rate__row"><span>Delivery radius</span><b>{rateForm.delivery_radius_km || '0'} km</b></div>
+              <div className="vend-rate__row"><span>Busy-hours bonus</span><b>+₹{rateForm.busy_bonus || '0'}</b></div>
+              <div className="vend-rate__row"><span>Rain bonus</span><b>+₹{rateForm.rain_bonus || '0'}</b></div>
+              <div className="vend-rate__row"><span>Busy hours + rain</span><b>+₹{rateForm.busy_rain_bonus || '0'}</b></div>
+              <div className="vend-rate__row"><span>Every {rateForm.incentive_orders || 0} completed orders</span><b>₹{rateForm.incentive_amount || '0'} incentive</b></div>
+              {preview && (
+                <div className="vend-rate__preview">
+                  Sample {rateForm.delivery_radius_km || 5} km delivery in busy hours + rain:
+                  <b> ₹{preview.total}</b> (base ₹{preview.base} + bonus ₹{preview.bonus} + incentive ₹{preview.incentive})
+                </div>
+              )}
+              <form className="vend-rate__edit" onSubmit={saveRate}>
+                <fieldset disabled={busy}>
+                  <label>₹ / km<input type="number" min="0" step="0.01" value={rateForm.base_per_km} onChange={(e) => setRate('base_per_km', e.target.value)} /></label>
+                  <label>Radius (km)<input type="number" min="0" step="0.1" value={rateForm.delivery_radius_km} onChange={(e) => setRate('delivery_radius_km', e.target.value)} /></label>
+                  <label>Busy bonus<input type="number" min="0" step="0.01" value={rateForm.busy_bonus} onChange={(e) => setRate('busy_bonus', e.target.value)} /></label>
+                  <label>Rain bonus<input type="number" min="0" step="0.01" value={rateForm.rain_bonus} onChange={(e) => setRate('rain_bonus', e.target.value)} /></label>
+                  <label>Busy + rain<input type="number" min="0" step="0.01" value={rateForm.busy_rain_bonus} onChange={(e) => setRate('busy_rain_bonus', e.target.value)} /></label>
+                  <label>Orders / incentive<input type="number" min="0" value={rateForm.incentive_orders} onChange={(e) => setRate('incentive_orders', e.target.value)} /></label>
+                  <label>Incentive ₹<input type="number" min="0" step="0.01" value={rateForm.incentive_amount} onChange={(e) => setRate('incentive_amount', e.target.value)} /></label>
+                  <div className="vend-form__actions">
+                    <button type="submit" className="vend-btn vend-btn--primary">Save rate card</button>
+                    <button type="button" className="vend-btn" onClick={previewRate}>Preview pay</button>
+                  </div>
+                </fieldset>
+              </form>
+              <div className="vend-rate__note">
+                Bank, PAN and UPI details for rider salaries are entered under
+                <b> Vendors → Salaries → Employee Pay Details</b> in both consoles.
+              </div>
+            </div>
+          </section>
+
           <section className="vend-card">
             <div className="vend-card__head vend-card__head--blue">
               <Bike size={18} />

@@ -14,12 +14,12 @@ from .handoff import HandoffError, complete_pod, rider_pickup
 from django.db.models import Q
 
 from bounded.iam.models import QRCode
-from bounded.iam.permissions import IsAdminUser
-from .models import (RiderProfile, RiderShift, DeliveryTask, RoutePlan,
-                     RouteStop)
-from .serializers import (RiderProfileSerializer, RiderShiftSerializer,
-                          DeliveryTaskSerializer, RoutePlanSerializer,
-                          RouteStopSerializer)
+from bounded.iam.permissions import IsAdminUser, IsAdminUserOrReadOnly
+from .models import (RiderPaymentRule, RiderProfile, RiderShift, DeliveryTask,
+                     RoutePlan, RouteStop)
+from .serializers import (RiderPaymentRuleSerializer, RiderProfileSerializer,
+                          RiderShiftSerializer, DeliveryTaskSerializer,
+                          RoutePlanSerializer, RouteStopSerializer)
 
 # DeliveryTask fields that only the pickup / POD endpoints may write. They were
 # writable here, which turned PATCH /delivery/delivery-tasks/<id>/ into a second
@@ -186,6 +186,44 @@ TASK_TRANSITIONS = {
     'EN_ROUTE': ({'PICKED_UP'}, 'OUT_FOR_DELIVERY'),
     'ARRIVED': ({'EN_ROUTE', 'POD_PENDING'}, 'ARRIVED'),
 }
+
+
+class RiderPaymentRuleViewSet(viewsets.ModelViewSet):
+    """Store-level rider rate card. Operators read; admins edit."""
+    queryset = RiderPaymentRule.objects.select_related('site').all()
+    serializer_class = RiderPaymentRuleSerializer
+    permission_classes = [IsAdminUserOrReadOnly]
+    filterset_fields = ['site', 'is_active']
+
+    @action(detail=True, methods=['post'], url_path='preview')
+    def preview(self, request, pk=None):
+        rule = self.get_object()
+        try:
+            distance = float(request.data.get('distance_km') or 0)
+        except (TypeError, ValueError):
+            return Response({'error': 'distance_km must be a number.'}, status=status.HTTP_400_BAD_REQUEST)
+        busy = bool(request.data.get('busy'))
+        rain = bool(request.data.get('rain'))
+        try:
+            completed = int(request.data.get('completed_orders') or 0)
+        except (TypeError, ValueError):
+            completed = 0
+        base = float(rule.base_per_km) * max(distance, 0)
+        if busy and rain:
+            bonus = float(rule.busy_rain_bonus)
+        elif busy:
+            bonus = float(rule.busy_bonus)
+        elif rain:
+            bonus = float(rule.rain_bonus)
+        else:
+            bonus = 0.0
+        incentive = (float(rule.incentive_amount)
+                     if rule.incentive_orders and completed and completed % rule.incentive_orders == 0
+                     else 0.0)
+        return Response({
+            'base': round(base, 2), 'bonus': round(bonus, 2),
+            'incentive': round(incentive, 2), 'total': round(base + bonus + incentive, 2),
+        })
 
 
 class RiderProfileViewSet(viewsets.ModelViewSet):

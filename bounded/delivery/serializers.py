@@ -1,7 +1,17 @@
 from rest_framework import serializers
 from django.db.models import Sum
 from django.db.models.functions import Coalesce
-from .models import RiderProfile, RiderShift, DeliveryTask, RoutePlan, RouteStop
+from .models import RiderPaymentRule, RiderProfile, RiderShift, DeliveryTask, RoutePlan, RouteStop
+
+class RiderPaymentRuleSerializer(serializers.ModelSerializer):
+    site_code = serializers.CharField(source='site.code', read_only=True, allow_null=True)
+
+    class Meta:
+        model = RiderPaymentRule
+        fields = ['rule_id', 'site', 'site_code', 'base_per_km', 'delivery_radius_km',
+                  'busy_bonus', 'rain_bonus', 'busy_rain_bonus', 'incentive_orders',
+                  'incentive_amount', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['rule_id', 'site_code', 'created_at', 'updated_at']
 
 class RiderProfileSerializer(serializers.ModelSerializer):# `current_site` serialises to the site's uuid, which is useless for the
     # shift/open endpoint (it takes a code) and unreadable on the rider's
