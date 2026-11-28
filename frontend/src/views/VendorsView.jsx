@@ -3,7 +3,7 @@ import {
   BadgeIndianRupee, Building2, CheckCircle2, Clock3, Download, Pencil, Plus,
   Search, Trash2, Users2, Wallet,
 } from 'lucide-react';
-import { fetchApi, postApi, patchApi, deleteApi } from '../api/client';
+import { fetchApi, postApi, patchApi, deleteApi, describeError } from '../api/client';
 import '../styles/vendors.css';
 
 const emptyVendor = () => ({
@@ -80,7 +80,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
         : []);
       setBankDetails(Array.isArray(bankRows) ? bankRows : []);
     } catch (err) {
-      setError(err?.message || 'Could not load vendor records.');
+      setError(describeError(err) || 'Could not load vendor records.');
     } finally {
       setLoading(false);
     }
@@ -120,7 +120,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
         ? `Cashfree payout started · ${result?.payout_status || result?.status || 'sent'}.`
         : `Payout status refreshed · ${result?.payout_status || result?.status || 'unknown'}.`);
     } catch (err) {
-      setError(err?.message || `Could not ${action} this payout.`);
+      setError(describeError(err) || `Could not ${action} this payout.`);
     } finally {
       setBusyId('');
     }
@@ -156,7 +156,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
       await reload();
       showNotice(editingSalary ? 'Salary updated.' : 'Salary recorded.');
     } catch (err) {
-      setError(err?.message || 'Could not save salary.');
+      setError(describeError(err) || 'Could not save salary.');
     } finally { setBusy(false); }
   };
 
@@ -167,7 +167,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
       await deleteApi(`/money/salary-payments/${row.payment_id}/`);
       await reload(); showNotice('Salary record deleted.');
     } catch (err) {
-      setError(err?.message || 'Could not delete salary record.');
+      setError(describeError(err) || 'Could not delete salary record.');
     } finally { setBusy(false); }
   };
 
@@ -181,7 +181,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
       else await postApi('/money/employee-bank-details/', bankForm);
       await reload(); showNotice('Employee bank details saved.');
     } catch (err) {
-      setError(err?.message || 'Could not save bank details.');
+      setError(describeError(err) || 'Could not save bank details.');
     } finally { setBusy(false); }
   };
 
@@ -210,7 +210,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
       await reload();
       showNotice(editingVendor ? 'Vendor updated.' : 'Vendor registered.');
     } catch (err) {
-      setError(err?.message || 'Could not save vendor.');
+      setError(describeError(err) || 'Could not save vendor.');
     } finally {
       setBusy(false);
     }
@@ -224,7 +224,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
       await reload();
       showNotice('Vendor deleted.');
     } catch (err) {
-      setError(err?.message || 'Could not delete vendor.');
+      setError(describeError(err) || 'Could not delete vendor.');
     } finally {
       setBusy(false);
     }
@@ -255,7 +255,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
       await reload();
       showNotice(editingPayment ? 'Payment updated.' : 'Payment saved.');
     } catch (err) {
-      setError(err?.message || 'Could not save payment.');
+      setError(describeError(err) || 'Could not save payment.');
     } finally {
       setBusy(false);
     }
@@ -269,7 +269,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
       await reload();
       showNotice('Payment deleted.');
     } catch (err) {
-      setError(err?.message || 'Could not delete payment.');
+      setError(describeError(err) || 'Could not delete payment.');
     } finally {
       setBusy(false);
     }
