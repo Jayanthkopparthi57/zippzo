@@ -38,8 +38,8 @@ function Pill({ children, tone = 'neutral' }) {
  * One Vendors screen shared by the MH and DS consoles. Vendors and payments
  * are global master records, so both facilities work on the same data.
  */
-export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
-  const [tab, setTab] = useState('vendors');
+export default function VendorsView({ mode = 'MH', siteLabel = '', initialTab = 'vendors', embedded = false }) {
+  const [tab, setTab] = useState(initialTab);
   const [vendors, setVendors] = useState([]);
   const [payments, setPayments] = useState([]);
   const [salaries, setSalaries] = useState([]);
@@ -318,7 +318,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
 
   return (
     <div className="vend-page">
-      <div className="vend-page__head">
+      {!embedded && <div className="vend-page__head">
         <div>
           <h1>Vendor Management</h1>
           <p>Register suppliers, bank details and payments — shared across MH and DS.</p>
@@ -327,9 +327,9 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
           <Pill tone="accent">{mode === 'MH' ? 'Mother Hub' : 'Dark Store'}</Pill>
           {siteLabel && <span>{siteLabel}</span>}
         </div>
-      </div>
+      </div>}
 
-      <div className="vend-tabs" role="tablist">
+      {!embedded && <div className="vend-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === 'vendors'} className={tab === 'vendors' ? 'active' : ''} onClick={() => setTab('vendors')}>
           <Building2 size={15} /> Vendors
         </button>
@@ -339,7 +339,7 @@ export default function VendorsView({ mode = 'MH', siteLabel = '' }) {
         <button type="button" role="tab" aria-selected={tab === 'salaries'} className={tab === 'salaries' ? 'active' : ''} onClick={() => setTab('salaries')}>
           <Users2 size={15} /> Salaries
         </button>
-      </div>
+      </div>}
 
       {error && <div className="vend-feedback vend-feedback--error">{error}</div>}
       {notice && <div className="vend-feedback vend-feedback--ok">{notice}</div>}

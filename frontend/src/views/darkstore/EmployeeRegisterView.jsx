@@ -38,10 +38,10 @@ function Pill({ children, tone = 'neutral' }) {
   return <span className={`vend-pill vend-pill--${tone}`}>{children}</span>;
 }
 
-function Register({ site, siteId, storeCode }) {
+function Register({ site, siteId, storeCode, initialTab = 'employees', embedded = false }) {
   const { user: currentUser } = useAuth();
   const canRemove = Boolean(currentUser?.is_super_admin || currentUser?.is_admin);
-  const [tab, setTab] = useState('employees');
+  const [tab, setTab] = useState(initialTab);
   const [employees, setEmployees] = useState([]);
   const [users, setUsers] = useState([]);
   const [payroll, setPayroll] = useState([]);
@@ -291,15 +291,15 @@ function Register({ site, siteId, storeCode }) {
 
   return (
     <div className="vend-page">
-      <div className="vend-page__head">
+      {!embedded && <div className="vend-page__head">
         <div><h1>Employee Register</h1><p>Create staff and rider logins for {site?.code || 'this store'}.</p></div>
         <div className="vend-page__context"><Pill tone="accent">{storeCode}</Pill>{site?.name && <span>{site.name}</span>}</div>
-      </div>
+      </div>}
 
-      <div className="vend-tabs" role="tablist">
+      {!embedded && <div className="vend-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === 'employees'} className={tab === 'employees' ? 'active' : ''} onClick={() => setTab('employees')}><Users2 size={15} /> Warehouse Staff</button>
         <button type="button" role="tab" aria-selected={tab === 'riders'} className={tab === 'riders' ? 'active' : ''} onClick={() => setTab('riders')}><Bike size={15} /> Riders</button>
-      </div>
+      </div>}
 
       {error && <div className="vend-feedback vend-feedback--error">{error}</div>}
       {notice && <div className="vend-feedback vend-feedback--ok">{notice}</div>}
@@ -532,11 +532,11 @@ function Register({ site, siteId, storeCode }) {
   );
 }
 
-export default function EmployeeRegisterView() {
+export default function EmployeeRegisterView({ initialTab = 'employees', embedded = false }) {
   const { site, siteId, storeCode } = useDarkStore();
   return (
     <StoreGate>
-      <Register site={site} siteId={siteId} storeCode={storeCode} />
+      <Register site={site} siteId={siteId} storeCode={storeCode} initialTab={initialTab} embedded={embedded} />
     </StoreGate>
   );
 }
