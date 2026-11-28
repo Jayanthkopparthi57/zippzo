@@ -4,8 +4,9 @@ import { useEffect } from 'react';
 const NEEDS_ACTION = /\b(pending|processing|assigned|offered|queued|waiting|new|open|not started|to verify)\b/i;
 
 /**
- * Hidden-by-default search for every table column. Each header gets a small
- * filter control; clicking it reveals that column's search input.
+ * Click-to-open search for every table column. Where a table already renders
+ * a funnel icon in its header, that icon is used; otherwise a small filter
+ * button is added.
  */
 export default function TableColumnFilters({ screenKey }) {
   useEffect(() => {
@@ -68,78 +69,87 @@ export default function TableColumnFilters({ screenKey }) {
         Array.from(header.cells).forEach((th, col) => {
           if (!map.has(col)) map.set(col, { query: '', open: false });
           const state = map.get(col);
-          if (th.querySelector(':scope > .col-filter-toggle')) return;
 
-          const toggle = document.createElement('button');
-          toggle.type = 'button';
-          toggle.className = 'col-filter-toggle';
-          toggle.title = `Filter ${th.innerText.trim() || 'column'}`;
-          toggle.setAttribute('aria-label', toggle.title);
-          toggle.setAttribute('aria-expanded', 'false');
-          toggle.textContent = '▾';
+          // Prefer the funnel icon the table already renders; add our own only
+          // when the table has none.
+          let control = th.querySelector('.th-filter, svg.lucide-filter');
+          if (!control) control = th.querySelector(':scope > .col-filter-toggle');
+          if (!control) {
+            control = document.createElement('button');
+            control.type = 'button';
+            control.className = 'col-filter-toggle';
+            control.textContent = '▾';
+            th.appendChild(control);
+          }
+          control.title = `Filter ${th.innerText.trim() || 'column'}`;
+          control.style.cursor = 'pointer';
 
-          const wrap = document.createElement('span');
-          wrap.className = 'col-filter-wrap';
-          const input = document.createElement('input');
-          input.type = 'search';
-          input.className = 'col-filter-input';
-          input.placeholder = 'Filter';
+          let input = th.querySelector(':scope > .col-filter-wrap > .col-filter-input');
+          if (!input) {
+            const wrap = document.createElement('span');
+            wrap.className = 'col-filter-wrap';
+            input = document.createElement('input');
+            input.type = 'search';
+            input.className = 'col-filter-input';
+            input.placeholder = 'Filter';
+            input.setAttribute('aria-label', `Search ${th.innerText.trim() || 'column'} values`);
+            const clear = document.createElement('button');
+            clear.type = 'button';
+            clear.className = 'col-filter-clear';
+            clear.textContent = '×';
+            clear.title = 'Clear this column filter';
+            wrap.append(input, clear);
+            th.appendChild(wrap);
+          }
+          const clear = th.querySelector(':scope > .col-filter-wrap > .col-filter-clear');
+
           input.hidden = !state.open;
           input.value = state.query;
-          input.setAttribute('aria-label', `Search ${th.innerText.trim() || 'column'} values`);
-          const clear = document.createElement('button');
-          clear.type = 'button';
-          clear.className = 'col-filter-clear';
-          clear.textContent = '×';
-          clear.title = 'Clear this column filter';
           clear.hidden = !state.open;
-          wrap.append(input, clear);
+          th.classList.toggle('col-filter-open', state.open);
 
-          toggle.addEventListener('click', (event) => {
-            event.stopPropagation();
-            pause(() => {
-              if (state.open) {
-                state.open = false;
-                state.query = '';
-                input.value = '';
-                input.hidden = true;
-                clear.hidden = true;
-                toggle.setAttribute('aria-expanded', 'false');
-                apply(table);
-              } else {
-                state.open = true;
-                input.hidden = false;
-                clear.hidden = false;
-                toggle.setAttribute('aria-expanded', 'true');
-                input.focus();
-              }
+          if (!control.dataset.filterBound) {
+            control.dataset.filterBound = '1';
+            control.addEventListener('click', (event) => {
+              // Stop the table header's own sort handler from firing.
+              event.stopPropagation();
+              pause(() => {
+                if (state.open) {
+                  state.open = false;
+                  state.query = '';
+                  input.value = '';
+                  input.hidden = true;
+                  clear.hidden = true;
+                  th.classList.remove('col-filter-open');
+                  apply(table);
+                } else {
+                  state.open = true;
+                  input.hidden = false;
+                  clear.hidden = false;
+                  th.classList.add('col-filter-open');
+                  input.focus();
+                }
+              });
             });
-          });
-          input.addEventListener('input', (event) => {
-            state.query = event.target.value;
-            pause(() => apply(table));
-          });
-          clear.addEventListener('click', (event) => {
-            event.stopPropagation();
-            state.query = '';
-            input.value = '';
-            pause(() => apply(table));
-            input.focus();
-          });
-
-          th.append(toggle, wrap);
-        });
-
-        // Keep revealed inputs in sync if the table was re-rendered.
-        map.forEach((state, col) => {
-          const cell = header.cells[col];
-          if (!cell) return;
-          const input = cell.querySelector('.col-filter-input');
-          const clear = cell.querySelector('.col-filter-clear');
-          if (input) { input.hidden = !state.open; input.value = state.query; }
-          if (clear) clear.hidden = !state.open;
-          const toggle = cell.querySelector('.col-filter-toggle');
-          if (toggle) toggle.setAttribute('aria-expanded', String(state.open));
+          }
+          if (!input.dataset.filterBound) {
+            input.dataset.filterBound = '1';
+            input.addEventListener('click', (event) => event.stopPropagation());
+            input.addEventListener('input', (event) => {
+              state.query = event.target.value;
+              pause(() => apply(table));
+            });
+          }
+          if (!clear.dataset.filterBound) {
+            clear.dataset.filterBound = '1';
+            clear.addEventListener('click', (event) => {
+              event.stopPropagation();
+              state.query = '';
+              input.value = '';
+              pause(() => apply(table));
+              input.focus();
+            });
+          }
         });
         apply(table);
       });
@@ -158,6 +168,7 @@ export default function TableColumnFilters({ screenKey }) {
       observer.disconnect();
       clearTimeout(timer);
       root.querySelectorAll('.col-filter-toggle, .col-filter-wrap').forEach((node) => node.remove());
+      root.querySelectorAll('.col-filter-open').forEach((node) => node.classList.remove('col-filter-open'));
     };
   }, [screenKey]);
 

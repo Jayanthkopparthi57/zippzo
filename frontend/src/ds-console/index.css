@@ -2314,6 +2314,7 @@ html, body { background: var(--bg-canvas); color: var(--text-primary); font-size
   opacity: .6;
 }
 .col-filter-toggle:hover, .col-filter-toggle:focus-visible { opacity: 1; color: #2f5c43; }
+th.col-filter-open .th-filter, th.col-filter-open .col-filter-toggle { color: #2f5c43; opacity: 1; }
 .col-filter-toggle[aria-expanded="true"] { color: #2f5c43; opacity: 1; }
 .col-filter-wrap { display: block; width: 100%; }
 .col-filter-wrap[hidden] { display: none; }
